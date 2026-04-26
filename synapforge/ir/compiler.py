@@ -3,9 +3,9 @@
 v0.1 produces a flat sequential IR: one node per direct child sf.Module,
 in registration order. Nested children are inlined as separate nodes.
 
-This isn't a real graph-extraction (we don't trace forward), but it's
-enough metadata for the dense backend to decide which kernel path to
-take and for v0.2 Triton scheduling.
+v1.0: after the per-module walk, runs a small pass pipeline. Currently
+just :class:`SynaptogenesisPass`, which lifts SparseSynapse growth rules
+into ``grow_op`` + ``prune_op`` IR nodes.
 """
 
 from __future__ import annotations
@@ -47,17 +47,23 @@ def _attrs_for(module: nn.Module) -> dict:
             attrs["density"] = float(module.mask.float().mean().item())
         except Exception:
             pass
+    if hasattr(module, "growth") and getattr(module, "growth", None) is not None:
+        attrs["has_growth"] = True
     return attrs
 
 
-def compile_module(module: nn.Module) -> IRGraph:
-    """Walk children and emit one IRNode each.
+def compile_module(module: nn.Module, run_passes: bool = True) -> IRGraph:
+    """Walk children and emit one IRNode each, then run pass pipeline.
 
     For v0.1 we don't try to track tensor dataflow; inputs/outputs of each
     node are left empty and the runtime executes the module via forward().
+
+    v1.0: ``run_passes=True`` (default) runs SynaptogenesisPass, lifting
+    ``SparseSynapse(growth=...)`` rules into ``grow_op`` / ``prune_op`` IR
+    nodes. Pass ``run_passes=False`` to inspect the raw walk-only IR
+    (useful for diffing pass outputs in tests).
     """
     g = IRGraph()
-    # Track the root itself as a "module" node for documentation.
     g.add(
         IRNode(op="module", name="root",
                attrs={"class": type(module).__name__}),
@@ -69,6 +75,13 @@ def compile_module(module: nn.Module) -> IRGraph:
         op = _op_for(child)
         node = IRNode(op=op, name=name, attrs=_attrs_for(child))
         g.add(node, module_obj=child)
+
+    if run_passes:
+        # Lazy import — avoids circular issues if user imports
+        # ``ir.compiler`` directly.
+        from .synaptogenesis import SynaptogenesisPass
+        g = SynaptogenesisPass().run(g)
+
     return g
 
 

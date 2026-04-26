@@ -146,110 +146,6 @@ if _HAS_TRITON:
             # roll s into s_prev for next step
             s_prev = s
 
-    @triton.jit
-    def fused_lnn_snn_block_bwd_kernel(
-        # forward state pointers (read-only)
-        a_ptr,              # (B, T, D)
-        h_pre_ptr,          # (B, T, D)
-        s_ptr,              # (B, T, D)
-        m_ptr,              # (B, T, D)
-        h0_ptr,             # (B, D)
-        thr_ptr,            # (D,)
-        # upstream gradient pointers (read-only)
-        gh_post_ptr,        # (B, T, D)  dL/d h_post
-        gs_ptr,             # (B, T, D)  dL/d s
-        # output gradient pointers (write)
-        ga_ptr,             # (B, T, D)
-        gb_ptr,             # (B, T, D)
-        gh0_ptr,            # (B, D)
-        gthr_ptr,           # (D,)  atomic_add target, fp32
-        # strides (a/h_pre/s/m/gh_post/gs/ga/gb share same shape (B,T,D))
-        a_b_str, a_t_str, a_d_str,
-        h0_b_str, h0_d_str,
-        thr_d_str,
-        # sizes
-        B, T, D,
-        # surrogate gain
-        alpha,
-        # meta
-        BLOCK_D: tl.constexpr,
-        WRITE_GH0: tl.constexpr,
-    ):
-        """grid = (cdiv(D, BLOCK_D), B). Reverse-time sweep, fp32 accum."""
-        pid_d = tl.program_id(0)
-        pid_b = tl.program_id(1)
-
-        d_offsets = pid_d * BLOCK_D + tl.arange(0, BLOCK_D)
-        d_mask = d_offsets < D
-
-        # Carry into this block: dL/dh_post propagated from t+1 -> t.
-        gh_carry = tl.zeros([BLOCK_D], dtype=tl.float32)
-
-        # Per-thread per-channel accumulator for grad_threshold (sum over T and B-slab).
-        gthr_acc = tl.zeros([BLOCK_D], dtype=tl.float32)
-
-        PI_OVER_2 = 1.5707963267948966
-
-        # Reverse loop.
-        for t in range(T - 1, -1, -1):
-            base_t = pid_b * a_b_str + t * a_t_str + d_offsets * a_d_str
-            a_t = tl.load(a_ptr + base_t, mask=d_mask, other=0.0).to(tl.float32)
-            h_pre_t = tl.load(h_pre_ptr + base_t, mask=d_mask, other=0.0).to(tl.float32)
-            s_t = tl.load(s_ptr + base_t, mask=d_mask, other=0.0).to(tl.float32)
-            m_t = tl.load(m_ptr + base_t, mask=d_mask, other=0.0).to(tl.float32)
-            gh_post_t = tl.load(gh_post_ptr + base_t, mask=d_mask, other=0.0).to(tl.float32)
-            gs_t = tl.load(gs_ptr + base_t, mask=d_mask, other=0.0).to(tl.float32)
-
-            # ---- accumulate carry ----
-            gh_post_total = gh_post_t + gh_carry
-
-            # ---- ATan surrogate derivative ds/dm = alpha / (2*(1+(pi/2*alpha*m)^2)) ----
-            x = alpha * m_t
-            denom = 1.0 + (PI_OVER_2 * x) * (PI_OVER_2 * x)
-            ds_dm = alpha / (2.0 * denom)
-
-            # dh_post / dh_pre = (1 - s) - h_pre * ds_dm
-            one_minus_s = 1.0 - s_t
-            dh_post_dh_pre = one_minus_s - h_pre_t * ds_dm
-
-            # dL/dh_pre[t]
-            gh_pre_t = gh_post_total * dh_post_dh_pre + gs_t * ds_dm
-
-            # h_post[t-1] for grad_a (or h0)
-            if t > 0:
-                base_tm1 = pid_b * a_b_str + (t - 1) * a_t_str + d_offsets * a_d_str
-                h_pre_tm1 = tl.load(h_pre_ptr + base_tm1, mask=d_mask, other=0.0).to(tl.float32)
-                s_tm1 = tl.load(s_ptr + base_tm1, mask=d_mask, other=0.0).to(tl.float32)
-                h_post_tm1 = h_pre_tm1 * (1.0 - s_tm1)
-            else:
-                h0_p = h0_ptr + pid_b * h0_b_str + d_offsets * h0_d_str
-                h_post_tm1 = tl.load(h0_p, mask=d_mask, other=0.0).to(tl.float32)
-
-            # grad_a[t], grad_b[t]
-            ga_t = gh_pre_t * h_post_tm1
-            gb_t = gh_pre_t
-            tl.store(ga_ptr + base_t, ga_t.to(ga_ptr.dtype.element_ty), mask=d_mask)
-            tl.store(gb_ptr + base_t, gb_t.to(gb_ptr.dtype.element_ty), mask=d_mask)
-
-            # threshold gradient: m = h_pre - thr.  d m / d thr = -1.
-            #   dL/dthr += gh_post_total * h_pre * ds_dm  (from h_post = h_pre*(1-s))
-            #             - gs_t * ds_dm
-            # Note: gh_post_total contributes -h_pre*ds_dm via dh_post/dthr already
-            # accounted above; per channel sum across T accumulates.
-            gthr_acc += gh_post_total * h_pre_t * ds_dm - gs_t * ds_dm
-
-            # carry for t-1
-            gh_carry = gh_pre_t * a_t
-
-        # final gh_carry == dL/dh0
-        if WRITE_GH0:
-            gh0_p = gh0_ptr + pid_b * h0_b_str + d_offsets * h0_d_str
-            tl.store(gh0_p, gh_carry.to(gh0_ptr.dtype.element_ty), mask=d_mask)
-
-        # atomic accumulate threshold gradient (sum across (B, BLOCK_D) tiles).
-        thr_off = d_offsets * thr_d_str
-        tl.atomic_add(gthr_ptr + thr_off, gthr_acc, mask=d_mask)
-
 
 def _triton_block_forward(
     a: torch.Tensor,
@@ -308,66 +204,6 @@ def _triton_block_forward(
         num_warps=4,
     )
     return h_pre, s, m, h_post
-
-
-
-def _triton_block_backward(
-    a: torch.Tensor,
-    h_pre: torch.Tensor,
-    s: torch.Tensor,
-    m: torch.Tensor,
-    h0: torch.Tensor,
-    threshold: torch.Tensor,
-    grad_h_post: torch.Tensor,
-    grad_s: torch.Tensor,
-    alpha: float,
-    had_h0: bool,
-):
-    """Launch fused Triton backward kernel.
-
-    Returns:
-        grad_a:  (B, T, D)  same dtype as a
-        grad_b:  (B, T, D)  same dtype as a
-        grad_thr:(D,)       cast to threshold dtype after fp32 accum
-        grad_h0: (B, D) or None
-    """
-    assert _HAS_TRITON
-    assert a.is_cuda
-    a = a.contiguous()
-    h_pre = h_pre.contiguous()
-    s = s.contiguous()
-    m = m.contiguous()
-    h0 = h0.contiguous()
-    threshold = threshold.contiguous()
-    grad_h_post = grad_h_post.contiguous()
-    grad_s = grad_s.contiguous()
-
-    B, T, D = a.shape
-
-    grad_a = torch.empty_like(a)
-    grad_b = torch.empty_like(a)
-    grad_thr_f32 = torch.zeros(D, device=a.device, dtype=torch.float32)
-    grad_h0 = torch.empty_like(h0) if had_h0 else torch.empty(1, 1, device=a.device, dtype=a.dtype)
-
-    BLOCK_D = 64 if D >= 64 else D
-    grid = ((D + BLOCK_D - 1) // BLOCK_D, B)
-
-    fused_lnn_snn_block_bwd_kernel[grid](
-        a, h_pre, s, m, h0, threshold,
-        grad_h_post, grad_s,
-        grad_a, grad_b, grad_h0, grad_thr_f32,
-        a.stride(0), a.stride(1), a.stride(2),
-        h0.stride(0), h0.stride(1),
-        threshold.stride(0),
-        B, T, D,
-        float(alpha),
-        BLOCK_D=BLOCK_D,
-        WRITE_GH0=bool(had_h0),
-        num_warps=4,
-    )
-
-    grad_thr = grad_thr_f32.to(threshold.dtype)
-    return grad_a, grad_b, grad_thr, (grad_h0 if had_h0 else None)
 
 
 # ---------------------------------------------------------------------------
@@ -478,35 +314,8 @@ class TritonHybridBlockFn(torch.autograd.Function):
     def backward(ctx, grad_h_post: torch.Tensor, grad_s: torch.Tensor):
         a, b, threshold, h_pre, s, m, h0 = ctx.saved_tensors
         B, T, D = a.shape
-        alpha = float(ctx.alpha)
+        alpha = ctx.alpha
 
-        grad_h_post_c = grad_h_post.contiguous()
-        if grad_s is None:
-            grad_s_c = torch.zeros_like(a)
-        else:
-            grad_s_c = grad_s.contiguous()
-
-        use_triton_bwd = (
-            _HAS_TRITON
-            and a.is_cuda
-            and a.dtype in (torch.float32, torch.float16, torch.bfloat16)
-        )
-        if use_triton_bwd:
-            try:
-                grad_a, grad_b, grad_thr, grad_h0_buf = _triton_block_backward(
-                    a, h_pre, s, m, h0, threshold,
-                    grad_h_post_c, grad_s_c,
-                    alpha, ctx.had_h0,
-                )
-                grad_h0 = grad_h0_buf if ctx.had_h0 else None
-                return grad_a, grad_b, grad_thr, grad_h0, None, None, None, None
-            except Exception as exc:  # pragma: no cover
-                warnings.warn(
-                    f"TritonHybridBlockFn: Triton bwd failed ({exc!r}), "
-                    f"falling back to PyTorch BPTT."
-                )
-
-        # ---- PyTorch BPTT fallback (numerical reference / Triton fail safety) ----
         grad_a = torch.zeros_like(a)
         grad_b = torch.zeros_like(b)
         grad_thr = torch.zeros_like(threshold)

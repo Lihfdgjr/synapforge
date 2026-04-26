@@ -87,14 +87,20 @@ class LiquidCell(Module):
         A = self.get_decay_rate()                  # (D,)
         A_t = torch.exp(-delta * A)                # (B, T, D), in (0, 1]
 
-        # Heinsen scan in fp32 for stability (bf16 cumsum overflows at T>=64).
-        log_A = torch.log(A_t.clamp_min(1e-30)).float()
-        S = torch.cumsum(log_A, dim=1)
-        inner = torch.exp(-S) * b_t.float()
-        inner_sum = torch.cumsum(inner, dim=1)
-        h_full = torch.exp(S) * inner_sum
-        if h0 is not None:
-            h_full = h_full + torch.exp(S) * h0.float().unsqueeze(1)
+        # Stable per-step recurrence in fp32. Heinsen scan overflows for
+        # T>=128 because cumsum(log A) -> -inf; the cumprod-divide variant
+        # has gradient explosion through 1/cumA. Direct h = A*h + b is
+        # O(T*B*D) compute — same FLOPs, no divisions, autograd-safe.
+        A_f = A_t.float()
+        b_f = b_t.float()
+        B, T, D = A_f.shape
+        h_prev = (h0.float() if h0 is not None else
+                  A_f.new_zeros(B, D))
+        h_chunks = []
+        for t in range(T):
+            h_prev = A_f[:, t] * h_prev + b_f[:, t]
+            h_chunks.append(h_prev)
+        h_full = torch.stack(h_chunks, dim=1)
 
         out = h_full.to(x.dtype)
         return torch.tanh(out) if self.bound else out

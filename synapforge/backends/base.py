@@ -31,6 +31,9 @@ def get_backend(name: str) -> Backend:
     if name == "lava_export":
         from .lava_export import LavaExportBackend
         return LavaExportBackend()
+    if name == "cpu_avx2":
+        from .cpu_avx2 import CpuAvx2Backend
+        return CpuAvx2Backend()
     if name == "triton_block":
         from .triton_block import TritonBlockBackend
         return TritonBlockBackend()

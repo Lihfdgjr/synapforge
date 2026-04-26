@@ -1,14 +1,25 @@
 """TritonBlockBackend -- v0.2 fused LNN+SNN backend.
 
 Replaces the v0.1 GPUDenseBackend pass-through. On `compile(model)` we walk
-the model graph and detect every `(LiquidCell -> PLIF)` adjacency and
-replace those two modules with a single `TritonHybridBlock` that fuses
+the model graph and detect every `(LiquidCell -> PLIF)` adjacency
+(either as direct siblings inside an `nn.Sequential`/`sf.Module` parent, or
+as the `cfc + plif` attribute pair inside a HybridBlock-style container)
+and replace those two modules with a single `TritonHybridBlock` that fuses
 CfC scan + PLIF spike + subtract-on-spike reset + STDP eligibility into ONE
 Triton kernel launch per layer.
 
-This v0.3 also handles `(LiquidCell -> PLIFCell)` pairs (the variant used by
-`sf.model_100m.SynapForge100M`), where PLIFCell exposes a `forward_seq(x)`
-API returning `(spikes, v_final)` rather than PLIF's `(spk, mem)` tuple.
+If Triton is not available (e.g. Windows / CPU-only CI) or compilation
+fails at runtime, the kernel internally falls back to the pure-PyTorch
+reference path. Modules that are not part of a Liquid->PLIF pair are left
+untouched and execute via the standard `torch.nn.Module.forward`.
+
+Mixed models (some Liquid->PLIF pairs + plain modules) are fine: the
+backend only rewrites the matched pairs.
+
+Usage:
+
+    rt = sf.compile(model, backend="triton_block")
+    y  = rt(x)
 """
 
 from __future__ import annotations
@@ -27,14 +38,25 @@ from .triton_block_kernel import (
 
 
 # ---------------------------------------------------------------------------
-# Adapter modules
+# Adapter modules: bridge a TritonHybridBlock to the (LiquidCell, PLIF) pair
+# API expected by user models (LiquidCell.forward(x) -> h ; PLIF.forward(h) ->
+# (spk, mem)). We expose two facets of the fused block:
+#
+#   _FusedLiquid  -- intercepts the LiquidCell call site, runs the fused
+#                    kernel, caches (y_norm, spikes), and returns y_norm so
+#                    the next module in the chain (PLIF) sees the right shape.
+#   _FusedPLIF    -- intercepts the PLIF call site and returns the cached
+#                    (spikes, y_norm) tuple, matching PLIF's (spk, mem) API.
+#
+# This keeps the user's HybridBlock.forward() body unchanged while routing
+# both submodules through one fused Triton launch.
 # ---------------------------------------------------------------------------
 
 
 class _SharedTritonBlock(nn.Module):
     """Holds the actual TritonHybridBlock and a per-call output buffer.
 
-    The (_FusedLiquid, _FusedPLIF*) pair both reference this same object. The
+    The (_FusedLiquid, _FusedPLIF) pair both reference this same object. The
     Liquid call runs the kernel and stores spikes; the PLIF call reads them.
     """
 
@@ -67,7 +89,9 @@ class _FusedLiquid(nn.Module):
 
 
 class _FusedPLIF(nn.Module):
-    """Stand-in for sf.PLIF (cells.plif.PLIF) that returns (spikes, mem)."""
+    """Stand-in for sf.PLIF that returns the cached (spikes, mem) from the
+    shared fused block. Same return shape as the real PLIF: (spk, mem).
+    """
 
     def __init__(self, shared: _SharedTritonBlock):
         super().__init__()
@@ -84,62 +108,16 @@ class _FusedPLIF(nn.Module):
         return spk, mem
 
 
-class _FusedPLIFCellSeq(nn.Module):
-    """Stand-in for sf.surrogate.PLIFCell.
-
-    Mimics both the per-step `forward(x_t, v_prev)` and the sequence
-    `forward_seq(x_seq, v0)` API. Returns spikes from the cached fused
-    block call (run by `_FusedLiquid`).
-
-    PLIFCell.forward_seq returns (spike_seq, v_final). We return:
-        spike_seq = shared._last_spikes      # (B, T, D)
-        v_final   = shared._last_y[:, -1]    # (B, D)  (last membrane post-norm)
-    """
-
-    def __init__(self, shared: _SharedTritonBlock, hidden: int):
-        super().__init__()
-        self.shared = shared
-        self.hidden = int(hidden)
-
-    def forward(self, x_t: torch.Tensor, v_prev=None):
-        spk = self.shared._last_spikes
-        mem = self.shared._last_y
-        if spk is None or mem is None:
-            raise RuntimeError(
-                "_FusedPLIFCellSeq called before _FusedLiquid produced spikes."
-            )
-        # PLIFCell.forward returns (s_t, v_t) for a single step. Caller is
-        # almost always forward_seq, which we override below; this branch
-        # only exists as a defensive fallback.
-        if x_t.dim() == 2:
-            return spk[:, -1], mem[:, -1]
-        return spk, mem
-
-    def forward_seq(self, x_seq: torch.Tensor, v0=None):
-        spk = self.shared._last_spikes
-        mem = self.shared._last_y
-        if spk is None or mem is None:
-            raise RuntimeError(
-                "_FusedPLIFCellSeq.forward_seq called before _FusedLiquid."
-            )
-        # Match PLIFCell.forward_seq return: (spikes_BTH, v_final_BH)
-        return spk, mem[:, -1]
-
-
 # ---------------------------------------------------------------------------
-# Fusion pass
+# Fusion pass: walk the module tree, find (LiquidCell, PLIF) attribute pairs
+# inside the same parent and rewrite them.
 # ---------------------------------------------------------------------------
 
 
-# Class names we treat as "PLIF-like" siblings of a LiquidCell.
-_PLIF_LIKE_NAMES = ("PLIF", "PLIFCell")
-
-
-def _find_pairs(root: nn.Module) -> List[Tuple[nn.Module, str, str, str]]:
-    """Return list of (parent, liquid_attr, plif_attr, plif_kind).
-
-    plif_kind in {"PLIF", "PLIFCell"} so the fusion knows which adapter to
-    install. We require both children to share the same hidden dim.
+def _find_pairs(root: nn.Module) -> List[Tuple[nn.Module, str, str]]:
+    """Return list of (parent, liquid_attr_name, plif_attr_name) where the
+    parent module has both a LiquidCell and a PLIF child. We require the two
+    to share `hidden_dim == LiquidCell.hidden_dim == PLIF.hidden_dim`.
     """
     pairs = []
     for parent in root.modules():
@@ -147,24 +125,20 @@ def _find_pairs(root: nn.Module) -> List[Tuple[nn.Module, str, str, str]]:
         plif_attr = None
         liquid_mod = None
         plif_mod = None
-        plif_kind = None
         for name, child in parent.named_children():
             cls = type(child).__name__
             if cls == "LiquidCell":
                 liquid_attr = name
                 liquid_mod = child
-            elif cls in _PLIF_LIKE_NAMES:
+            elif cls == "PLIF":
                 plif_attr = name
                 plif_mod = child
-                plif_kind = cls
         if liquid_attr is not None and plif_attr is not None:
+            # Compatibility check: same hidden dim.
             l_h = getattr(liquid_mod, "hidden_dim", None)
-            # PLIFCell uses .hidden, PLIF uses .hidden_dim
             p_h = getattr(plif_mod, "hidden_dim", None)
-            if p_h is None:
-                p_h = getattr(plif_mod, "hidden", None)
             if l_h is not None and p_h is not None and l_h == p_h:
-                pairs.append((parent, liquid_attr, plif_attr, plif_kind))
+                pairs.append((parent, liquid_attr, plif_attr))
     return pairs
 
 
@@ -172,7 +146,6 @@ def _fuse_one_pair(
     parent: nn.Module,
     liquid_attr: str,
     plif_attr: str,
-    plif_kind: str,
 ) -> _SharedTritonBlock:
     """Replace parent.<liquid_attr> and parent.<plif_attr> with fused stand-ins."""
     liquid = getattr(parent, liquid_attr)
@@ -188,7 +161,7 @@ def _fuse_one_pair(
         alpha=alpha,
         enable_stdp=False,  # off by default; user can flip via .enable_stdp
     )
-    # Move shared to the device/dtype of the original modules.
+    # Move shared to the device of the original modules.
     try:
         dev = next(liquid.parameters()).device
         dt = next(liquid.parameters()).dtype
@@ -203,7 +176,7 @@ def _fuse_one_pair(
         shared.block.b_proj.weight.copy_(liquid.b_proj.weight)
         shared.block.b_proj.bias.copy_(liquid.b_proj.bias)
         shared.block.A_log.copy_(liquid.A_log)
-        # PLIF threshold may be a Parameter or non-learnable buffer/scalar.
+        # PLIF threshold may be a Parameter or a non-learnable buffer/scalar.
         thr = plif.threshold
         if torch.is_tensor(thr):
             if thr.dim() == 0:
@@ -212,21 +185,20 @@ def _fuse_one_pair(
                 shared.block.threshold.copy_(thr)
         else:
             shared.block.threshold.fill_(float(thr))
+        # out_norm starts as identity-ish LayerNorm; nothing to copy from
+        # the originals (Liquid has no LN, PLIF has none).
 
     setattr(parent, liquid_attr, _FusedLiquid(shared))
-    if plif_kind == "PLIFCell":
-        setattr(parent, plif_attr, _FusedPLIFCellSeq(shared, hidden=d_hidden))
-    else:
-        setattr(parent, plif_attr, _FusedPLIF(shared))
+    setattr(parent, plif_attr, _FusedPLIF(shared))
     return shared
 
 
 def _apply_fusion(root: nn.Module) -> dict:
-    """Walk the model and rewrite every Liquid->PLIF/PLIFCell pair."""
+    """Walk the model and rewrite every Liquid->PLIF pair. Returns stats."""
     pairs = _find_pairs(root)
     fused_blocks: List[_SharedTritonBlock] = []
-    for parent, l_attr, p_attr, kind in pairs:
-        sb = _fuse_one_pair(parent, l_attr, p_attr, kind)
+    for parent, l_attr, p_attr in pairs:
+        sb = _fuse_one_pair(parent, l_attr, p_attr)
         fused_blocks.append(sb)
     return {
         "n_pairs_fused": len(pairs),
@@ -241,7 +213,16 @@ def _apply_fusion(root: nn.Module) -> dict:
 
 
 class TritonBlockBackend(Backend):
-    """v0.3 backend: fuse Liquid+PLIF/PLIFCell pairs into Triton launches."""
+    """v0.2 backend: fuse Liquid+PLIF pairs into single Triton kernel launches.
+
+    On the first `run()` call (or via explicit `.compile()`) we walk the
+    graph's root module and rewrite matched pairs in place. Subsequent
+    calls are pure forward dispatch -- no per-call rewrite cost.
+
+    Mixed models work: any module that is NOT part of a Liquid->PLIF pair
+    is left as-is and executes via the standard PyTorch path -- effectively
+    the same as gpu_dense for those nodes.
+    """
 
     name = "triton_block"
 
@@ -269,8 +250,11 @@ class TritonBlockBackend(Backend):
         root = graph.modules.get("root")
         if root is None:
             raise RuntimeError("graph has no root module")
+
+        # Lazy fuse on first call.
         if id(root) != self._compiled_root_id:
             self.compile(root)
+
         if self.device is not None:
             inputs = tuple(
                 x.to(self.device) if isinstance(x, torch.Tensor) else x

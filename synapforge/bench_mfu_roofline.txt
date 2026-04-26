@@ -1,0 +1,19 @@
+# A100 SXM 80GB roofline. Peak = 312 TFLOPS bf16, HBM = 2040.00 TB/s
+# Ridge AI = 152.9 FLOPs/byte (above = compute-bound).
+
+op                       shape (MxKxN)              GFLOPs         MB       AI regime            ceil TF
+---------------------------------------------------------------------------------------------------------
+lm_head_fwd              8192x512x50257             421.59      883.3    477.3 compute-bound       312.0
+lm_head_bwd_dW           512x8192x50257             421.59      883.3    477.3 compute-bound       312.0
+swiglu_w_gate            8192x512x4096               34.36       79.7    431.2 compute-bound       312.0
+swiglu_w_up              8192x512x4096               34.36       79.7    431.2 compute-bound       312.0
+swiglu_w_down            8192x4096x512               34.36       79.7    431.2 compute-bound       312.0
+synapse_dense            8192x512x512                 4.29       17.3    248.2 compute-bound       312.0
+liquid_proj              8192x512x512                 4.29       17.3    248.2 compute-bound       312.0
+
+[summary]
+  LM head GEMM share of fwd FLOPs: 8.6%
+  LM head regime:    compute-bound (AI=477.3, ceil 312 TF)
+  SwiGLU regime:     compute-bound (AI=431.2, ceil 312 TF)
+  Synapse(dense)reg: compute-bound (AI=248.2, ceil 312 TF)
+  Liquid proj reg:   compute-bound (AI=248.2, ceil 312 TF)

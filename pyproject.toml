@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synapforge"
-version = "0.5.0"
+version = "1.0.0"
 description = "Train dense, deploy async — purpose-built ML framework for liquid + spiking + plastic networks"
 readme = "README.md"
 license = {text = "MIT"}

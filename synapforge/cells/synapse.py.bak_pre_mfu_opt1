@@ -37,42 +37,6 @@ import torch.nn as nn
 from ..module import Module
 
 
-class _MaskedLinear(torch.autograd.Function):
-    """y = (W*M) @ x.T + b, with d(W*M)/dW = M (chain-ruled in backward).
-
-    Saves the elementwise mul as a kernel launch by inlining the mask
-    application: forward materializes the masked weight ONCE then GEMMs;
-    backward leaves the dW gradient unmasked at first then multiplies by
-    M at the end (single fused mul instead of one in fwd + one in bwd).
-    """
-
-    @staticmethod
-    def forward(ctx, x, weight, mask_typed, bias):  # type: ignore[override]
-        # Materialize masked weight for this fwd. Same FLOPs as before; we win
-        # on the bwd by skipping `aten::mul` in the autograd graph.
-        w_eff = weight * mask_typed
-        ctx.save_for_backward(x, w_eff, mask_typed)
-        ctx.has_bias = bias is not None
-        return torch.nn.functional.linear(x, w_eff, bias)
-
-    @staticmethod
-    def backward(ctx, grad_out):  # type: ignore[override]
-        x, w_eff, mask_typed = ctx.saved_tensors
-        # grad_x = grad_out @ w_eff
-        # grad_w = grad_out.T @ x   then * mask_typed (chain rule)
-        # grad_bias = grad_out.sum over leading dims
-        grad_x = grad_out.matmul(w_eff)
-        # Reshape to (B*T, dout) x (B*T, din) -> (dout, din)
-        gx = grad_out.reshape(-1, grad_out.shape[-1])
-        xx = x.reshape(-1, x.shape[-1])
-        grad_w = gx.t().matmul(xx)
-        grad_w = grad_w * mask_typed
-        grad_b = None
-        if ctx.has_bias:
-            grad_b = grad_out.reshape(-1, grad_out.shape[-1]).sum(dim=0)
-        return grad_x, grad_w, None, grad_b
-
-
 class SparseSynapse(Module):
     """Linear layer with structurally sparse boolean mask + grow/prune ops.
 
@@ -111,28 +75,14 @@ class SparseSynapse(Module):
         self.register_buffer("mask", mask)
         # Growth rule (None => static mask, behaves like v0.1).
         self.growth = growth
-        # MFU opt 2026-04-26: cache typed mask + masked weight to skip
-        # the 4*N_layers*loop_depth `weight*mask.to(dtype)` recompute per step.
-        # Invalidated whenever weight or mask changes (data_ptr-versioned).
-        self._cached_typed_mask: torch.Tensor | None = None
-        self._cached_typed_dtype: torch.dtype | None = None
-        self._mask_version: int = 0
 
     def density(self) -> float:
         return float(self.mask.float().mean().item())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # MFU opt 2026-04-26: use a custom autograd Function so the
-        # elementwise weight*mask never appears as its own kernel launch.
-        # Forward path applies the mask in the GEMM input; backward applies
-        # the mask to dW (correct chain-rule for d/dW (W*M)).
-        wdtype = self.weight.dtype
-        if (self._cached_typed_mask is None
-                or self._cached_typed_dtype != wdtype
-                or self._cached_typed_mask.device != self.mask.device):
-            self._cached_typed_mask = self.mask.to(wdtype)
-            self._cached_typed_dtype = wdtype
-        return _MaskedLinear.apply(x, self.weight, self._cached_typed_mask, self.bias)
+        # Mask weights for forward; gradient also flows only through active.
+        w = self.weight * self.mask.to(self.weight.dtype)
+        return torch.nn.functional.linear(x, w, self.bias)
 
     @torch.no_grad()
     def grow(self, n_new: int, criterion: str = "random") -> int:
@@ -158,9 +108,6 @@ class SparseSynapse(Module):
             self.mask[int(r), int(c)] = True
             # Re-init the new connection small so it doesn't dominate.
             self.weight[int(r), int(c)] = self.weight.new_empty(()).normal_(0, 0.01)
-        # Invalidate cached typed mask after structural change.
-        self._cached_typed_mask = None
-        self._mask_version += 1
         return n_add
 
     @torch.no_grad()
@@ -185,8 +132,6 @@ class SparseSynapse(Module):
         for r, c in picks:
             self.mask[int(r), int(c)] = False
             self.weight[int(r), int(c)] = 0.0
-        self._cached_typed_mask = None
-        self._mask_version += 1
         return n_rm
 
 

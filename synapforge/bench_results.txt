@@ -1,0 +1,29 @@
+=== synapforge v0.1 bench === device=cuda
+GPU: NVIDIA A100-SXM4-80GB
+CUDA_VISIBLE_DEVICES=1
+
+--- compile() IR inspection ---
+Runtime(backend=gpu_dense, nodes=6)
+IRGraph: 6 nodes
+  IRNode(module@root, in=[], out=[])
+  IRNode(liquid@cfc, in=[], out=[])
+  IRNode(dense@cfc.delta_proj, in=[], out=[])
+  IRNode(dense@cfc.b_proj, in=[], out=[])
+  IRNode(plif@plif, in=[], out=[])
+  IRNode(synapse@syn, in=[], out=[])
+
+--- LiquidCell forward  B=64 T=256 D=256  device=cuda ---
+  synapforge.LiquidCell                       median=  1.208 ms   p90=  1.240 ms
+  mscfc.LiquidS4Cell                          median=  1.198 ms   p90=  1.221 ms
+  rel_err vs mscfc reference: 0.000e+00  (finite-mask, NaN frac=55.62%; must < 1e-3)
+  synapforge overhead: +0.84%  (v0.1 acceptable: -5%..+15%)
+
+--- HybridBlock (cfc -> plif) forward  B=64 T=256 D=256  device=cuda ---
+  sf_block.forward (direct)                   median=  1.359 ms   p90=  1.384 ms
+  sf_block via Runtime                        median=  1.352 ms   p90=  1.397 ms
+
+--- LiquidCell forward  B=64 T=1024 D=256  device=cuda ---
+  synapforge.LiquidCell                       median=  4.091 ms   p90=  4.142 ms
+  mscfc.LiquidS4Cell                          median=  4.163 ms   p90=  4.217 ms
+  rel_err vs mscfc reference: 0.000e+00  (finite-mask, NaN frac=88.91%; must < 1e-3)
+  synapforge overhead: -1.73%  (v0.1 acceptable: -5%..+15%)
