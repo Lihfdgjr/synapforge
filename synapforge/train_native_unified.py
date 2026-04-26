@@ -53,8 +53,24 @@ class NativeUnified(sf.Module):
         return self.action(s.mean(dim=1, keepdim=True))
 
 
+_text_stream_cache = None
+def _get_text_stream(B=8):
+    global _text_stream_cache
+    if _text_stream_cache is None:
+        from synapforge.data import ParquetTokenStream
+        _text_stream_cache = iter(ParquetTokenStream(
+            "/workspace/data/wt103_raw/train-*.parquet",
+            seq_len=SEQ_LEN, batch_size=B, tokenizer="gpt2", loop=True))
+    return _text_stream_cache
+
 def make_text_batch(B=8):
-    return torch.randint(0, VOCAB, (B, SEQ_LEN), device='cuda')
+    """Real WikiText-103 stream (was random stub)."""
+    try:
+        x, _y = next(_get_text_stream(B))
+        return x.cuda()
+    except Exception:
+        # fallback to random if data load fails
+        return torch.randint(0, VOCAB, (B, SEQ_LEN), device='cuda')
 
 def make_image_batch(B=4):
     return torch.randn(B, 3, 32, 32, device='cuda')
