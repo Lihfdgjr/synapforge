@@ -26,11 +26,9 @@ and synaptic plasticity break almost every assumption it was built on:
 | Dense matmul is the bottleneck            | Spike rasters are <5% sparse — dense waste >95% FLOPs         |
 | Time is a leading dim, not a state        | Liquid ODEs need true continuous-time dynamics                |
 | All optimizers see the same `param.grad`  | Plasticity-aware AdamW must merge gradient + plastic-delta    |
-| One backend fits all                      | Train on GPU dense, deploy event-driven on Loihi-2 / CPU      |
 
 **synapforge** is a thin layer on top of PyTorch that fixes all seven, while keeping
 the friendly `nn.Module`-style ergonomics. Train a hybrid model with `sf.LiquidCell` +
-`sf.PLIF` + `sf.STDP` on a GPU, then export to Lava for neuromorphic deployment with
 one call.
 
 ```python
@@ -52,7 +50,6 @@ class HybridBlock(sf.Module):
         return out
 
 model = HybridBlock(256)
-rt    = sf.compile(model, backend="gpu_dense")    # or "triton_block", "cpu_event", "lava"
 y     = rt(torch.randn(32, 100, 256, device="cuda"))
 ```
 
@@ -68,10 +65,8 @@ Optional extras:
 
 ```bash
 pip install "synapforge[triton]"     # Triton-fused parallel scan (Linux+CUDA)
-pip install "synapforge[lava]"       # Loihi-2 export adapter
 pip install "synapforge[data,hf]"    # Parquet streaming + HF tokenizer adapter
 pip install "synapforge[dev]"        # pytest, ruff, mypy, build, twine
-pip install "synapforge[triton,lava,data,hf,dev]"  # everything
 ```
 
 Core dependencies are minimal: `torch>=2.0` and `numpy`. Everything else is opt-in.
@@ -108,10 +103,7 @@ That's it. No custom training loop, no manual surrogate registration, no boilerp
 +----------------------------------------------------------------------+
 |                     IR (graph / compiler / passes)                   |
 +----------------------------------------------------------------------+
-|   gpu_dense   |   triton_block   |   cpu_event   |   lava_export    |
-|  (training)   |  (fast forward)  |  (inference)  |  (Loihi-2)       |
 +----------------------------------------------------------------------+
-|                      torch  |  triton  |  numba  |  lava-nc          |
 +----------------------------------------------------------------------+
 ```
 
@@ -132,8 +124,6 @@ That's it. No custom training loop, no manual surrogate registration, no boilerp
   cadence so plastic state stays consistent across ranks.
 - **quantize.py** — BitNet-style ternary {-1, 0, +1} post-training quantization;
   ~20x weight compression, <2pp accuracy loss on tested workloads.
-- **backends/lava_export.py** — converts a frozen `sf.Module` to a Lava
-  `AbstractProcess` graph for Loihi-2 deployment (M11, hardware verification
   pending).
 
 The IR layer (`ir/graph.py`, `ir/compiler.py`) is the hinge: it lets one model
@@ -174,11 +164,7 @@ Reproduce: `python benchmarks/bench_triton.py`,
 | M8        | done       | Ternary BitNet 1.58 PTQ (~20x compression)                  |
 | M9        | done       | CPU event-driven inference (numba raster)                   |
 | M10       | done       | CUDA-graph runtime (~2x small-model throughput)             |
-| **M11**   | **v0.5**   | Lava export — code path complete, Loihi-2 verification next |
-| M12       | next       | Full neuromorphic + analog co-deployment                    |
-| **v1.0**  | **after Loihi-2** | Loihi-2 numerical equivalence verified, API frozen   |
 
-We are **not claiming v1.0** until Loihi-2 export is verified end-to-end on real
 hardware. Today's release is `v0.5.0`.
 
 ---
