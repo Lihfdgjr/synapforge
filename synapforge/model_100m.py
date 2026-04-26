@@ -31,6 +31,7 @@ hidden=512, layers=10, ffn_ratio=8 -> ~97M params (within target +/- 10%).
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -133,6 +134,7 @@ class SynapForge100M(Module):
         sparsity: float = 0.95,
         dropout: float = 0.0,
         tie_lm_head: bool = True,
+        use_grad_checkpoint: bool = False,
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -141,6 +143,7 @@ class SynapForge100M(Module):
         self.loop_depth = int(loop_depth)
         self.max_seq = int(max_seq)
         self.tie_lm_head = bool(tie_lm_head)
+        self.use_grad_checkpoint = bool(use_grad_checkpoint)
 
         self.tok_embed = nn.Embedding(vocab, d)
         nn.init.normal_(self.tok_embed.weight, std=0.02)
@@ -175,9 +178,16 @@ class SynapForge100M(Module):
             raise ValueError(f"seq_len {T} > max_seq {self.max_seq}")
         x = self.tok_embed(ids) + self.pos_embed[:T].unsqueeze(0)
 
-        for blk in self.blocks:
-            for _ in range(self.loop_depth):
-                x = blk(x)
+        if self.use_grad_checkpoint and self.training:
+            from torch.utils.checkpoint import checkpoint as _ckpt
+            for blk in self.blocks:
+                for _ in range(self.loop_depth):
+                    # use_reentrant=False is the recommended modern API
+                    x = _ckpt(blk, x, use_reentrant=False)
+        else:
+            for blk in self.blocks:
+                for _ in range(self.loop_depth):
+                    x = blk(x)
 
         x = self.ln_f(x)
         if self.tie_lm_head:
@@ -196,9 +206,11 @@ def build_synapforge_100m(
     ffn_ratio: float = 8.0,
     sparsity: float = 0.95,
     dropout: float = 0.0,
+    use_grad_checkpoint: bool = False,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
+        use_grad_checkpoint=use_grad_checkpoint,
         max_seq=max_seq, ffn_ratio=ffn_ratio, sparsity=sparsity,
         dropout=dropout,
     )

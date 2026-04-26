@@ -1,7 +1,8 @@
 """AudioPatchEmbed -- 20ms-chunk audio patch embedding.
 
 Two modes:
-    mode="raw"  : 1D convolution over raw waveform (kernel = chunk_size, stride = chunk_size).
+    mode="raw"  : pure reshape + Linear projection over raw waveform chunks
+                  (Fuyu/Chameleon-style byte-patch tokenization, NO conv).
     mode="mel"  : torchaudio.MelSpectrogram + linear projection over mel-frame chunks.
                   Auto-falls-back to "raw" when torchaudio is missing.
 
@@ -18,13 +19,14 @@ Default geometry
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from ..module import Module
+from .image import sinusoidal_2d  # reused for 1D pos enc (rows=1, cols=T)
 
 try:
     import torchaudio  # type: ignore
@@ -63,17 +65,23 @@ class AudioPatchEmbed(Module):
         self,
         hidden: int = 512,
         sample_rate: int = 16000,
-        chunk_ms: int = 20,
+        chunk_ms: Optional[int] = None,
         mode: Literal["raw", "mel"] = "raw",
         n_mels: int = 80,
         win_ms: int = 25,
         hop_ms: int = 10,
+        patch_ms: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.hidden = int(hidden)
         self.sample_rate = int(sample_rate)
+        # Accept patch_ms as an alias for chunk_ms (Fuyu/byte-patch terminology).
+        if chunk_ms is None and patch_ms is None:
+            chunk_ms = 20
+        elif chunk_ms is None:
+            chunk_ms = patch_ms
         self.chunk_ms = int(chunk_ms)
-        self.chunk_size = int(round(sample_rate * chunk_ms / 1000))
+        self.chunk_size = int(round(sample_rate * self.chunk_ms / 1000))
         if self.chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
 
@@ -82,15 +90,11 @@ class AudioPatchEmbed(Module):
         self.mode = mode
 
         if mode == "raw":
-            # 1D conv with kernel = stride = chunk_size : equivalent to
-            # patchify on time + linear projection.
-            self.proj = nn.Conv1d(
-                in_channels=1,
-                out_channels=hidden,
-                kernel_size=self.chunk_size,
-                stride=self.chunk_size,
-                bias=False,
-            )
+            # Fuyu/Chameleon-style: chunk raw waveform into samples_per_chunk
+            # blocks, flatten, project with a single Linear. Mathematically
+            # identical to a stride=kernel Conv1d but expressed as the
+            # canonical byte-patch tokenizer (no convolutional layers).
+            self.proj = nn.Linear(self.chunk_size, hidden, bias=False)
             nn.init.normal_(self.proj.weight, std=0.02)
             self.mel = None
             self.mel_proj = None
@@ -110,7 +114,7 @@ class AudioPatchEmbed(Module):
             self.amp_to_db = torchaudio.transforms.AmplitudeToDB(top_db=80.0)
             self.hop_length = hop_length
             # Group `frames_per_chunk` mel frames into one chunk patch.
-            self.frames_per_chunk = max(1, chunk_ms // hop_ms)
+            self.frames_per_chunk = max(1, self.chunk_ms // hop_ms)
             self.mel_proj = nn.Linear(n_mels * self.frames_per_chunk, hidden, bias=False)
             nn.init.normal_(self.mel_proj.weight, std=0.02)
             self.proj = None
@@ -143,9 +147,11 @@ class AudioPatchEmbed(Module):
             pad = (-N) % self.chunk_size
             if pad:
                 waveform = F.pad(waveform, (0, pad))
-            x = waveform.unsqueeze(1).to(self.proj.weight.dtype)   # (B, 1, N')
-            z = self.proj(x)                                       # (B, hidden, T)
-            z = z.transpose(1, 2).contiguous()                     # (B, T, hidden)
+            # Pure reshape -> Linear (Fuyu byte-patch style, no conv).
+            # (B, N') -> (B, T, chunk_size) -> Linear -> (B, T, hidden)
+            T = waveform.shape[-1] // self.chunk_size
+            x = waveform.view(B, T, self.chunk_size).to(self.proj.weight.dtype)
+            z = self.proj(x)                                       # (B, T, hidden)
         else:
             mel_spec = self.mel(waveform)                          # (B, n_mels, F)
             mel_db = self.amp_to_db(mel_spec)

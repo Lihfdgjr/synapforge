@@ -12,7 +12,9 @@ Pipeline
 1. Per-channel learnable embed: project each scalar c -> a small per-channel
    vector. C is variable across calls; we pad to max_channels and use a mask.
 2. Concatenate channel embeddings along feature dim -> (B, T_raw, hidden_in).
-3. 1D conv with kernel = stride = patch_t -> (B, T_token, hidden).
+3. Byte-patch tokenizer (Fuyu/Chameleon style): reshape time axis into
+   non-overlapping windows of size patch_t, then flatten and project with a
+   single nn.Linear -> (B, T_token, hidden). NO convolutional layers.
 4. Add 1D positional encoding.
 5. Prepend learned <|series|> marker.
 
@@ -59,17 +61,13 @@ class TimeSeriesEmbed(Module):
         self.chan_b = nn.Parameter(torch.zeros(max_channels, per_channel_dim))
         nn.init.normal_(self.chan_w, std=0.02)
         nn.init.normal_(self.chan_b, std=0.02)
-        # 1D conv to patchify time; in_channels=max_channels*per_channel_dim,
-        # out_channels=hidden.
+        # Byte-patch tokenizer (Fuyu/Chameleon-style): non-overlapping windows
+        # along time, flattened and projected with a single Linear. This is
+        # mathematically equivalent to a Conv1d with kernel=stride=patch_t
+        # (rule: NO convolutional layers in modality embedding).
         in_ch = max_channels * per_channel_dim
-        self.tconv = nn.Conv1d(
-            in_channels=in_ch,
-            out_channels=hidden,
-            kernel_size=self.patch_t,
-            stride=self.patch_t,
-            bias=False,
-        )
-        nn.init.normal_(self.tconv.weight, std=0.02)
+        self.patch_proj = nn.Linear(self.patch_t * in_ch, self.hidden, bias=False)
+        nn.init.normal_(self.patch_proj.weight, std=0.02)
         self.marker = nn.Parameter(torch.zeros(hidden))
         nn.init.normal_(self.marker, std=0.02)
         self._pos_cache: dict[tuple, torch.Tensor] = {}
@@ -111,17 +109,22 @@ class TimeSeriesEmbed(Module):
             )
             mask[:C] = 1.0
             emb = emb * mask.view(1, 1, -1, 1)
-        # Flatten last two dims -> (B, T, mc*pc), then conv1d wants (B, F, T).
-        flat = emb.reshape(B, T_raw, self.max_channels * self.per_channel_dim)
-        x = flat.transpose(1, 2)                                    # (B, F, T)
-        # Pad to multiple of patch_t.
+        # Flatten last two dims -> (B, T, in_ch).
+        in_ch = self.max_channels * self.per_channel_dim
+        flat = emb.reshape(B, T_raw, in_ch)                          # (B, T, in_ch)
+        # Pad time to multiple of patch_t.
         if T_raw % self.patch_t != 0:
             pad_t = self.patch_t - (T_raw % self.patch_t)
-            x = F.pad(x, (0, pad_t))
-        z = self.tconv(x)                                           # (B, hidden, T_token)
-        z = z.transpose(1, 2).contiguous()                          # (B, T_token, hidden)
-        T_token = z.shape[1]
-        pos = self._pos(T_token, series.device, z.dtype)           # (T_token, hidden)
+            flat = F.pad(flat, (0, 0, 0, pad_t))                     # pad along T
+        T_pad = flat.shape[1]
+        T_token = T_pad // self.patch_t
+        # Byte-patch reshape: (B, T_token, patch_t, in_ch) -> (B, T_token, patch_t*in_ch).
+        windows = flat.reshape(B, T_token, self.patch_t, in_ch)
+        windows = windows.reshape(B, T_token, self.patch_t * in_ch)
+        # Single Linear projection (Fuyu/Chameleon-style; no conv).
+        z = self.patch_proj(windows)                                 # (B, T_token, hidden)
+        z = z.contiguous()
+        pos = self._pos(T_token, series.device, z.dtype)             # (T_token, hidden)
         z = z + pos.unsqueeze(0)
         marker = self.marker.to(z.dtype).expand(B, 1, self.hidden)
         z = torch.cat([marker, z], dim=1)

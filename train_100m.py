@@ -73,8 +73,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--warmstart", default=WARM_CKPT_DEFAULT)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--steps", type=int, default=N_STEPS_DEFAULT)
+    p.add_argument("--warmup", type=int, default=200)
     p.add_argument("--lr-decay", default="cosine", choices=["none","cosine","linear"])
     p.add_argument("--grad-clip", type=float, default=0.5)
+    p.add_argument("--grad-checkpoint", action="store_true", default=False,
+                   help="trade compute for memory; use when B>=96 OOMs")
     p.add_argument("--lr-min", type=float, default=1e-5)
     p.add_argument("--skip-spike", action="store_true", default=True)
     return p.parse_args()
@@ -134,6 +137,21 @@ def sample(model, tokenizer, prompt: str,
     return text
 
 
+def lr_at(step: int, peak: float, warmup: int, total: int, kind: str = "cosine") -> float:
+    if step < warmup:
+        return peak * step / max(1, warmup)
+    if kind == "none":
+        return peak
+    progress = (step - warmup) / max(1, total - warmup)
+    if kind == "cosine":
+        import math
+        return peak * 0.5 * (1.0 + math.cos(math.pi * progress))
+    if kind == "linear":
+        return peak * max(0.0, 1.0 - progress)
+    return peak
+
+
+
 def main() -> int:
     args = _parse_args()
     out_dir = args.out
@@ -156,6 +174,7 @@ def main() -> int:
     model = build_synapforge_100m(
         vocab=50257, d=512, n_layers=10, loop_depth=4,
         max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
+        use_grad_checkpoint=args.grad_checkpoint,
     )
     n_params = model.num_parameters()
     _log(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
@@ -219,6 +238,21 @@ def main() -> int:
     optim = build_optimizer(model, lr=LR, weight_decay=WEIGHT_DECAY)
     _log(f"optimizer: {type(optim).__name__} lr={LR} wd={WEIGHT_DECAY}")
 
+    # Load optimizer state from warmstart ckpt (preserves Adam m/v momentum;
+    # without this, warmstart loses momentum state and the run cold-starts
+    # the moment estimates -- a known cause of warmstart-divergence as seen
+    # in v1.2 b80 (loss 5.45 -> 6.34 in 500 steps).
+    if warm_ckpt and os.path.exists(warm_ckpt):
+        try:
+            _ck = torch.load(warm_ckpt, map_location="cpu")
+            if isinstance(_ck, dict) and "optim_state" in _ck:
+                optim.load_state_dict(_ck["optim_state"])
+                _log(f"warmstart: loaded optim state from {warm_ckpt}")
+            else:
+                _log(f"warmstart: no optim_state in ckpt (legacy ckpt; momentum cold-start)")
+        except Exception as exc:
+            _log(f"warmstart optim load skipped: {exc}")
+
     # ---------------- data ----------------
     train_ds = ParquetTokenStream(DATA_GLOB, seq_len=SEQ_LEN,
                                   batch_size=args.batch_size, loop=True)
@@ -245,6 +279,9 @@ def main() -> int:
     ]
 
     for step in range(1, n_steps + 1):
+        cur_lr = lr_at(step, LR, args.warmup, n_steps, args.lr_decay)
+        for pg in optim.param_groups:
+            pg["lr"] = cur_lr
         t_step = time.time()
         try:
             x, y = next(train_it)
@@ -286,16 +323,18 @@ def main() -> int:
                 f" mem_GB={torch.cuda.memory_allocated()/1e9:.2f}"
                 if DEVICE == "cuda" else ""
             )
-            _log(f"step {step:5d} loss={loss.item():.4f} "
+            _log(f"step {step:5d} loss={loss.item():.4f} lr={cur_lr:.5f} "
                  f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}")
 
         if step % SAVE_EVERY == 0:
             ckpt_path = os.path.join(out_dir, f"step_{step:06d}.pt")
             torch.save({
                 "model": model.state_dict(),
+                "optim_state": optim.state_dict(),
                 "step": step,
                 "loss": float(loss.item()),
                 "n_params": n_params,
+                "lr": cur_lr,
             }, ckpt_path)
             _log(f"saved ckpt {ckpt_path}")
 
@@ -324,6 +363,7 @@ def main() -> int:
 
     torch.save({
         "model": model.state_dict(),
+        "optim_state": optim.state_dict(),
         "step": n_steps,
         "n_params": n_params,
     }, os.path.join(out_dir, "final.pt"))

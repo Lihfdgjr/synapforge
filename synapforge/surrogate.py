@@ -322,7 +322,33 @@ class PLIFCell(nn.Module):
             raise ValueError(f"reset must be 'subtract' or 'zero', got {reset!r}")
         self.hidden = int(hidden)
         # log_tau is learnable; ensures tau > 0 via exp().
-        self.log_tau = nn.Parameter(torch.full((hidden,), math.log(float(tau_init))))
+        # DA-LIF (Wang 2502.10422) heterogeneous tau init breaks degenerate
+        # all-channels-identical start; +30% expressivity vs uniform init.
+        # tau_init: float -> uniform (legacy)
+        #           "bimodal" -> half fast (tau~3), half slow (tau~30)
+        #           ("bimodal", fast, slow) -> custom split
+        #           "log_uniform" -> uniform in log-space over [2, 50]
+        if isinstance(tau_init, str):
+            if tau_init == "bimodal":
+                fast_t, slow_t = 3.0, 30.0
+                vec = torch.empty(hidden)
+                h2 = hidden // 2
+                vec[:h2] = math.log(fast_t)
+                vec[h2:] = math.log(slow_t)
+            elif tau_init == "log_uniform":
+                vec = torch.rand(hidden) * (math.log(50.0) - math.log(2.0)) + math.log(2.0)
+            else:
+                raise ValueError(f"unknown tau_init str: {tau_init!r}")
+        elif isinstance(tau_init, (tuple, list)) and len(tau_init) >= 2 and tau_init[0] == "bimodal":
+            fast_t = float(tau_init[1])
+            slow_t = float(tau_init[2]) if len(tau_init) > 2 else fast_t * 10.0
+            vec = torch.empty(hidden)
+            h2 = hidden // 2
+            vec[:h2] = math.log(fast_t)
+            vec[h2:] = math.log(slow_t)
+        else:
+            vec = torch.full((hidden,), math.log(float(tau_init)))
+        self.log_tau = nn.Parameter(vec)
         self.threshold = nn.Parameter(torch.full((hidden,), float(threshold_init)))
         self.surrogate = surrogate
         self.alpha = float(alpha)
