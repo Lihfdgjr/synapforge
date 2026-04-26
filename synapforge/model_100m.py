@@ -169,27 +169,54 @@ class SynapForge100M(Module):
             if (p.requires_grad or not only_trainable)
         )
 
-    def forward(self, ids: torch.Tensor) -> torch.Tensor:
-        """ids: (B, T) int64. Returns logits (B, T, vocab)."""
+    def _run_blocks(self, x):
+        if self.use_grad_checkpoint and self.training:
+            from torch.utils.checkpoint import checkpoint as _ckpt
+            for blk in self.blocks:
+                for _ in range(self.loop_depth):
+                    x = _ckpt(blk, x, use_reentrant=False)
+        else:
+            for blk in self.blocks:
+                for _ in range(self.loop_depth):
+                    x = blk(x)
+        return x
+
+    def encode(self, ids: torch.Tensor) -> torch.Tensor:
+        """Token ids -> (B, T, d) hidden after backbone (post ln_f)."""
         if ids.dim() != 2:
             raise ValueError(f"expected (B, T), got {tuple(ids.shape)}")
         B, T = ids.shape
         if T > self.max_seq:
             raise ValueError(f"seq_len {T} > max_seq {self.max_seq}")
         x = self.tok_embed(ids) + self.pos_embed[:T].unsqueeze(0)
+        x = self._run_blocks(x)
+        return self.ln_f(x)
 
-        if self.use_grad_checkpoint and self.training:
-            from torch.utils.checkpoint import checkpoint as _ckpt
-            for blk in self.blocks:
-                for _ in range(self.loop_depth):
-                    # use_reentrant=False is the recommended modern API
-                    x = _ckpt(blk, x, use_reentrant=False)
+    def forward_from_z(self, z: torch.Tensor) -> torch.Tensor:
+        """Skip tok_embed; feed pre-embedded (B, T, d). Returns hidden post ln_f.
+
+        Used by multi-modal callers (sf.modal.UnifiedEmbed already produced z).
+        Position embed truncated to first T positions and added.
+        """
+        if z.dim() != 3:
+            raise ValueError(f"expected (B, T, d), got {tuple(z.shape)}")
+        B, T, D = z.shape
+        if D != self.d:
+            raise ValueError(f"hidden mismatch: z d={D} vs backbone d={self.d}")
+        if T > self.max_seq:
+            # extend pos_embed dynamically (rare)
+            extra = T - self.max_seq
+            extra_pos = torch.zeros(extra, D, device=z.device, dtype=z.dtype)
+            pos = torch.cat([self.pos_embed.to(z.dtype), extra_pos], dim=0)[:T]
         else:
-            for blk in self.blocks:
-                for _ in range(self.loop_depth):
-                    x = blk(x)
+            pos = self.pos_embed[:T].to(z.dtype)
+        x = z + pos.unsqueeze(0)
+        x = self._run_blocks(x)
+        return self.ln_f(x)
 
-        x = self.ln_f(x)
+    def forward(self, ids: torch.Tensor) -> torch.Tensor:
+        """ids: (B, T) int64. Returns logits (B, T, vocab)."""
+        x = self.encode(ids)
         if self.tie_lm_head:
             logits = F.linear(x, self.tok_embed.weight)
         else:
