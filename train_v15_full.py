@@ -62,9 +62,9 @@ class V15Model(sf.Module):
             bio_max_channels=8,
         )
         self.cfc1 = sf.LiquidCell(hidden, hidden)
-        self.plif1 = sf.PLIFCell(hidden, threshold_init=0.3, tau_init="bimodal")
+        self.plif1 = sf.PLIFCell(hidden, threshold_init=0.1, tau_init="bimodal")
         self.cfc2 = sf.LiquidCell(hidden, hidden)
-        self.plif2 = sf.PLIFCell(hidden, threshold_init=0.3, tau_init="bimodal")
+        self.plif2 = sf.PLIFCell(hidden, threshold_init=0.1, tau_init="bimodal")
         self.lm_head = sf.tied_lm_head(hidden, VOCAB,
                                        embedding=self.embed.token_embedding)
         self.head_image = nn.Linear(hidden, 8 * 8 * 3)
@@ -84,12 +84,15 @@ class V15Model(sf.Module):
         self.char_head = nn.Linear(hidden, 256, bias=False)
 
     def encode_seq(self, batch: dict) -> torch.Tensor:
+        # v1.5a: dense CfC path; PLIF runs under no_grad just for spike monitoring.
         z = self.embed(batch)
-        h = self.cfc1(z)
-        s, _ = self.plif1.forward_seq(h)
-        h = self.cfc2(s)
-        s, _ = self.plif2.forward_seq(h)
-        return s
+        h1 = self.cfc1(z)
+        with torch.no_grad():
+            self.plif1.forward_seq(h1)
+        h2 = self.cfc2(h1)
+        with torch.no_grad():
+            self.plif2.forward_seq(h2)
+        return h2
 
     def pool_text(self, hidden, n_text_tokens):
         return hidden[:, -n_text_tokens:, :]
@@ -153,10 +156,10 @@ def load_teacher(name, device, dtype):
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
         print("[teacher] loading", name, flush=True)
-        tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
+        kw = {"local_files_only": True} if os.environ.get("TRANSFORMERS_OFFLINE") == "1" else {}
+        tok = AutoTokenizer.from_pretrained(name, **kw)
         m = AutoModelForCausalLM.from_pretrained(
-            name, torch_dtype=dtype, trust_remote_code=True,
-            output_hidden_states=True,
+            name, torch_dtype=dtype, output_hidden_states=True, **kw,
         ).to(device).eval()
         for p in m.parameters():
             p.requires_grad_(False)
@@ -477,23 +480,25 @@ def main() -> int:
                 act_target = (x[:, -1] % num_acts).long()
                 act_loss = F.cross_entropy(act_logits, act_target)
                 loss = loss + 0.02 * act_loss
-                # NeuroMCP synapse plasticity step + codebook growth
-                try:
-                    nm_out = model.neuromcp(pooled)
-                    cb_logits = nm_out["logits"].squeeze(1).float()
-                    cb_target = cb_logits.argmax(dim=-1)
-                    nm_loss = F.cross_entropy(cb_logits, cb_target)
-                    loss = loss + 0.02 * nm_loss
-                    model.neuromcp.step_plasticity()
-                    model.neuromcp.codebook.maybe_grow(hh.mean(dim=1).detach())
-                except Exception as _exc:
-                    pass
+                # NeuroMCP plasticity is a Hebbian no-grad step; defer to AFTER opt.step()
+                # to keep the in-place mask mutation off the autograd graph.
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(
             [p for p in model.parameters() if p.requires_grad], max_norm=GRAD_CLIP)
         opt.step()
+
+        # NeuroMCP plasticity post-step (no_grad; safe to mutate masks now).
+        if step % 8 == 0:
+            try:
+                with torch.no_grad():
+                    pooled_nm = hh[:, -1:, :].detach()
+                    model.neuromcp(pooled_nm)
+                    model.neuromcp.step_plasticity()
+                    model.neuromcp.codebook.maybe_grow(hh.mean(dim=1).detach())
+            except Exception:
+                pass
 
         cum_tok += args.batch_size * args.seq_len
 
