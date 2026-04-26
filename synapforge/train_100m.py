@@ -23,6 +23,7 @@ import math
 import os
 import sys
 import time
+from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -30,6 +31,7 @@ import torch.nn.functional as F
 if "/workspace" not in sys.path:
     sys.path.insert(0, "/workspace")
 
+import synapforge as sf  # noqa: E402
 from synapforge.data import ParquetTokenStream  # noqa: E402
 from synapforge.huggingface_adapter import adv_warmstart  # noqa: E402
 from synapforge.model_100m import build_synapforge_100m  # noqa: E402
@@ -67,6 +69,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--warmstart", default=WARM_CKPT_DEFAULT)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--steps", type=int, default=N_STEPS_DEFAULT)
+    p.add_argument("--lr-decay", default="cosine", choices=["none","cosine","linear"])
+    p.add_argument("--grad-clip", type=float, default=0.5)
+    p.add_argument("--lr-min", type=float, default=1e-5)
+    p.add_argument("--skip-spike", action="store_true", default=True)
     return p.parse_args()
 
 
@@ -182,6 +188,7 @@ def main() -> int:
         try:
             from synapforge.backends.triton_block import (
                 TritonBlockBackend,
+                _SharedTritonBlock,
             )
             from synapforge.backends.triton_block_kernel import _HAS_TRITON
             backend = TritonBlockBackend()
