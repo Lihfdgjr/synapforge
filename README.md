@@ -237,3 +237,67 @@ We welcome PRs. See [CONTRIBUTING.md](CONTRIBUTING.md). Quick checklist:
 <div align="center">
 <sub>synapforge is purpose-built. PyTorch for tensors, synapforge for synapses.</sub>
 </div>
+
+---
+
+## v1.5 Roadmap (in progress, 2026-04-26)
+
+`train_v15_full.py` joint trains the 9-modal model with KD + intrinsic exploration:
+
+### Components
+
+- **9-modality byte-patch** — text / image / audio / video / screen / point_cloud /
+  time_series / graph / biosignal, all via `sf.modal.UnifiedEmbed` (Fuyu/Chameleon-style
+  reshape + Linear, **no convolutional encoders**).
+- **CfC + PLIF backbone** — 2 layers; PLIF tau init defaults to **DA-LIF bimodal**
+  (half fast tau~3, half slow tau~30) for heterogeneous time constants from step 0.
+- **Knowledge distillation** — Qwen2.5-0.5B teacher, **rep-level** (mean-pooled hidden
+  state -> Linear projection -> MSE). Vocab-agnostic so any teacher tokenizer works.
+- **Web-augmented data** — `/workspace/data/` mixes WT103 + agent-generated Q/A pairs
+  + FineWeb-Edu chunks. Data pulled one-shot at training prep, **never** as runtime
+  tool-calls — preserves the rule that the model itself only emits actions through
+  `ActionHead` / `NeuroMCPHead` (neuronal direct, no schema).
+- **Semantic understanding aux losses**:
+  - Triplet (anchor / synonym / antonym) — InfoNCE-style margin loss on `sem_proj`.
+  - Definition modeling — `word: definition` CE loss.
+  - Char-level aux head — predicts next byte from hidden state (256-class).
+  - Cross-modal contrastive — image+caption InfoNCE (when COCO data lands).
+- **Intrinsic exploration** — every `--idle-every` steps the model self-rolls a
+  `Q:` continuation via its own LM head. Future versions feed the rollout into
+  `sf.self_learn.ExperienceReplayBuffer` weighted by `sf.intrinsic.NoveltyDrive`.
+- **Safety**:
+  - z-loss + label smoothing for stable softmax.
+  - Optimizer m/v restored on warm-start (no momentum cold-start).
+  - Gradient clipping (norm 0.5) + linear warmup + cosine decay.
+  - Per-layer PLIF spike-rate monitor flags dead/saturated neurons.
+
+### Training-time tools (NOT inference)
+
+- `auto_ckpt_backup.py` — periodically promotes best-val-ppl ckpts per run to
+  `/workspace/best_ckpts/`, tar.gz uploads to GitHub release every 4h.
+- `auto_rsync_ckpt.py` — glob-scans run dirs and pushes `.log/.json/.csv` to
+  `Lihfdgjr/synapforge-runs` every 10 min.
+- `github_push_retry.py` — handles intermittent github.com network filtering.
+- `train_100m_kd.py` — text-only logit-KD trainer (used for v1.3 baseline).
+
+All daemons read `GH_TOKEN` from env, **never hardcoded**.
+
+### Distributed (NV12 NVLink, 2× A100-80GB)
+
+```bash
+torchrun --nproc_per_node=2 /workspace/synapforge/train_v15_full.py \
+    --warmstart /workspace/runs/synapforge_full_modal/ckpt_step4000.pt \
+    --steps 6000 --batch-size 16 --lr 1.5e-4 --warmup 300
+```
+
+`synapforge.distributed.wrap_model` adds plastic-buffer-aware DDP (1.78x scaling
+already verified on 2× A800 with `PlasticBufferSync`).
+
+### Known limitations
+
+- WT103 alone caps ppl around ~150 even with a 100M-param model; **ppl < 50 needs
+  more pretrain tokens** (FineWeb-Edu mixin partially addresses this).
+- Triton fused kernel works in fresh subprocess but occasionally fails the first
+  compile in cold rentals — script falls back to pure-PyTorch (slower but correct).
+- Self-rolled Q: prompts are not yet fed back as training targets; that closes
+  the loop in v1.6.
