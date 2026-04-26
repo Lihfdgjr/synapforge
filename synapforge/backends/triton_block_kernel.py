@@ -269,14 +269,16 @@ def _triton_block_forward(
     """
     assert _HAS_TRITON
     assert a.is_cuda and b.is_cuda and threshold.is_cuda
-    a = a.contiguous()
-    b = b.contiguous()
-    threshold = threshold.contiguous()
+    # Triton 2.x has MLIR encoding bugs on bf16 ops; run kernel in fp32, cast back.
+    out_dtype = a.dtype
+    a = a.contiguous().to(torch.float32) if out_dtype != torch.float32 else a.contiguous()
+    b = b.contiguous().to(torch.float32) if out_dtype != torch.float32 else b.contiguous()
+    threshold_in = threshold.contiguous().to(torch.float32) if threshold.dtype != torch.float32 else threshold.contiguous()
     B, T, D = a.shape
     if h0 is None:
-        h0_t = torch.zeros(B, D, device=a.device, dtype=a.dtype)
+        h0_t = torch.zeros(B, D, device=a.device, dtype=torch.float32)
     else:
-        h0_t = h0.contiguous()
+        h0_t = h0.contiguous().to(torch.float32) if h0.dtype != torch.float32 else h0.contiguous()
 
     h_pre = torch.empty_like(a)
     s = torch.empty_like(a)
@@ -292,12 +294,12 @@ def _triton_block_forward(
     grid = ((D + BLOCK_D - 1) // BLOCK_D, B)
 
     fused_lnn_snn_block_kernel[grid](
-        a, b, threshold, h0_t,
+        a, b, threshold_in, h0_t,
         h_pre, s, m, h_post,
         elig_buffer, float(elig_decay),
         a.stride(0), a.stride(1), a.stride(2),
         b.stride(0), b.stride(1), b.stride(2),
-        threshold.stride(0),
+        threshold_in.stride(0),
         h0_t.stride(0), h0_t.stride(1),
         h_pre.stride(0), h_pre.stride(1), h_pre.stride(2),
         elig_buffer.stride(0), elig_buffer.stride(1),
@@ -306,6 +308,11 @@ def _triton_block_forward(
         ENABLE_STDP=bool(enable_stdp),
         num_warps=4,
     )
+    if out_dtype != torch.float32:
+        h_pre = h_pre.to(out_dtype)
+        s = s.to(out_dtype)
+        m = m.to(out_dtype)
+        h_post = h_post.to(out_dtype)
     return h_pre, s, m, h_post
 
 
@@ -332,32 +339,33 @@ def _triton_block_backward(
     """
     assert _HAS_TRITON
     assert a.is_cuda
-    a = a.contiguous()
-    h_pre = h_pre.contiguous()
-    s = s.contiguous()
-    m = m.contiguous()
-    h0 = h0.contiguous()
-    threshold = threshold.contiguous()
-    grad_h_post = grad_h_post.contiguous()
-    grad_s = grad_s.contiguous()
+    out_dtype = a.dtype
+    a_in = a.contiguous().to(torch.float32) if out_dtype != torch.float32 else a.contiguous()
+    h_pre_in = h_pre.contiguous().to(torch.float32) if h_pre.dtype != torch.float32 else h_pre.contiguous()
+    s_in = s.contiguous().to(torch.float32) if s.dtype != torch.float32 else s.contiguous()
+    m_in = m.contiguous().to(torch.float32) if m.dtype != torch.float32 else m.contiguous()
+    h0_in = h0.contiguous().to(torch.float32) if h0.dtype != torch.float32 else h0.contiguous()
+    threshold_in = threshold.contiguous().to(torch.float32) if threshold.dtype != torch.float32 else threshold.contiguous()
+    grad_h_post_in = grad_h_post.contiguous().to(torch.float32) if grad_h_post.dtype != torch.float32 else grad_h_post.contiguous()
+    grad_s_in = grad_s.contiguous().to(torch.float32) if grad_s.dtype != torch.float32 else grad_s.contiguous()
 
-    B, T, D = a.shape
+    B, T, D = a_in.shape
 
-    grad_a = torch.empty_like(a)
-    grad_b = torch.empty_like(a)
-    grad_thr_f32 = torch.zeros(D, device=a.device, dtype=torch.float32)
-    grad_h0 = torch.empty_like(h0) if had_h0 else torch.empty(1, 1, device=a.device, dtype=a.dtype)
+    grad_a = torch.empty_like(a_in)
+    grad_b = torch.empty_like(a_in)
+    grad_thr_f32 = torch.zeros(D, device=a_in.device, dtype=torch.float32)
+    grad_h0 = torch.empty_like(h0_in) if had_h0 else torch.empty(1, 1, device=a_in.device, dtype=torch.float32)
 
     BLOCK_D = 64 if D >= 64 else D
     grid = ((D + BLOCK_D - 1) // BLOCK_D, B)
 
     fused_lnn_snn_block_bwd_kernel[grid](
-        a, h_pre, s, m, h0, threshold,
-        grad_h_post, grad_s,
+        a_in, h_pre_in, s_in, m_in, h0_in, threshold_in,
+        grad_h_post_in, grad_s_in,
         grad_a, grad_b, grad_h0, grad_thr_f32,
-        a.stride(0), a.stride(1), a.stride(2),
-        h0.stride(0), h0.stride(1),
-        threshold.stride(0),
+        a_in.stride(0), a_in.stride(1), a_in.stride(2),
+        h0_in.stride(0), h0_in.stride(1),
+        threshold_in.stride(0),
         B, T, D,
         float(alpha),
         BLOCK_D=BLOCK_D,
@@ -365,6 +373,10 @@ def _triton_block_backward(
         num_warps=4,
     )
 
+    if out_dtype != torch.float32:
+        grad_a = grad_a.to(out_dtype)
+        grad_b = grad_b.to(out_dtype)
+        grad_h0 = grad_h0.to(out_dtype)
     grad_thr = grad_thr_f32.to(threshold.dtype)
     return grad_a, grad_b, grad_thr, (grad_h0 if had_h0 else None)
 
