@@ -95,20 +95,8 @@ ignore_missing_imports = true
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["examples/", "benchmarks/", "tests/", "*.bak*", "*_v05*"]
+extend-exclude = ["examples", "benchmarks", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]   # only critical errors
-ignore = [
-    "E402",  # imports not at top (we have lazy imports)
-    "E501",  # line too long
-    "E731",  # lambda assignment
-    "E741",  # ambiguous variable
-    "F401",  # unused imports (we re-export)
-    "F403",  # star imports
-    "F405",  # may be undefined from star
-    "F811",  # redefinition (legitimate in adapters)
-    "F821",  # undefined (try/except imports)
-    "F841",  # unused local
-    "W291", "W293",  # trailing whitespace
-]
+select = ["E", "F", "W"]
+ignore = ["E402", "E501", "E731", "E741", "F401", "F403", "F405", "F811", "F821", "F841", "W291", "W293"]
