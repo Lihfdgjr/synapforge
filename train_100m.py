@@ -36,6 +36,7 @@ if "/workspace" not in sys.path:
     sys.path.insert(0, "/workspace")
 
 import synapforge as sf  # noqa: E402
+from synapforge.surrogate import PLIFCell  # noqa: E402
 from synapforge.data import ParquetTokenStream  # noqa: E402
 from synapforge.huggingface_adapter import adv_warmstart  # noqa: E402
 from synapforge.model_100m import build_synapforge_100m  # noqa: E402
@@ -80,6 +81,12 @@ def _parse_args() -> argparse.Namespace:
                    help="trade compute for memory; use when B>=96 OOMs")
     p.add_argument("--lr-min", type=float, default=1e-5)
     p.add_argument("--skip-spike", action="store_true", default=True)
+    p.add_argument("--z-loss-weight", type=float, default=1e-4,
+                   help="weight for log-Z**2 stabilizer (PaLM/Gemma style)")
+    p.add_argument("--label-smoothing", type=float, default=0.0,
+                   help="cross-entropy label smoothing alpha")
+    p.add_argument("--spike-target", type=float, default=0.1,
+                   help="target mean spike rate for PLIF cells; warn if drift > 0.05")
     return p.parse_args()
 
 
@@ -88,9 +95,11 @@ def _safe_mkdir(p: str) -> None:
 
 
 @torch.no_grad()
-def evaluate(model, val_iter, n_batches: int = 16) -> float:
+def evaluate(model, val_iter, n_batches: int = 16,
+             plif_cells: Optional[list] = None) -> float:
     model.eval()
     losses = []
+    rate_accum: list = []
     for _ in range(n_batches):
         try:
             x, y = next(val_iter)
@@ -106,7 +115,24 @@ def evaluate(model, val_iter, n_batches: int = 16) -> float:
                 y.reshape(-1),
             )
         losses.append(float(loss.item()))
+        if plif_cells:
+            rate_accum.append([m.last_spike_rate.item() for m in plif_cells])
     model.train()
+    if plif_cells and rate_accum:
+        n = len(plif_cells)
+        avg_rates = [
+            sum(r[i] for r in rate_accum) / len(rate_accum)
+            for i in range(n)
+        ]
+        rate_min, rate_max = min(avg_rates), max(avg_rates)
+        rate_mean = sum(avg_rates) / n
+        n_dead = sum(1 for r in avg_rates if r < 0.005)
+        n_sat = sum(1 for r in avg_rates if r > 0.5)
+        _log(
+            f"  [val] spike: mean={rate_mean:.3f} "
+            f"range=[{rate_min:.3f}, {rate_max:.3f}] "
+            f"dead={n_dead}/{n} sat={n_sat}/{n}"
+        )
     if not losses:
         return float("nan")
     avg = sum(losses) / len(losses)
@@ -178,6 +204,8 @@ def main() -> int:
     )
     n_params = model.num_parameters()
     _log(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
+    plif_cells = [m for m in model.modules() if isinstance(m, PLIFCell)]
+    _log(f"plif cells found: {len(plif_cells)}")
 
     # ---------------- warm-start ----------------
     if warm_ckpt and os.path.exists(warm_ckpt):
@@ -294,10 +322,14 @@ def main() -> int:
         with torch.amp.autocast(device_type=DEVICE, dtype=DTYPE,
                                 enabled=DEVICE == "cuda"):
             logits = model(x)
-            loss = F.cross_entropy(
-                logits.reshape(-1, logits.size(-1)).float(),
-                y.reshape(-1),
-            )
+            flat_logits = logits.reshape(-1, logits.size(-1)).float()
+            flat_y = y.reshape(-1)
+            ce_loss = F.cross_entropy(flat_logits, flat_y,
+                                      label_smoothing=args.label_smoothing)
+            # z-loss: penalize large logsumexp (numerical stability + softmax temp control)
+            log_z = torch.logsumexp(flat_logits, dim=-1)
+            z_loss = (log_z ** 2).mean()
+            loss = ce_loss + args.z_loss_weight * z_loss
 
         optim.zero_grad(set_to_none=True)
         loss.backward()
@@ -323,8 +355,27 @@ def main() -> int:
                 f" mem_GB={torch.cuda.memory_allocated()/1e9:.2f}"
                 if DEVICE == "cuda" else ""
             )
-            _log(f"step {step:5d} loss={loss.item():.4f} lr={cur_lr:.5f} "
+            _log(f"step {step:5d} loss={loss.item():.4f} ce={ce_loss.item():.4f} "
+                 f"z={z_loss.item():.4f} lr={cur_lr:.5f} "
                  f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}")
+            if step % 50 == 0 and plif_cells:
+                rates = [m.last_spike_rate.item() for m in plif_cells]
+                rate_min, rate_max = min(rates), max(rates)
+                rate_mean = sum(rates) / len(rates)
+                n_dead = sum(1 for r in rates if r < 0.005)
+                n_sat = sum(1 for r in rates if r > 0.5)
+                _log(
+                    f"  spike: mean={rate_mean:.3f} "
+                    f"range=[{rate_min:.3f}, {rate_max:.3f}] "
+                    f"dead={n_dead}/{len(rates)} sat={n_sat}/{len(rates)}"
+                )
+                if step % 100 == 0 and abs(rate_mean - args.spike_target) > 0.05:
+                    direction = "high" if rate_mean > args.spike_target else "low"
+                    _log(
+                        f"  [WARN] spike rate {rate_mean:.3f} drifted {direction} "
+                        f"of target {args.spike_target:.3f} (|delta|>0.05); "
+                        f"consider threshold auto-adjust (not enabled)"
+                    )
 
         if step % SAVE_EVERY == 0:
             ckpt_path = os.path.join(out_dir, f"step_{step:06d}.pt")
@@ -340,7 +391,7 @@ def main() -> int:
 
         if step % EVAL_EVERY == 0 or step == n_steps:
             val_it = iter(val_ds)
-            ppl = evaluate(model, val_it, n_batches=16)
+            ppl = evaluate(model, val_it, n_batches=16, plif_cells=plif_cells)
             metrics["ppl_eval"][step] = ppl
             _log(f"VAL step {step}: ppl={ppl:.2f}")
             samples = []
