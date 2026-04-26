@@ -15,7 +15,7 @@ v1.0  Distributed training + plasticity-aware autograd
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 # sf.action — direct neural OS/UI control (NeuroMCP + ActionHead).
 # sf.modal -- first-class multimodal embedding (text + image + audio + video).
