@@ -30,7 +30,7 @@ from .action import (
 from .cells.liquid import LiquidCell
 from .cells.plif import PLIF
 from .cells.synapse import SparseSynapse
-from .data import ParquetTokenStream
+# 'ParquetTokenStream' available via synapforge.data (requires pyarrow)
 from .distributed import PlasticBufferSync, init_dist, wrap_model
 from .interop_torch import (
     SFAsTorchModule,

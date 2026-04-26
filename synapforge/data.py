@@ -28,7 +28,10 @@ from __future__ import annotations
 import glob
 from collections.abc import Iterator
 
-import pyarrow.parquet as pq
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    pq = None
 import torch
 
 _TOKENIZER = None
