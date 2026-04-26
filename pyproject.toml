@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synapforge"
+version = "0.5.0"
+description = "Train dense, deploy async — purpose-built ML framework for liquid + spiking + plastic networks"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Liu", email = "mohuanfang@gmail.com"}]
+maintainers = [{name = "Liu", email = "mohuanfang@gmail.com"}]
+requires-python = ">=3.10"
+keywords = [
+    "liquid neural networks",
+    "spiking neural networks",
+    "neuromorphic",
+    "plasticity",
+    "STDP",
+    "Hebbian",
+    "PyTorch",
+    "Triton",
+    "Loihi",
+    "BitNet",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.21",
+]
+
+[project.optional-dependencies]
+triton = ["triton>=2.1"]
+bitnet = []  # quantize.py is pure-python torch — listed for discoverability
+lava   = ["lava-nc>=0.10.0"]
+data   = ["pyarrow>=12.0"]
+hf     = ["transformers>=4.30", "datasets>=2.10"]
+dev    = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+    "build",
+    "twine",
+]
+docs   = ["mkdocs>=1.5", "mkdocs-material>=9.0"]
+
+[project.urls]
+Homepage      = "https://github.com/Lihfdgjr/synapforge"
+Documentation = "https://github.com/Lihfdgjr/synapforge/tree/main/docs"
+Repository    = "https://github.com/Lihfdgjr/synapforge"
+Issues        = "https://github.com/Lihfdgjr/synapforge/issues"
+Changelog     = "https://github.com/Lihfdgjr/synapforge/blob/main/CHANGELOG.md"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["synapforge*"]
+exclude = ["tests*", "examples*", "benchmarks*", "docs*"]
+
+[tool.setuptools.package-data]
+synapforge = ["py.typed"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["benchmarks", "examples/legacy_*"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_configs = true
+ignore_missing_imports = true
