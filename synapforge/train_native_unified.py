@@ -60,7 +60,7 @@ def _get_text_stream(B=8):
         from synapforge.data import ParquetTokenStream
         _text_stream_cache = iter(ParquetTokenStream(
             "/workspace/data/wt103_raw/train-*.parquet",
-            seq_len=SEQ_LEN, batch_size=B, tokenizer="gpt2", loop=True))
+            seq_len=SEQ_LEN, batch_size=B, loop=True))
     return _text_stream_cache
 
 def make_text_batch(B=8):
