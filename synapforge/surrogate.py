@@ -353,6 +353,14 @@ class PLIFCell(nn.Module):
         self.surrogate = surrogate
         self.alpha = float(alpha)
         self.reset = reset
+        # Spike-rate monitor: scalar latest mean spike rate over the last
+        # forward pass. Populated by forward / forward_seq. Caller reads it
+        # via .item(). Non-persistent so legacy ckpts load cleanly.
+        self.register_buffer(
+            "last_spike_rate",
+            torch.zeros(1),
+            persistent=False,
+        )
 
     # -- decays -----------------------------------------------------------
 
@@ -388,6 +396,11 @@ class PLIFCell(nn.Module):
             v_t = v_t - s_t * thr_c
         else:  # "zero"
             v_t = v_t * (1.0 - s_t)
+        # Record latest spike rate (mean over batch+channels) for monitoring.
+        with torch.no_grad():
+            self.last_spike_rate.copy_(
+                s_t.detach().float().mean().reshape(1)
+            )
         return s_t, v_t
 
     # -- vectorised over time --------------------------------------------
@@ -416,7 +429,14 @@ class PLIFCell(nn.Module):
         for t in range(T):
             s, v = self.forward(x_seq[:, t], v)
             spikes.append(s)
-        return torch.stack(spikes, dim=1), v
+        s_seq = torch.stack(spikes, dim=1)
+        # Overwrite per-step buffer with sequence-level mean so callers using
+        # forward_seq see the aggregated rate, not just T-1.
+        with torch.no_grad():
+            self.last_spike_rate.copy_(
+                s_seq.detach().float().mean().reshape(1)
+            )
+        return s_seq, v
 
     def extra_repr(self) -> str:
         sr = self.surrogate if isinstance(self.surrogate, str) else self.surrogate.__name__
