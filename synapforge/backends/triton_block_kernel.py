@@ -287,8 +287,16 @@ def _triton_block_forward(
 
     if enable_stdp and elig_buffer is None:
         elig_buffer = torch.zeros(D, D, device=a.device, dtype=torch.float32)
+    elif enable_stdp and elig_buffer.dtype != torch.float32:
+        # Triton atomic_add requires fp32; if model.to(bf16) downcast the
+        # registered buffer, work on a fp32 view and copy back at end.
+        _elig_orig = elig_buffer
+        elig_buffer = elig_buffer.to(torch.float32)
+    else:
+        _elig_orig = None
     if not enable_stdp:
         elig_buffer = torch.zeros(1, 1, device=a.device, dtype=torch.float32)
+        _elig_orig = None
 
     BLOCK_D = 64 if D >= 64 else D
     grid = ((D + BLOCK_D - 1) // BLOCK_D, B)
@@ -305,9 +313,12 @@ def _triton_block_forward(
         elig_buffer.stride(0), elig_buffer.stride(1),
         B, T, D,
         BLOCK_D=BLOCK_D,
-        ENABLE_STDP=bool(enable_stdp),
+        ENABLE_STDP=False,  # Triton 2.1 atomic_add MLIR bug; STDP done in PyTorch wrapper
         num_warps=4,
     )
+    # Copy fp32 elig accumulator back into the registered (possibly bf16) buffer.
+    if _elig_orig is not None:
+        _elig_orig.copy_(elig_buffer.to(_elig_orig.dtype))
     if out_dtype != torch.float32:
         h_pre = h_pre.to(out_dtype)
         s = s.to(out_dtype)
@@ -462,7 +473,7 @@ class TritonHybridBlockFn(torch.autograd.Function):
                 a, b, threshold, h0, elig_buffer, elig_decay, enable_stdp,
             )
 
-        # Cross-tile STDP correction (cheap PyTorch post-pass)
+        # Full STDP in PyTorch (kernel ENABLE_STDP forced off due to Triton 2.1 bug)
         if enable_stdp and use_triton and elig_buffer is not None:
             s_post = s.float()
             s_pre = torch.cat(
@@ -471,11 +482,7 @@ class TritonHybridBlockFn(torch.autograd.Function):
             full_elig = (
                 s_post.reshape(-1, s.shape[2]).t() @ s_pre.reshape(-1, s.shape[2])
             ) * float(elig_decay)
-            D = s.shape[2]
-            BLOCK_D = 64 if D >= 64 else D
-            tile_idx = torch.arange(D, device=s.device) // BLOCK_D
-            cross_mask = (tile_idx[:, None] != tile_idx[None, :]).float()
-            elig_buffer.add_(full_elig * cross_mask)
+            elig_buffer.add_(full_elig.to(elig_buffer.dtype))
 
         ctx.save_for_backward(
             a, b, threshold, h_pre, s, m,
