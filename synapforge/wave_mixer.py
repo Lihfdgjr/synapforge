@@ -44,7 +44,6 @@ import torch.nn as nn
 
 from .module import Module
 
-
 # ---------------------------------------------------------------------------
 # 1. WaveFormer1D — wave-PDE closed-form Fourier filter
 # ---------------------------------------------------------------------------

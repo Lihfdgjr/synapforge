@@ -36,7 +36,7 @@ References
 from __future__ import annotations
 
 import math
-from typing import Callable, Type, Union
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -210,7 +210,7 @@ class SLAYERSurrogate(_SurrogateBase):
 # Pluggable registry
 # ---------------------------------------------------------------------------
 
-_REGISTRY: dict[str, Type[_SurrogateBase]] = {
+_REGISTRY: dict[str, type[_SurrogateBase]] = {
     "atan": ATanSurrogate,
     "sigmoid": SigmoidSurrogate,
     "triangle": TriangularSurrogate,
@@ -219,7 +219,7 @@ _REGISTRY: dict[str, Type[_SurrogateBase]] = {
 }
 
 
-def register(name: str) -> Callable[[Type[_SurrogateBase]], Type[_SurrogateBase]]:
+def register(name: str) -> Callable[[type[_SurrogateBase]], type[_SurrogateBase]]:
     """Decorator: add a custom surrogate to the registry.
 
     >>> @register("my_ste")
@@ -229,7 +229,7 @@ def register(name: str) -> Callable[[Type[_SurrogateBase]], Type[_SurrogateBase]
     ...         x, = ctx.saved_tensors
     ...         return grad_output * ((x.abs() < ctx.alpha).to(x.dtype)), None
     """
-    def deco(cls: Type[_SurrogateBase]) -> Type[_SurrogateBase]:
+    def deco(cls: type[_SurrogateBase]) -> type[_SurrogateBase]:
         if not issubclass(cls, torch.autograd.Function):
             raise TypeError(f"{cls!r} must subclass torch.autograd.Function")
         _REGISTRY[name] = cls
@@ -248,9 +248,9 @@ def list_surrogates() -> list[str]:
 
 def spike(
     v: torch.Tensor,
-    threshold: Union[torch.Tensor, float],
+    threshold: torch.Tensor | float,
     *,
-    surrogate: Union[str, Type[torch.autograd.Function]] = "atan",
+    surrogate: str | type[torch.autograd.Function] = "atan",
     alpha: float = 2.0,
 ) -> torch.Tensor:
     """Public spike op: ``v >= threshold`` with backward via surrogate.
@@ -313,7 +313,7 @@ class PLIFCell(nn.Module):
         hidden: int,
         tau_init: float = 10.0,
         threshold_init: float = 1.0,
-        surrogate: Union[str, Type[torch.autograd.Function]] = "atan",
+        surrogate: str | type[torch.autograd.Function] = "atan",
         alpha: float = 2.0,
         reset: str = "subtract",
     ) -> None:

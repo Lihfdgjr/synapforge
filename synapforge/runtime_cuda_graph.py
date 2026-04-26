@@ -40,14 +40,12 @@ Differences from upstream
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Sequence, Tuple
+from typing import Any
 
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 
 # ---------------------------------------------------------------------------
 # Capability probes
@@ -78,7 +76,7 @@ def _device_supports_graphs(device: torch.device) -> bool:
 @dataclass
 class TensorSpec:
     """Specification for one captured tensor input."""
-    shape: Tuple[int, ...]
+    shape: tuple[int, ...]
     dtype: torch.dtype = torch.float32
 
     def alloc(self, device: torch.device) -> torch.Tensor:
@@ -88,7 +86,7 @@ class TensorSpec:
 @dataclass
 class GraphCfg:
     input_specs: Sequence[TensorSpec]            # one per positional input
-    target_spec: Optional[TensorSpec] = None     # None = forward-only capture
+    target_spec: TensorSpec | None = None     # None = forward-only capture
     device: torch.device = field(default_factory=lambda: torch.device("cuda"))
     dtype: torch.dtype = torch.bfloat16          # autocast dtype
     grad_clip: float = 1.0
@@ -115,10 +113,10 @@ class GraphedTrainStep:
     def __init__(
         self,
         runtime: Any,                   # synapforge.runtime.Runtime
-        optimizer: Optional[torch.optim.Optimizer],
+        optimizer: torch.optim.Optimizer | None,
         cfg: GraphCfg,
-        loss_fn: Optional[Callable[..., torch.Tensor]] = None,
-        scaler: Optional[torch.cuda.amp.GradScaler] = None,
+        loss_fn: Callable[..., torch.Tensor] | None = None,
+        scaler: torch.cuda.amp.GradScaler | None = None,
     ) -> None:
         self.runtime = runtime
         self.opt = optimizer
@@ -128,7 +126,7 @@ class GraphedTrainStep:
         self._train_mode = (optimizer is not None) and (loss_fn is not None)
 
         self._capture_ok = False
-        self._graph: Optional[torch.cuda.CUDAGraph] = None
+        self._graph: torch.cuda.CUDAGraph | None = None
         self._reason_skip = ""
 
         if not cfg.use_cuda_graph:
@@ -145,13 +143,13 @@ class GraphedTrainStep:
         self.static_inputs: list[torch.Tensor] = [
             spec.alloc(cfg.device) for spec in cfg.input_specs
         ]
-        self.static_target: Optional[torch.Tensor] = (
+        self.static_target: torch.Tensor | None = (
             cfg.target_spec.alloc(cfg.device) if cfg.target_spec is not None else None
         )
         # Forward output (refreshed each replay -- captured tensor view).
-        self.static_output: Optional[torch.Tensor] = None
+        self.static_output: torch.Tensor | None = None
         # Static loss (for train mode).
-        self.static_loss: Optional[torch.Tensor] = (
+        self.static_loss: torch.Tensor | None = (
             torch.zeros((), device=cfg.device, dtype=torch.float32)
             if self._train_mode else None
         )
@@ -171,7 +169,7 @@ class GraphedTrainStep:
     # Public API
     # ------------------------------------------------------------------
 
-    def step(self, *inputs: torch.Tensor, target: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def step(self, *inputs: torch.Tensor, target: torch.Tensor | None = None) -> torch.Tensor:
         """Replay-based training step. Falls through to eager on failure."""
         if not self._capture_ok:
             return self.eager_step(*inputs, target=target)
@@ -200,7 +198,7 @@ class GraphedTrainStep:
             return self.static_loss  # type: ignore[return-value]
         return self.static_output    # type: ignore[return-value]
 
-    def eager_step(self, *inputs: torch.Tensor, target: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def eager_step(self, *inputs: torch.Tensor, target: torch.Tensor | None = None) -> torch.Tensor:
         cfg = self.cfg
         amp_ctx = (
             torch.cuda.amp.autocast(dtype=cfg.dtype) if cfg.use_amp else nullcontext()
@@ -258,7 +256,7 @@ class GraphedTrainStep:
     def skip_reason(self) -> str:
         return self._reason_skip
 
-    def rebuild(self, new_input_specs: Optional[Sequence[TensorSpec]] = None) -> None:
+    def rebuild(self, new_input_specs: Sequence[TensorSpec] | None = None) -> None:
         """Re-warmup + re-capture. Pass `new_input_specs` for shape change."""
         self._capture_ok = False
         self._graph = None
@@ -350,13 +348,13 @@ class GraphedTrainStep:
 
 def make_graphed_step(
     runtime: Any,
-    optimizer: Optional[torch.optim.Optimizer],
+    optimizer: torch.optim.Optimizer | None,
     input_specs: Sequence[TensorSpec],
-    target_spec: Optional[TensorSpec] = None,
-    device: Optional[torch.device] = None,
+    target_spec: TensorSpec | None = None,
+    device: torch.device | None = None,
     dtype: torch.dtype = torch.bfloat16,
-    loss_fn: Optional[Callable[..., torch.Tensor]] = None,
-    scaler: Optional[torch.cuda.amp.GradScaler] = None,
+    loss_fn: Callable[..., torch.Tensor] | None = None,
+    scaler: torch.cuda.amp.GradScaler | None = None,
     grad_clip: float = 1.0,
     use_cuda_graph: bool = True,
     n_warmup_iters: int = 11,

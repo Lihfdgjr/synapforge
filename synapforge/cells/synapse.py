@@ -29,8 +29,6 @@ API
 
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 import torch.nn as nn
 
@@ -58,15 +56,13 @@ class _MaskedLinear(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_out):  # type: ignore[override]
         x, w_eff, mask_typed = ctx.saved_tensors
-        # grad_x = grad_out @ w_eff
-        # grad_w = grad_out.T @ x   then * mask_typed (chain rule)
-        # grad_bias = grad_out.sum over leading dims
-        grad_x = grad_out.matmul(w_eff)
-        # Reshape to (B*T, dout) x (B*T, din) -> (dout, din)
+        # All computations in grad_out's dtype to avoid bf16/fp32 mismatch
+        dt = grad_out.dtype
+        grad_x = grad_out.matmul(w_eff.to(dt))
         gx = grad_out.reshape(-1, grad_out.shape[-1])
-        xx = x.reshape(-1, x.shape[-1])
+        xx = x.reshape(-1, x.shape[-1]).to(dt)
         grad_w = gx.t().matmul(xx)
-        grad_w = grad_w * mask_typed
+        grad_w = grad_w * mask_typed.to(dt)
         grad_b = None
         if ctx.has_bias:
             grad_b = grad_out.reshape(-1, grad_out.shape[-1]).sum(dim=0)
@@ -93,7 +89,7 @@ class SparseSynapse(Module):
         out_dim: int,
         sparsity: float = 0.10,
         bias: bool = True,
-        growth: Optional[object] = None,
+        growth: object | None = None,
     ) -> None:
         super().__init__()
         self.in_dim = int(in_dim)

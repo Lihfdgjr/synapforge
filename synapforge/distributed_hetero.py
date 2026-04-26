@@ -90,8 +90,9 @@ from __future__ import annotations
 
 import time
 import warnings
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 import torch
 
@@ -146,7 +147,7 @@ class WorkerSpec:
     host: str
     device: str
     role: str = "compute"
-    weight: Optional[float] = None
+    weight: float | None = None
     num_cpus: int = 4
 
     def __post_init__(self) -> None:
@@ -240,28 +241,28 @@ class _GPUWorkerImpl:
                 actual = f"cuda:{idx}"
         self.device = torch.device(actual)
         self.model = model_factory().to(self.device)
-        self._param_names: List[str] = [n for n, _ in self.model.named_parameters()]
-        self._buf_names: List[str] = [
+        self._param_names: list[str] = [n for n, _ in self.model.named_parameters()]
+        self._buf_names: list[str] = [
             n
             for n, b in self.model.named_buffers()
             if is_plastic_buffer(n) and b.is_floating_point() and b.numel() > 0
         ]
 
     # ----- weight transport
-    def get_weights(self) -> Dict[str, torch.Tensor]:
+    def get_weights(self) -> dict[str, torch.Tensor]:
         return {n: p.detach().cpu().clone() for n, p in self.model.named_parameters()}
 
-    def set_weights(self, weights: Dict[str, torch.Tensor]) -> None:
+    def set_weights(self, weights: dict[str, torch.Tensor]) -> None:
         with torch.no_grad():
             for n, p in self.model.named_parameters():
                 if n in weights:
                     p.copy_(weights[n].to(p.device))
 
-    def get_plastic_buffers(self) -> Dict[str, torch.Tensor]:
+    def get_plastic_buffers(self) -> dict[str, torch.Tensor]:
         named = dict(self.model.named_buffers())
         return {n: named[n].detach().cpu().clone() for n in self._buf_names if n in named}
 
-    def set_plastic_buffers(self, bufs: Dict[str, torch.Tensor]) -> None:
+    def set_plastic_buffers(self, bufs: dict[str, torch.Tensor]) -> None:
         named = dict(self.model.named_buffers())
         with torch.no_grad():
             for n, b in bufs.items():
@@ -274,7 +275,7 @@ class _GPUWorkerImpl:
         x: torch.Tensor,
         y: torch.Tensor,
         loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    ) -> Tuple[Dict[str, torch.Tensor], float, float]:
+    ) -> tuple[dict[str, torch.Tensor], float, float]:
         """Run one micro-step. Returns (grads, loss, elapsed_ms)."""
         self.model.zero_grad(set_to_none=False)
         x_d = x.to(self.device, non_blocking=True)
@@ -286,7 +287,7 @@ class _GPUWorkerImpl:
         if self.device.type == "cuda":
             torch.cuda.synchronize(self.device)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        grads: Dict[str, torch.Tensor] = {}
+        grads: dict[str, torch.Tensor] = {}
         for n, p in self.model.named_parameters():
             grads[n] = (
                 p.grad.detach().cpu().clone()
@@ -306,13 +307,13 @@ class _CPUWorkerImpl:
     def __init__(self, worker_id: int) -> None:
         self.worker_id = worker_id
 
-    def tokenize_batch(self, raw_text: List[str], vocab_size: int = 1000) -> torch.Tensor:
+    def tokenize_batch(self, raw_text: list[str], vocab_size: int = 1000) -> torch.Tensor:
         """Trivial deterministic tokeniser - real users plug in HF or sentencepiece.
 
         We hash characters into the vocab so the smoke test is
         reproducible without any tokenizer dependency.
         """
-        rows: List[List[int]] = []
+        rows: list[list[int]] = []
         max_len = 0
         for s in raw_text:
             ids = [(ord(c) % vocab_size) for c in s][:1024]
@@ -331,13 +332,13 @@ class _CPUWorkerImpl:
         return batch
 
     def average_plastic(
-        self, bufs_list: List[Dict[str, torch.Tensor]]
-    ) -> Dict[str, torch.Tensor]:
+        self, bufs_list: list[dict[str, torch.Tensor]]
+    ) -> dict[str, torch.Tensor]:
         """Average a list of {name: tensor} dicts elementwise."""
         if not bufs_list:
             return {}
         keys = list(bufs_list[0].keys())
-        out: Dict[str, torch.Tensor] = {}
+        out: dict[str, torch.Tensor] = {}
         for k in keys:
             stacked = torch.stack([d[k] for d in bufs_list if k in d], dim=0)
             out[k] = stacked.mean(dim=0)
@@ -380,8 +381,8 @@ class HeteroTrainer:
     def __init__(
         self,
         model_factory: Callable[[], torch.nn.Module],
-        workers: List[WorkerSpec],
-        cfg: Optional[HeteroTrainerConfig] = None,
+        workers: list[WorkerSpec],
+        cfg: HeteroTrainerConfig | None = None,
         coord_device: str = "cpu",
     ) -> None:
         if not workers:
@@ -392,18 +393,18 @@ class HeteroTrainer:
         self.model_factory = model_factory
         self.specs = list(workers)
         self.coord_device = coord_device
-        self.coord_model: Optional[torch.nn.Module] = None
-        self.optimizer: Optional[torch.optim.Optimizer] = None
-        self.gpu_workers: List[Any] = []   # Ray handles or in-proc
-        self.gpu_specs: List[WorkerSpec] = []
-        self.cpu_workers: List[Any] = []
-        self.cpu_specs: List[WorkerSpec] = []
-        self.compute_specs: List[WorkerSpec] = []  # mode C only
-        self.compute_workers: List[Any] = []
+        self.coord_model: torch.nn.Module | None = None
+        self.optimizer: torch.optim.Optimizer | None = None
+        self.gpu_workers: list[Any] = []   # Ray handles or in-proc
+        self.gpu_specs: list[WorkerSpec] = []
+        self.cpu_workers: list[Any] = []
+        self.cpu_specs: list[WorkerSpec] = []
+        self.compute_specs: list[WorkerSpec] = []  # mode C only
+        self.compute_workers: list[Any] = []
         self._step_count = 0
         self._using_ray = bool(self.cfg.use_ray and _HAS_RAY)
-        self._weights: Dict[str, torch.Tensor] = {}
-        self._step_times_ms: List[List[float]] = []  # warm-up tracker (mode C)
+        self._weights: dict[str, torch.Tensor] = {}
+        self._step_times_ms: list[list[float]] = []  # warm-up tracker (mode C)
         if self.cfg.use_ray and not _HAS_RAY:
             warnings.warn(
                 "Ray not installed - HeteroTrainer falling back to single-process. "
@@ -480,7 +481,7 @@ class HeteroTrainer:
             return _CPUWorkerImpl(wid)
 
         # Ray path - actor options for placement.
-        opts: Dict[str, Any] = {"num_cpus": spec.num_cpus}
+        opts: dict[str, Any] = {"num_cpus": spec.num_cpus}
         if spec.is_gpu:
             opts["num_gpus"] = 1
         if spec.host != "localhost":
@@ -505,7 +506,7 @@ class HeteroTrainer:
         # in-proc fallback: just run synchronously and pretend it's a future
         return getattr(worker, method)(*args, **kw)
 
-    def _gather(self, futures: List[Any]) -> List[Any]:
+    def _gather(self, futures: list[Any]) -> list[Any]:
         if self._using_ray:
             return ray.get(futures)  # type: ignore[union-attr]
         return list(futures)
@@ -517,13 +518,13 @@ class HeteroTrainer:
         ]
         self._gather(futures)
 
-    def _broadcast_buffers(self, bufs: Dict[str, torch.Tensor]) -> None:
+    def _broadcast_buffers(self, bufs: dict[str, torch.Tensor]) -> None:
         futures = [
             self._call_async(w, "set_plastic_buffers", bufs) for w in self.compute_workers
         ]
         self._gather(futures)
 
-    def _gather_plastic_avg(self) -> Optional[Dict[str, torch.Tensor]]:
+    def _gather_plastic_avg(self) -> dict[str, torch.Tensor] | None:
         if not self.compute_workers:
             return None
         bufs_futures = [self._call_async(w, "get_plastic_buffers") for w in self.compute_workers]
@@ -544,10 +545,10 @@ class HeteroTrainer:
     # ----- mode A: split-by-task -----
     def _step_split(
         self,
-        raw_batch: List[str],
+        raw_batch: list[str],
         loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
         target_fn: Callable[[torch.Tensor], torch.Tensor],
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         # 1. Fan out tokenisation across CPU workers (round-robin).
         cpu_pool = self.cpu_workers[: max(1, self.cfg.cpu_data_pool_size)]
         if not cpu_pool:
@@ -620,7 +621,7 @@ class HeteroTrainer:
         x: torch.Tensor,
         y: torch.Tensor,
         loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         # Compute weights for the slice split.
         weights = self._auto_weights()
         slices_x = _weighted_split(x, weights)
@@ -674,7 +675,7 @@ class HeteroTrainer:
             "slice_sizes": token_counts,
         }
 
-    def _auto_weights(self) -> List[float]:
+    def _auto_weights(self) -> list[float]:
         """Decide how to split the next batch across compute workers.
 
         Until ``warmup_steps`` per worker have been observed, give each
@@ -706,7 +707,7 @@ class HeteroTrainer:
         return [w / tot for w in ws]
 
     # ----- gradient averaging on coord_model -----
-    def _apply_avg_grads(self, grads_list: List[Dict[str, torch.Tensor]]) -> None:
+    def _apply_avg_grads(self, grads_list: list[dict[str, torch.Tensor]]) -> None:
         assert self.coord_model is not None and self.optimizer is not None
         avg = {}
         keys = grads_list[0].keys()
@@ -719,11 +720,11 @@ class HeteroTrainer:
         self.optimizer.step()
 
     def _apply_weighted_avg_grads(
-        self, grads_list: List[Dict[str, torch.Tensor]], weights: List[float]
+        self, grads_list: list[dict[str, torch.Tensor]], weights: list[float]
     ) -> None:
         assert self.coord_model is not None and self.optimizer is not None
         keys = grads_list[0].keys()
-        avg: Dict[str, torch.Tensor] = {}
+        avg: dict[str, torch.Tensor] = {}
         for k in keys:
             stacked = torch.stack([g[k] for g in grads_list], dim=0)
             w = torch.tensor(weights, dtype=stacked.dtype).view(-1, *([1] * (stacked.dim() - 1)))
@@ -738,8 +739,8 @@ class HeteroTrainer:
         self,
         batch: Any,
         loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-        target_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
-    ) -> Dict[str, float]:
+        target_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    ) -> dict[str, float]:
         """Run one training step in the configured mode.
 
         ``batch`` semantics depend on the mode:
@@ -775,23 +776,23 @@ def _shift_lm_targets(tokens: torch.Tensor) -> torch.Tensor:
     return y
 
 
-def _split_list(xs: List[Any], n: int) -> List[List[Any]]:
+def _split_list(xs: list[Any], n: int) -> list[list[Any]]:
     if n <= 0:
         return [xs]
-    out: List[List[Any]] = [[] for _ in range(n)]
+    out: list[list[Any]] = [[] for _ in range(n)]
     for i, x in enumerate(xs):
         out[i % n].append(x)
     return out
 
 
-def _even_split(t: torch.Tensor, n: int) -> List[torch.Tensor]:
+def _even_split(t: torch.Tensor, n: int) -> list[torch.Tensor]:
     if n <= 0:
         return [t]
     if n == 1:
         return [t]
     base = t.size(0) // n
     rem = t.size(0) - base * n
-    chunks: List[torch.Tensor] = []
+    chunks: list[torch.Tensor] = []
     start = 0
     for i in range(n):
         size = base + (1 if i < rem else 0)
@@ -800,7 +801,7 @@ def _even_split(t: torch.Tensor, n: int) -> List[torch.Tensor]:
     return chunks
 
 
-def _weighted_split(t: torch.Tensor, weights: List[float]) -> List[torch.Tensor]:
+def _weighted_split(t: torch.Tensor, weights: list[float]) -> list[torch.Tensor]:
     if t.size(0) == 0:
         return [t.clone() for _ in weights]
     sizes = [max(0, int(round(t.size(0) * w))) for w in weights]
@@ -809,7 +810,7 @@ def _weighted_split(t: torch.Tensor, weights: List[float]) -> List[torch.Tensor]
     if diff:
         idx = max(range(len(weights)), key=lambda i: weights[i])
         sizes[idx] += diff
-    chunks: List[torch.Tensor] = []
+    chunks: list[torch.Tensor] = []
     start = 0
     for s in sizes:
         chunks.append(t[start : start + s])
@@ -822,7 +823,7 @@ def _weighted_split(t: torch.Tensor, weights: List[float]) -> List[torch.Tensor]
     return chunks
 
 
-def _pad_cat(parts: List[torch.Tensor]) -> torch.Tensor:
+def _pad_cat(parts: list[torch.Tensor]) -> torch.Tensor:
     if not parts:
         raise ValueError("pad_cat empty input")
     max_len = max(p.size(-1) for p in parts)

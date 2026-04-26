@@ -18,14 +18,13 @@ Default geometry
 from __future__ import annotations
 
 import math
-from typing import Literal, Optional
+from typing import Literal
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from ..module import Module
-from .image import sinusoidal_2d  # reused for 1D pos enc (rows=1, cols=T)
 
 try:
     import torchaudio  # type: ignore

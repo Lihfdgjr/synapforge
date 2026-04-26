@@ -38,7 +38,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # ---------------------------------------------------------------------------
 # Triton availability probe (lazy: file importable on Windows / no-GPU CI).
 # ---------------------------------------------------------------------------

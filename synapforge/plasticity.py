@@ -33,7 +33,7 @@ Legacy aliases (kept so synapforge/__init__.py keeps importing):
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 import torch
 import torch.nn as nn
@@ -78,7 +78,7 @@ class PlasticityRule(nn.Module):
     def observe(self, *, pre: torch.Tensor, post: torch.Tensor, t: float) -> None:
         raise NotImplementedError
 
-    def compute_delta_W(self) -> Optional[torch.Tensor]:
+    def compute_delta_W(self) -> torch.Tensor | None:
         raise NotImplementedError
 
     def reset(self) -> None:
@@ -116,8 +116,8 @@ class Hebbian(PlasticityRule):
         super().__init__()
         self.lr_param = nn.Parameter(torch.tensor(float(lr)))
         self.max_pending = int(max_pending)
-        self._pending_pre: List[torch.Tensor] = []
-        self._pending_post: List[torch.Tensor] = []
+        self._pending_pre: list[torch.Tensor] = []
+        self._pending_post: list[torch.Tensor] = []
 
     def observe(self, *, pre: torch.Tensor, post: torch.Tensor, t: float = 0.0) -> None:
         p = pre.detach().reshape(-1, pre.shape[-1])
@@ -131,7 +131,7 @@ class Hebbian(PlasticityRule):
             self._pending_post.pop(0)
         self._ready = True
 
-    def compute_delta_W(self) -> Optional[torch.Tensor]:
+    def compute_delta_W(self) -> torch.Tensor | None:
         if not self._pending_pre:
             return None
         pre_cat = torch.cat(self._pending_pre, dim=0)
@@ -181,7 +181,7 @@ class STDP(PlasticityRule):
         a_plus: float = 1.0,
         a_minus: float = 1.0,
         decay_after_compute: float = 0.5,
-        dim: Optional[int] = None,
+        dim: int | None = None,
     ) -> None:
         """Eligibility-trace STDP. New code uses dim=None (lazy). Pass dim=D
         for legacy `stdp(pre, post)` callable form (allocates W_fast buffer
@@ -196,10 +196,10 @@ class STDP(PlasticityRule):
         self.a_minus = float(a_minus)
         self.decay_after_compute = float(decay_after_compute)
 
-        self._trace_pre: Optional[torch.Tensor] = None
-        self._trace_post: Optional[torch.Tensor] = None
-        self._last_pre: Optional[torch.Tensor] = None
-        self._last_post: Optional[torch.Tensor] = None
+        self._trace_pre: torch.Tensor | None = None
+        self._trace_post: torch.Tensor | None = None
+        self._last_pre: torch.Tensor | None = None
+        self._last_post: torch.Tensor | None = None
         self._steps_since_compute = 0
 
         # Legacy compat: when dim is given, pre-allocate W_fast for the
@@ -248,7 +248,7 @@ class STDP(PlasticityRule):
         self._steps_since_compute += 1
         self._ready = True
 
-    def compute_delta_W(self) -> Optional[torch.Tensor]:
+    def compute_delta_W(self) -> torch.Tensor | None:
         """Return STDP weight update tensor; shape (post_dim, pre_dim)."""
         if not self._ready or self._trace_pre is None or self._last_pre is None:
             return None
@@ -310,8 +310,8 @@ class BCM(PlasticityRule):
         self.lr_param = nn.Parameter(torch.tensor(float(lr)))
         self.theta_rate = float(theta_rate)
         self.max_pending = int(max_pending)
-        self._pending_pre: List[torch.Tensor] = []
-        self._pending_post: List[torch.Tensor] = []
+        self._pending_pre: list[torch.Tensor] = []
+        self._pending_post: list[torch.Tensor] = []
 
     def observe(self, *, pre: torch.Tensor, post: torch.Tensor, t: float = 0.0) -> None:
         p = pre.detach().reshape(-1, pre.shape[-1])
@@ -325,7 +325,7 @@ class BCM(PlasticityRule):
             self._pending_post.pop(0)
         self._ready = True
 
-    def compute_delta_W(self) -> Optional[torch.Tensor]:
+    def compute_delta_W(self) -> torch.Tensor | None:
         if not self._pending_pre:
             return None
         pre_cat = torch.cat(self._pending_pre, dim=0)
@@ -381,7 +381,7 @@ class SynaptogenesisGrowPrune(PlasticityRule):
         self.prune_check_every = int(prune_check_every)
         self.ema_decay = float(ema_decay)
         self.max_change_per_step = int(max_change_per_step)
-        self._coact: Optional[torch.Tensor] = None
+        self._coact: torch.Tensor | None = None
         self._step = 0
 
     def observe(self, *, pre: torch.Tensor, post: torch.Tensor, t: float = 0.0) -> None:
@@ -395,7 +395,7 @@ class SynaptogenesisGrowPrune(PlasticityRule):
         self._step += 1
         self._ready = True
 
-    def compute_delta_W(self) -> Optional[torch.Tensor]:
+    def compute_delta_W(self) -> torch.Tensor | None:
         # SynaptogenesisGrowPrune produces a MASK delta, not a W delta.
         return None
 
@@ -403,7 +403,7 @@ class SynaptogenesisGrowPrune(PlasticityRule):
         self,
         current_mask: torch.Tensor,
         current_W: torch.Tensor,
-    ) -> Optional[torch.Tensor]:
+    ) -> torch.Tensor | None:
         """Return signed int8 mask delta (+1 grow, -1 prune, 0 unchanged)."""
         if self._coact is None:
             return None
@@ -446,7 +446,7 @@ class SynaptogenesisGrowPrune(PlasticityRule):
 # ============================================================================
 
 
-def _parse_schedule(schedule: str) -> Tuple[str, int]:
+def _parse_schedule(schedule: str) -> tuple[str, int]:
     """Parse `'every:K'` or `'after_bp'` schedule string."""
     if schedule == "after_bp":
         return ("after_bp", 1)
@@ -489,7 +489,7 @@ class PlasticityEngine:
 
     def __init__(
         self,
-        rules: Dict[str, PlasticityRule],
+        rules: dict[str, PlasticityRule],
         schedule: str = "every:1",
     ) -> None:
         self.rules = dict(rules)
@@ -505,8 +505,8 @@ class PlasticityEngine:
     def step(
         self,
         t: int,
-        weight_dict: Dict[str, torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
+        weight_dict: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
         """Compute all rule deltas. Returns {name: delta_tensor}.
 
         Rules whose schedule says to wait are skipped. SynaptogenesisGrowPrune
@@ -515,7 +515,7 @@ class PlasticityEngine:
         self._step += 1
         if self.schedule_kind == "every" and (self._step % self.schedule_k) != 0:
             return {}
-        deltas: Dict[str, torch.Tensor] = {}
+        deltas: dict[str, torch.Tensor] = {}
         for name, rule in self.rules.items():
             try:
                 if isinstance(rule, SynaptogenesisGrowPrune):
@@ -542,8 +542,8 @@ class PlasticityEngine:
     @torch.no_grad()
     def apply(
         self,
-        deltas: Dict[str, torch.Tensor],
-        weight_dict: Dict[str, torch.Tensor],
+        deltas: dict[str, torch.Tensor],
+        weight_dict: dict[str, torch.Tensor],
     ) -> None:
         """Atomically add each delta to its target weight (in-place)."""
         for name, d in deltas.items():

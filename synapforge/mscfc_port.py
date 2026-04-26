@@ -32,7 +32,6 @@ from __future__ import annotations
 import math
 import os
 import sys
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -44,9 +43,8 @@ if "/workspace" not in sys.path:
 import synapforge as sf
 from synapforge.cells.liquid import LiquidCell
 from synapforge.cells.synapse import SparseSynapse
-from synapforge.surrogate import PLIFCell
 from synapforge.plasticity import STDP, Hebbian, PlasticityEngine
-
+from synapforge.surrogate import PLIFCell
 
 # ---------------------------------------------------------------------------
 # Hybrid block (one layer)
@@ -64,8 +62,8 @@ class HybridBlock(sf.Module):
         hidden: int,
         mlp_dim: int,
         synapse_sparsity: float = 0.30,
-        stdp_rule: Optional[STDP] = None,
-        hebb_rule: Optional[Hebbian] = None,
+        stdp_rule: STDP | None = None,
+        hebb_rule: Hebbian | None = None,
     ) -> None:
         super().__init__()
         self.hidden = int(hidden)

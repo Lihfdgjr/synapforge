@@ -25,14 +25,14 @@ import random
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .module import Module
-
 
 # ---------------------------------------------------------------------------
 # 1. FreeEnergySurprise (ICM-style forward model)

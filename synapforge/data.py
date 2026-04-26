@@ -26,11 +26,10 @@ Public API:
 from __future__ import annotations
 
 import glob
-from typing import Iterator
+from collections.abc import Iterator
 
 import pyarrow.parquet as pq
 import torch
-
 
 _TOKENIZER = None
 

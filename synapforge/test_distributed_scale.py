@@ -1,10 +1,17 @@
 """Scale-up throughput test: bigger D so DDP's 2-GPU win shows up."""
 from __future__ import annotations
-import sys, time, torch, torch.nn.functional as F, torch.distributed as dist
+
+import sys
+import time
+
+import torch
+import torch.nn.functional as F
+
 sys.path.insert(0, "/workspace")
-import synapforge as sf
-from synapforge import distributed as sfd
 from test_distributed_smoke import TinyHybrid
+
+from synapforge import distributed as sfd
+
 
 def main():
     rank, world, lr_ = sfd.init_dist()

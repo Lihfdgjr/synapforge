@@ -33,12 +33,12 @@ import torch.nn.functional as F
 
 import synapforge as sf
 from synapforge.routers import (
-    MoRStack,
     ChainOfExperts,
     DeepSeekMoE,
+    MoRStack,
+    RDTLoop,
     attach_coe_to_block,
     attach_moe_to_block,
-    RDTLoop,
 )
 
 
@@ -180,7 +180,7 @@ def test_coe(device, n_steps, hidden=64):
 
     hist = wrapped.coe.step_routing_histogram().cpu().numpy()
     print(f"[CoE] losses {losses[0]:.3f} -> {losses[-1]:.3f}", flush=True)
-    print(f"[CoE] per-step expert distribution (rows=step, cols=expert):", flush=True)
+    print("[CoE] per-step expert distribution (rows=step, cols=expert):", flush=True)
     for t, row in enumerate(hist.tolist()):
         print(f"       step {t}: {[round(float(v), 3) for v in row]}", flush=True)
 
@@ -287,7 +287,7 @@ def test_rdt(device, n_steps, hidden=64):
 
 
 def test_backends(device, hidden=32):
-    print(f"\n[Backends] gpu_dense + triton_block", flush=True)
+    print("\n[Backends] gpu_dense + triton_block", flush=True)
     res = {"gpu_dense": {}, "triton_block": {}}
     backends = ["gpu_dense"]
     try:
@@ -358,10 +358,10 @@ def main():
                              for be in results[name].values() for c in be.values())
                 if ok_all:
                     pass_count += 1
-                    print(f"[Backends] PASS", flush=True)
+                    print("[Backends] PASS", flush=True)
                 else:
                     fail_count += 1
-                    print(f"[Backends] FAIL", flush=True)
+                    print("[Backends] FAIL", flush=True)
             else:
                 drop = results[name].get("loss_drop", 0.0)
                 if drop > 0.0:

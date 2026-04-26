@@ -1,14 +1,10 @@
 """Tests for intrinsic.* and infinite.* modules."""
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
-
-import torch
 import pytest
+import torch
 
 import synapforge as sf
-
 
 # ---------------------------------------------------------------------------
 # Intrinsic

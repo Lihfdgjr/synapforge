@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 
 import torch
 import torch.nn as nn
@@ -24,10 +23,11 @@ import torch.nn as nn
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 sys.path.insert(0, "/workspace")
 
-import synapforge as sf
 from synapforge.distributed_ray import (
     AsyncTrainer,
     AsyncTrainerConfig,
+)
+from synapforge.distributed_ray import (
     is_available as ray_available,
 )
 

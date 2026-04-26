@@ -23,7 +23,6 @@ from synapforge.interop_torch import (
     replace_relu_with_plif,
 )
 
-
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -257,7 +256,7 @@ if __name__ == "__main__":
         try:
             print(f"\n=== {name} ===", flush=True)
             globals()[name]()
-            print(f"  PASS", flush=True)
+            print("  PASS", flush=True)
         except Exception as exc:
             print(f"  FAIL: {exc!r}", flush=True)
             import traceback

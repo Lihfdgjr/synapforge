@@ -20,13 +20,13 @@ import hashlib
 import math
 import time
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 # ---------------------------------------------------------------------------
 # 1. PoisonDetector — text + tensor heuristics

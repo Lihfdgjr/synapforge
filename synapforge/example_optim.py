@@ -17,7 +17,7 @@ from __future__ import annotations
 import torch
 
 import synapforge as sf
-from synapforge.optim import Param, build_optimizer
+from synapforge.optim import build_optimizer
 
 
 class HybridBlock(sf.Module):

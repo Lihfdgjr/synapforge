@@ -11,12 +11,10 @@ from __future__ import annotations
 import sys
 import traceback
 import warnings
-from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 
 # ---------- toy model ------------------------------------------------------
 
@@ -126,7 +124,7 @@ def t_self_learn_engine():
 
 
 def t_defense_stack():
-    from synapforge.defense import DefenseStack, DefenseConfig
+    from synapforge.defense import DefenseConfig, DefenseStack
     model = Toy()
     cfg = DefenseConfig(red_team_check_every=1, red_team_kl_max=1e6)
     canaries = [torch.randint(0, 16, (1, 4), dtype=torch.long) for _ in range(2)]
@@ -148,7 +146,7 @@ def t_defense_stack():
 
 def t_defense_fires_on_bad_update():
     """Inject huge weight perturbation -> KL drift -> rollback."""
-    from synapforge.defense import DefenseStack, DefenseConfig
+    from synapforge.defense import DefenseConfig, DefenseStack
     model = Toy()
     cfg = DefenseConfig(red_team_check_every=1, red_team_kl_max=0.001)
     canaries = [torch.randint(0, 16, (1, 4), dtype=torch.long) for _ in range(2)]
@@ -166,8 +164,8 @@ def t_defense_fires_on_bad_update():
 
 def t_self_learn_with_defense():
     """Self-learn + defense end-to-end (no warn since defense attached)."""
+    from synapforge.defense import DefenseConfig, DefenseStack
     from synapforge.self_learn import SelfLearnEngine
-    from synapforge.defense import DefenseStack, DefenseConfig
     model = Toy()
     canaries = [torch.randint(0, 16, (1, 4), dtype=torch.long) for _ in range(2)]
     defense = DefenseStack(model, DefenseConfig(red_team_check_every=5), canary_prompts=canaries)
@@ -184,7 +182,7 @@ def t_self_learn_with_defense():
 
 
 def t_tool_registry():
-    from synapforge.tools import ToolRegistry, WebSearchTool
+    from synapforge.tools import ToolRegistry
     reg = ToolRegistry()
     reg.add_default_tools(web_search_mock=True, web_fetch_mock=True)
     assert reg.has("web_search")
@@ -197,7 +195,7 @@ def t_tool_registry():
 
 
 def t_tool_caller_neural():
-    from synapforge.tools import ToolRegistry, ToolCaller
+    from synapforge.tools import ToolCaller, ToolRegistry
     reg = ToolRegistry().add_default_tools(web_search_mock=True, web_fetch_mock=True)
     caller = ToolCaller(hidden=32, registry=reg, execute=False)
     h = torch.randn(2, 32)
@@ -217,7 +215,7 @@ def t_tool_caller_neural():
 
 
 def t_tool_learning_loop():
-    from synapforge.tools import ToolRegistry, ToolCaller, ToolLearningLoop
+    from synapforge.tools import ToolCaller, ToolLearningLoop, ToolRegistry
     reg = ToolRegistry().add_default_tools(web_search_mock=True, web_fetch_mock=True)
     caller = ToolCaller(hidden=32, registry=reg)
     loop = ToolLearningLoop(caller)
@@ -256,7 +254,7 @@ def t_adv_trainer():
 
 
 def t_distill():
-    from synapforge.distill import DistillTrainer, DistillConfig, DistillationLoss
+    from synapforge.distill import DistillationLoss, DistillConfig, DistillTrainer
     student = Toy()
     teacher = Toy()  # frozen teacher
     teacher.eval()
@@ -282,9 +280,9 @@ def t_distill():
 
 def t_full_stack_integration():
     """SelfLearnEngine + DefenseStack + tool dispatch all together."""
+    from synapforge.defense import DefenseConfig, DefenseStack
     from synapforge.self_learn import SelfLearnEngine
-    from synapforge.defense import DefenseStack, DefenseConfig
-    from synapforge.tools import ToolRegistry, ToolCaller
+    from synapforge.tools import ToolCaller, ToolRegistry
 
     model = Toy()
     canaries = [torch.randint(0, 16, (1, 4), dtype=torch.long) for _ in range(2)]

@@ -17,12 +17,9 @@ Run:
 from __future__ import annotations
 
 import argparse
-import math
-import os
 import sys
 import time
 import traceback
-from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -31,9 +28,8 @@ import torch.nn.functional as F
 import synapforge as sf
 import synapforge.modal as sm
 from synapforge.cells.liquid import LiquidCell
-from synapforge.surrogate import PLIFCell  # has forward_seq
 from synapforge.cells.synapse import SparseSynapse
-
+from synapforge.surrogate import PLIFCell  # has forward_seq
 
 # -------------------- model under test --------------------
 
@@ -230,7 +226,7 @@ def run(device="cuda", bs=32, hidden=256, vocab=50257, dtype=torch.bfloat16):
 
     # 5) Same model handled all 5 — no branching, just one MultimodalLNN instance.
     print(f"\n[summary] PASS={pass_count}/{len(cases)} FAIL={fail_count}")
-    print("[summary] forward ms by modality (bs={}):".format(bs))
+    print(f"[summary] forward ms by modality (bs={bs}):")
     for k, v in timings.items():
         if v is None:
             print(f"  {k:24s}  FAIL")

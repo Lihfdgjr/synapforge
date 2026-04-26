@@ -39,15 +39,15 @@ Submodules
 """
 from __future__ import annotations
 
-from .image import ImagePatchEmbed
 from .audio import AudioPatchEmbed
-from .video import VideoPatchEmbed
-from .screen import ScreenPatchEmbed
-from .point_cloud import PointCloudEmbed
-from .time_series import TimeSeriesEmbed
-from .graph import GraphEmbed
 from .biosignal import BioSignalEmbed
-from .unified import UnifiedEmbed, ModalityMarkers
+from .graph import GraphEmbed
+from .image import ImagePatchEmbed
+from .point_cloud import PointCloudEmbed
+from .screen import ScreenPatchEmbed
+from .time_series import TimeSeriesEmbed
+from .unified import ModalityMarkers, UnifiedEmbed
+from .video import VideoPatchEmbed
 
 __all__ = [
     "ImagePatchEmbed",

@@ -36,14 +36,12 @@ modules with stand-ins that call the fused kernel ONCE per layer.
 
 from __future__ import annotations
 
-from typing import List, Tuple
-
 import numpy as np
 import torch
 import torch.nn as nn
 
-from .base import Backend
 from ..ir.graph import IRGraph
+from .base import Backend
 
 try:
     import numba
@@ -390,7 +388,7 @@ class _FusedPLIFNumba(nn.Module):
 _PLIF_LIKE_NAMES = ("PLIF", "PLIFCell")
 
 
-def _find_pairs(root: nn.Module) -> List[Tuple[nn.Module, str, str, str]]:
+def _find_pairs(root: nn.Module) -> list[tuple[nn.Module, str, str, str]]:
     pairs = []
     for parent in root.modules():
         liquid_attr = None
@@ -448,7 +446,7 @@ def _fuse_one_pair(parent, liquid_attr, plif_attr, plif_kind):
 
 def _apply_fusion(root: nn.Module) -> dict:
     pairs = _find_pairs(root)
-    fused: List[_SharedNumbaBlock] = []
+    fused: list[_SharedNumbaBlock] = []
     for parent, l, p, kind in pairs:
         fused.append(_fuse_one_pair(parent, l, p, kind))
     return {

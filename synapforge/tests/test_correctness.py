@@ -13,14 +13,14 @@ Verifies:
 from __future__ import annotations
 
 import sys
+
 sys.path.insert(0, "/workspace")
 
 import torch
 import torch.nn as nn
-
-import synapforge as sf
 from mscfc.liquid_s4 import LiquidS4Cell
 
+import synapforge as sf
 
 # ---------------------------------------------------------------------------
 # 1. LiquidCell vs mscfc.LiquidS4Cell numerical equivalence

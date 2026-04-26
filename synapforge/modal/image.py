@@ -18,7 +18,6 @@ Notes
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import torch
 import torch.nn as nn

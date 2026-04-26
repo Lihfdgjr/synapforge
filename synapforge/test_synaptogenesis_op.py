@@ -24,15 +24,15 @@ from __future__ import annotations
 
 import os
 import sys
+
 import torch
-import torch.nn as nn
 
 # Use GPU 1 only per task constraints.
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 sys.path.insert(0, "/workspace")
 
 import synapforge as sf
-from synapforge.ir import compile_module, RigL, maybe_update_masks
+from synapforge.ir import RigL, compile_module, maybe_update_masks
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ def main() -> int:
     # ---- Part 2: train 100 steps, track density ----
     initial_mask = model.l1.mask.clone()
     initial_density = float(initial_mask.float().mean().item())
-    print(f"\n[part 2] training 100 steps, target density=0.15")
+    print("\n[part 2] training 100 steps, target density=0.15")
     print(f"  step   0  density={initial_density:.4f}")
 
     densities = [(0, initial_density)]
@@ -119,7 +119,7 @@ def main() -> int:
     hamming = int((initial_mask != final_mask).sum().item())
     hamming_frac = hamming / final_mask.numel()
 
-    print(f"\n[results]")
+    print("\n[results]")
     print(f"  initial density:  {initial_density:.4f}")
     print(f"  final   density:  {final_density:.4f}  (target=0.15)")
     print(f"  rigl fires count: {len(fired_records)}")

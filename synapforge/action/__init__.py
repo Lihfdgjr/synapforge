@@ -43,24 +43,24 @@ Usage
 
 from __future__ import annotations
 
-from .head import (
-    ActionHead,
-    ActionOutput,
-    ActionLoss,
-    ActionTargets,
-    OSActionSpec,
-    ACTION_TYPES,
-    KEY_VOCAB,
-)
-from .neuromcp import (
-    NeuroMCPHead,
-    DynamicActionCodebook,
-    SparseSynapticLayer,
-    CodebookConfig,
-    SynaptogenesisConfig,
-)
 from .actuator import OSActuator, ScreenObservation
 from .envs import FourButtonEnv, PatchEncoder, SpatialXYHead
+from .head import (
+    ACTION_TYPES,
+    KEY_VOCAB,
+    ActionHead,
+    ActionLoss,
+    ActionOutput,
+    ActionTargets,
+    OSActionSpec,
+)
+from .neuromcp import (
+    CodebookConfig,
+    DynamicActionCodebook,
+    NeuroMCPHead,
+    SparseSynapticLayer,
+    SynaptogenesisConfig,
+)
 
 __all__ = [
     # head.py

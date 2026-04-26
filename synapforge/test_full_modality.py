@@ -25,9 +25,8 @@ import torch.nn.functional as F
 import synapforge as sf
 import synapforge.modal as sm
 from synapforge.cells.liquid import LiquidCell
-from synapforge.surrogate import PLIFCell
 from synapforge.cells.synapse import SparseSynapse
-
+from synapforge.surrogate import PLIFCell
 
 # -------------------- model under test (reused HybridBlock) --------------------
 
@@ -258,7 +257,7 @@ def run(device="cuda", bs=4, hidden=128, vocab=8192, dtype=torch.bfloat16):
             fwd_steps[name] = None
 
     # ---- mega test: ALL 9 modalities at once on bs=4 ----
-    print("\n[mega] ALL 9 modalities in one batch, bs={}".format(bs))
+    print(f"\n[mega] ALL 9 modalities in one batch, bs={bs}")
     try:
         mega = {
             "text_tokens":  _mk_text(bs, 32, vocab, device),

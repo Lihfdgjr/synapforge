@@ -10,7 +10,6 @@ SpatialXYHead     attention-pooled coordinate prediction (continuous xy).
 from __future__ import annotations
 
 import math
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -28,14 +27,14 @@ class FourButtonEnv:
     Used by mscfc.action's first PoC (4-button hit_rate -> 100%).
     """
 
-    BUTTONS: Tuple[Tuple[float, float], ...] = (
+    BUTTONS: tuple[tuple[float, float], ...] = (
         (0.25, 0.25),
         (0.75, 0.25),
         (0.25, 0.75),
         (0.75, 0.75),
     )
 
-    def reset(self, batch_size: int = 8) -> Tuple[torch.Tensor, torch.Tensor]:
+    def reset(self, batch_size: int = 8) -> tuple[torch.Tensor, torch.Tensor]:
         target = torch.randint(0, 4, (batch_size,))
         img = torch.zeros(batch_size, 3, 64, 64)
         color = torch.tensor([1.0, 0.5, 0.0])
@@ -98,7 +97,7 @@ class SpatialXYHead(Module):
             "coords", torch.stack([gx.flatten(), gy.flatten()], dim=-1)
         )
 
-    def forward(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         scores = self.score(z).squeeze(-1)
         weights = scores.softmax(dim=-1)
         xy = (weights.unsqueeze(-1) * self.coords).sum(dim=1)

@@ -21,15 +21,14 @@ is not added to the training objective.  Pure ``torch.nn``; no torch.jit.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .module import Module
-
 
 # ----------------------------------------------------------------------------
 # 1. WorldModelHead

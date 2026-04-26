@@ -22,10 +22,9 @@ from statistics import median
 sys.path.insert(0, "/workspace")
 
 import torch
-
-import synapforge as sf
 from mscfc.liquid_s4 import LiquidS4Cell
 
+import synapforge as sf
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WARMUP = 5
@@ -123,7 +122,7 @@ def bench_block(B: int, T: int, D: int) -> None:
 
 def bench_compile_metadata() -> None:
     """Quick check that compile() produces a sane IR graph."""
-    print(f"\n--- compile() IR inspection ---")
+    print("\n--- compile() IR inspection ---")
 
     class SFBlock(sf.Module):
         def __init__(self, d):

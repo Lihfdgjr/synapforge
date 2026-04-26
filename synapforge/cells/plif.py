@@ -26,7 +26,6 @@ The threshold can be a constant or per-channel learnable nn.Parameter
 from __future__ import annotations
 
 import math
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -112,7 +111,7 @@ class PLIF(Module):
         current: torch.Tensor,
         membrane: torch.Tensor | None = None,
         dt: float = 1.0,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Single-step LIF update.
 
         Args

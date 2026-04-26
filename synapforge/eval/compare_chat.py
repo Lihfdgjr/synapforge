@@ -16,7 +16,6 @@ import os
 import sys
 import time
 import traceback
-from typing import List, Tuple
 
 _WS = "/workspace"
 if _WS not in sys.path:
@@ -32,8 +31,7 @@ from synapforge.eval.generate import (  # type: ignore
     load_tokenizer,
 )
 
-
-PROMPTS: List[str] = [
+PROMPTS: list[str] = [
     "The capital of France is",
     "To compute the factorial of 5 in Python, you write",
     "Once upon a time, in a small village,",
@@ -75,7 +73,7 @@ def _val_loader(tokenizer, seq_len: int = 256, batch_size: int = 4,
     """Yield (input, target) pairs from validation.parquet, gpt2-tokenized."""
     import pyarrow.parquet as pq
 
-    buf: List[int] = []
+    buf: list[int] = []
     table = pq.read_table(VAL_PARQUET)
     rows = table.to_pylist()
     eos = tokenizer.eos_token_id or 50256
@@ -180,8 +178,8 @@ def main() -> None:
         print(f"[ppl] mscfc FAILED: {e}\n{traceback.format_exc()}")
 
     # --- generation ---
-    sf_completions: List[Tuple[str, str, float]] = []
-    mscfc_completions: List[Tuple[str, str, float]] = []
+    sf_completions: list[tuple[str, str, float]] = []
+    mscfc_completions: list[tuple[str, str, float]] = []
 
     for p in PROMPTS:
         print(f"\n[gen] prompt={p!r}")
@@ -303,7 +301,7 @@ def main() -> None:
 
     print(f"\n[compare] wrote {OUT_TXT}")
     print(f"[compare] wrote {OUT_MD}")
-    print(f"[compare] DONE.")
+    print("[compare] DONE.")
 
 
 if __name__ == "__main__":

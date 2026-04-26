@@ -20,7 +20,6 @@ import os
 import sys
 import time
 import warnings
-from typing import List, Tuple
 
 import torch
 
@@ -77,9 +76,9 @@ def loss_fn(out: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     )
 
 
-def synthetic_text_batch(n_rows: int, mean_len: int = 64) -> List[str]:
+def synthetic_text_batch(n_rows: int, mean_len: int = 64) -> list[str]:
     rng = torch.Generator().manual_seed(0xC0FFEE + n_rows)
-    rows: List[str] = []
+    rows: list[str] = []
     for _ in range(n_rows):
         L = int(mean_len + torch.randint(-8, 9, (1,), generator=rng).item())
         ids = torch.randint(1, 256, (max(8, L),), generator=rng).tolist()
@@ -87,7 +86,7 @@ def synthetic_text_batch(n_rows: int, mean_len: int = 64) -> List[str]:
     return rows
 
 
-def synthetic_token_batch(n_rows: int, seq_len: int = 64) -> Tuple[torch.Tensor, torch.Tensor]:
+def synthetic_token_batch(n_rows: int, seq_len: int = 64) -> tuple[torch.Tensor, torch.Tensor]:
     rng = torch.Generator().manual_seed(0xDA7A + n_rows)
     x = torch.randint(1, 1000, (n_rows, seq_len), generator=rng)
     y = torch.zeros_like(x)
@@ -98,7 +97,7 @@ def synthetic_token_batch(n_rows: int, seq_len: int = 64) -> Tuple[torch.Tensor,
 # ---------------------------------------------------------------------------
 # Baselines
 # ---------------------------------------------------------------------------
-def baseline_single_gpu(steps: int = 50, batch: int = 32, tokenise: bool = True) -> Tuple[float, float]:
+def baseline_single_gpu(steps: int = 50, batch: int = 32, tokenise: bool = True) -> tuple[float, float]:
     """Train on the visible GPU in a plain torch loop.
 
     When ``tokenise=True`` we include a synthetic tokeniser pass on
@@ -149,7 +148,7 @@ def baseline_single_gpu(steps: int = 50, batch: int = 32, tokenise: bool = True)
     return steps / elapsed, last_loss
 
 
-def baseline_single_cpu(steps: int = 50, batch: int = 32) -> Tuple[float, float]:
+def baseline_single_cpu(steps: int = 50, batch: int = 32) -> tuple[float, float]:
     dev = torch.device("cpu")
     model = make_model().to(dev)
     opt = torch.optim.Adam(model.parameters(), lr=1e-2)
@@ -175,7 +174,7 @@ def baseline_single_cpu(steps: int = 50, batch: int = 32) -> Tuple[float, float]
 # ---------------------------------------------------------------------------
 # Mode A: split-by-task
 # ---------------------------------------------------------------------------
-def smoke_mode_a(steps: int = 50, batch: int = 32) -> Tuple[float, float, dict]:
+def smoke_mode_a(steps: int = 50, batch: int = 32) -> tuple[float, float, dict]:
     """2 GPU workers (cuda:1), 2 CPU data workers.  Returns
     (steps_per_sec, last_loss, last_stats)."""
     workers = [
@@ -217,7 +216,7 @@ def smoke_mode_a(steps: int = 50, batch: int = 32) -> Tuple[float, float, dict]:
 # ---------------------------------------------------------------------------
 # Mode C: data-parallel-mixed
 # ---------------------------------------------------------------------------
-def smoke_mode_c(steps: int = 50, batch: int = 32) -> Tuple[float, float, dict]:
+def smoke_mode_c(steps: int = 50, batch: int = 32) -> tuple[float, float, dict]:
     workers = [
         WorkerSpec("localhost", "cuda:0", role="compute"),
         WorkerSpec("localhost", "cpu", role="compute", num_cpus=2),

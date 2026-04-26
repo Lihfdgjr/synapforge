@@ -29,7 +29,6 @@ import platform
 import sys
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import torch
 
@@ -90,7 +89,7 @@ class OSActuator:
     def __init__(
         self,
         safe_mode: bool = False,
-        screen_size: Optional[Tuple[int, int]] = None,
+        screen_size: tuple[int, int] | None = None,
         on_action=None,
     ) -> None:
         self.safe_mode = bool(safe_mode)
@@ -107,7 +106,7 @@ class OSActuator:
 
     # -------------------------------------------------- helpers
     @property
-    def screen_size(self) -> Tuple[int, int]:
+    def screen_size(self) -> tuple[int, int]:
         if self._screen_size is not None:
             return self._screen_size
         if _HAS_PYAUTOGUI:
@@ -121,7 +120,7 @@ class OSActuator:
         self._screen_size = (1920, 1080)
         return self._screen_size
 
-    def _denorm_xy(self, x: float, y: float) -> Tuple[int, int]:
+    def _denorm_xy(self, x: float, y: float) -> tuple[int, int]:
         W, H = self.screen_size
         return int(round(x * W)), int(round(y * H))
 
@@ -223,9 +222,9 @@ class ScreenObservation:
     (cross-platform) — matches synapforge's "no required deps" rule.
     """
 
-    region: Optional[Tuple[int, int, int, int]] = None
+    region: tuple[int, int, int, int] | None = None
 
-    def capture(self, region: Optional[Tuple[int, int, int, int]] = None) -> torch.Tensor:
+    def capture(self, region: tuple[int, int, int, int] | None = None) -> torch.Tensor:
         region = region or self.region
         if _HAS_PIL and platform.system() == "Windows" and ImageGrab is not None:
             img = ImageGrab.grab(bbox=region)  # type: ignore[arg-type]

@@ -31,7 +31,6 @@ hidden=512, layers=10, ffn_ratio=8 -> ~97M params (within target +/- 10%).
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 import torch
 import torch.nn as nn

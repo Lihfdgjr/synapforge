@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
-import os
 import sys
 import time
 import traceback
@@ -31,12 +30,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import synapforge as sf
 from synapforge.backends.triton_block_kernel import (
-    TritonHybridBlock,
     _HAS_TRITON,
+    TritonHybridBlock,
 )
-
 
 # ---------------------------------------------------------------------------
 # Reference HybridBlock with fp32 accumulator (matches Triton kernel math).
@@ -241,7 +238,7 @@ def main() -> int:
     if device.type == "cuda":
         torch.cuda.manual_seed_all(1234)
 
-    print(f"== synapforge triton_block bench ==", flush=True)
+    print("== synapforge triton_block bench ==", flush=True)
     print(f"shape (B={args.B}, T={args.T}, D={args.D})  layers={args.n_layers}  dtype={args.dtype}")
     print(f"device={device}  torch={torch.__version__}  triton_avail={_HAS_TRITON}")
     if device.type == "cuda":

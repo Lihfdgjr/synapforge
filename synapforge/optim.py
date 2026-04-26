@@ -48,10 +48,9 @@ Limitations
 """
 from __future__ import annotations
 
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from collections.abc import Callable, Iterable, Sequence
 
 import torch
-
 
 # ----------------------------------------------------------------------------
 # sf.Param: small wrapper that tags an nn.Parameter with grad sources
@@ -62,7 +61,7 @@ def Param(
     data: torch.Tensor,
     requires_grad: bool = True,
     grad_source: Sequence[str] = ("bp",),
-    weight_per_source: Optional[Dict[str, float]] = None,
+    weight_per_source: dict[str, float] | None = None,
 ) -> torch.nn.Parameter:
     """Build an nn.Parameter and tag it with `_sf_grad_source` metadata.
 
@@ -97,7 +96,7 @@ class MultiSourceParam:
         self,
         param: torch.nn.Parameter,
         sources: Sequence[str] = ("bp",),
-        weight_per_source: Optional[Dict[str, float]] = None,
+        weight_per_source: dict[str, float] | None = None,
     ) -> None:
         if not param.requires_grad and "bp" in sources:
             raise ValueError(
@@ -111,8 +110,8 @@ class MultiSourceParam:
         # partial dict (e.g. {'stdp': 0.1} but sources=['bp','stdp']).
         for s in self.sources:
             self.weight_per_source.setdefault(s, 1.0)
-        self.plast_delta: Dict[str, torch.Tensor] = {}
-        self._bp_grad_cached: Optional[torch.Tensor] = None
+        self.plast_delta: dict[str, torch.Tensor] = {}
+        self._bp_grad_cached: torch.Tensor | None = None
         # Optional gradient-capture hook — kept for backward-compat with the
         # original spec, but compute_combined_grad also falls back to .grad
         # so this is belt-and-suspenders.
@@ -151,7 +150,7 @@ class MultiSourceParam:
             self.plast_delta[source] = d
 
     # ----------------------------------------------------------------- combine
-    def compute_combined_grad(self) -> Optional[torch.Tensor]:
+    def compute_combined_grad(self) -> torch.Tensor | None:
         """Merge all sources into a single effective gradient.
 
         Sign convention: BP grad is dL/dW (subtract); plast delta is +ΔW
@@ -168,7 +167,7 @@ class MultiSourceParam:
         if bp is None and "bp" in self.sources and self.param.grad is not None:
             bp = self.param.grad.detach()
 
-        contribs: List[Tuple[str, torch.Tensor, float]] = []
+        contribs: list[tuple[str, torch.Tensor, float]] = []
         if bp is not None and "bp" in self.sources:
             contribs.append(("bp", bp, +1.0))  # subtract → descends loss
         for src, d in self.plast_delta.items():
@@ -214,7 +213,7 @@ class PlasticityAwareAdamW(torch.optim.Optimizer):
         self,
         ms_params: Iterable[MultiSourceParam],
         lr: float = 1e-3,
-        betas: Tuple[float, float] = (0.9, 0.999),
+        betas: tuple[float, float] = (0.9, 0.999),
         eps: float = 1e-8,
         weight_decay: float = 0.01,
     ) -> None:
@@ -235,21 +234,21 @@ class PlasticityAwareAdamW(torch.optim.Optimizer):
         params = [msp.param for msp in ms_list]
         super().__init__(params, defaults)
         # id(param) → MultiSourceParam — id is stable for the param's lifetime
-        self._ms_param_map: Dict[int, MultiSourceParam] = {
+        self._ms_param_map: dict[int, MultiSourceParam] = {
             id(msp.param): msp for msp in ms_list
         }
 
     # Public lookup for plasticity engines that want to .attach_plast_delta
     @property
-    def ms_param_table(self) -> Dict[int, MultiSourceParam]:
+    def ms_param_table(self) -> dict[int, MultiSourceParam]:
         return self._ms_param_map
 
-    def get_ms_param(self, param: torch.nn.Parameter) -> Optional[MultiSourceParam]:
+    def get_ms_param(self, param: torch.nn.Parameter) -> MultiSourceParam | None:
         return self._ms_param_map.get(id(param))
 
     # ------------------------------------------------------------------ step
     @torch.no_grad()
-    def step(self, closure: Optional[Callable[[], torch.Tensor]] = None):
+    def step(self, closure: Callable[[], torch.Tensor] | None = None):
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -319,7 +318,7 @@ def build_optimizer(
     model: torch.nn.Module,
     lr: float = 3e-4,
     weight_decay: float = 0.05,
-    betas: Tuple[float, float] = (0.9, 0.999),
+    betas: tuple[float, float] = (0.9, 0.999),
     eps: float = 1e-8,
     default_sources: Sequence[str] = ("bp",),
 ) -> PlasticityAwareAdamW:
@@ -330,7 +329,7 @@ def build_optimizer(
       * else use `default_sources` (default: ["bp"], pure-BP behavior)
     Per-source weights pulled from `_sf_weight_per_source` if present.
     """
-    ms_params: List[MultiSourceParam] = []
+    ms_params: list[MultiSourceParam] = []
     for _, p in model.named_parameters():
         if not p.requires_grad:
             continue

@@ -38,14 +38,20 @@ from __future__ import annotations
 
 import logging
 import warnings
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
 
 try:
-    from transformers import Trainer, TrainerCallback, TrainerControl, TrainerState
-    from transformers import TrainingArguments  # noqa: F401  re-export-able
+    from transformers import (
+        Trainer,
+        TrainerCallback,
+        TrainerControl,
+        TrainerState,
+        TrainingArguments,  # noqa: F401  re-export-able
+    )
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "synapforge.hf_trainer requires `transformers` to be installed. "
@@ -55,6 +61,8 @@ except ImportError as exc:  # pragma: no cover
 from .optim import (
     MultiSourceParam,
     PlasticityAwareAdamW,
+)
+from .optim import (
     build_optimizer as build_sf_optimizer,
 )
 from .plasticity import PlasticityEngine
@@ -81,10 +89,10 @@ def _has_sf_param(model: nn.Module) -> bool:
     return False
 
 
-def _named_tensor_map(model: nn.Module) -> Dict[str, torch.Tensor]:
+def _named_tensor_map(model: nn.Module) -> dict[str, torch.Tensor]:
     """Return ``{qualified_name: tensor}`` for parameters AND boolean
     ``mask`` buffers (so SynaptogenesisGrowPrune can update masks)."""
-    out: Dict[str, torch.Tensor] = {}
+    out: dict[str, torch.Tensor] = {}
     for n, p in model.named_parameters():
         out[n] = p.data
     for n, b in model.named_buffers():
@@ -112,11 +120,11 @@ class PlasticityCallback(TrainerCallback):
     is what DDP/Accelerator wraps for forward passes).
     """
 
-    def __init__(self, trainer: "SFTrainer", engine: PlasticityEngine) -> None:
+    def __init__(self, trainer: SFTrainer, engine: PlasticityEngine) -> None:
         self.trainer_ref = trainer
         self.engine = engine
         self._n_applied = 0
-        self._weight_map_cache: Optional[Dict[str, torch.Tensor]] = None
+        self._weight_map_cache: dict[str, torch.Tensor] | None = None
 
     def on_optimizer_step(
         self,
@@ -124,7 +132,7 @@ class PlasticityCallback(TrainerCallback):
         state: TrainerState,
         control: TrainerControl,
         **kwargs: Any,
-    ) -> Optional[TrainerControl]:
+    ) -> TrainerControl | None:
         if self.engine is None:
             return control
         model = self.trainer_ref.model
@@ -159,7 +167,7 @@ class PlasticityCallback(TrainerCallback):
         state: TrainerState,
         control: TrainerControl,
         **kwargs: Any,
-    ) -> Optional[TrainerControl]:
+    ) -> TrainerControl | None:
         # Reset counters and rule traces at the start of training.
         self._n_applied = 0
         self._weight_map_cache = None
@@ -194,9 +202,9 @@ class SFTrainer(Trainer):
         model: nn.Module,
         args: Any = None,
         *,
-        plasticity_engine: Optional[PlasticityEngine] = None,
+        plasticity_engine: PlasticityEngine | None = None,
         force_sf_optimizer: bool = False,
-        sf_optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        sf_optimizer_kwargs: dict[str, Any] | None = None,
         **trainer_kwargs: Any,
     ) -> None:
         self._sf_engine = plasticity_engine
@@ -233,8 +241,8 @@ class SFTrainer(Trainer):
         decay_param_names = self.get_decay_parameter_names(opt_model)
         decay_set = set(decay_param_names)
 
-        ms_decay: List[MultiSourceParam] = []
-        ms_nodecay: List[MultiSourceParam] = []
+        ms_decay: list[MultiSourceParam] = []
+        ms_nodecay: list[MultiSourceParam] = []
         for name, p in opt_model.named_parameters():
             if not p.requires_grad:
                 continue
@@ -256,7 +264,7 @@ class SFTrainer(Trainer):
         kwargs = dict(lr=lr, betas=(beta1, beta2), eps=eps)
         kwargs.update(self._sf_opt_kwargs)
 
-        opts: List[PlasticityAwareAdamW] = []
+        opts: list[PlasticityAwareAdamW] = []
         if ms_decay:
             opts.append(PlasticityAwareAdamW(ms_decay, weight_decay=wd, **kwargs))
         if ms_nodecay:
@@ -325,10 +333,10 @@ class _ChainedOptimizer(torch.optim.Optimizer):
         for o in self.opts:
             o.zero_grad(set_to_none=set_to_none)
 
-    def state_dict(self) -> Dict[str, Any]:
+    def state_dict(self) -> dict[str, Any]:
         return {"opts": [o.state_dict() for o in self.opts]}
 
-    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         for o, sd in zip(self.opts, state_dict.get("opts", [])):
             o.load_state_dict(sd)
 

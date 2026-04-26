@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -34,15 +33,15 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
-from typing import Any, Callable, Sequence
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .module import Module
-
 
 # ---------------------------------------------------------------------------
 # 1. ToolRegistry
@@ -66,7 +65,7 @@ class ToolRegistry:
     """
 
     def __init__(self) -> None:
-        self._tools: "dict[str, ToolSpec]" = {}
+        self._tools: dict[str, ToolSpec] = {}
 
     def register(
         self,
@@ -89,7 +88,7 @@ class ToolRegistry:
         web_fetch_mock: bool = True,
         shell: bool = False,
         code_exec: bool = False,
-    ) -> "ToolRegistry":
+    ) -> ToolRegistry:
         """Convenience: register a sane default set.
 
         Defaults to mocked web tools so smoke tests stay deterministic.

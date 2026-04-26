@@ -6,7 +6,6 @@ Saves Chrome trace + a top-K op summary table.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 
@@ -14,7 +13,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", os.environ.get("GPU", "1"))
 
 import torch
 import torch.nn.functional as F
-from torch.profiler import profile, ProfilerActivity, schedule
+from torch.profiler import ProfilerActivity, profile, schedule
 
 sys.path.insert(0, "/workspace")
 from synapforge.model_100m import build_synapforge_100m

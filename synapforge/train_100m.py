@@ -23,7 +23,6 @@ import math
 import os
 import sys
 import time
-from typing import Optional
 
 import torch
 import torch.nn.functional as F
@@ -31,7 +30,6 @@ import torch.nn.functional as F
 if "/workspace" not in sys.path:
     sys.path.insert(0, "/workspace")
 
-import synapforge as sf  # noqa: E402
 from synapforge.data import ParquetTokenStream  # noqa: E402
 from synapforge.huggingface_adapter import adv_warmstart  # noqa: E402
 from synapforge.model_100m import build_synapforge_100m  # noqa: E402
@@ -67,6 +65,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--backend", default="gpu_dense",
                    choices=["gpu_dense", "triton_block"])
     p.add_argument("--warmstart", default=WARM_CKPT_DEFAULT)
+    p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--steps", type=int, default=N_STEPS_DEFAULT)
     return p.parse_args()
 
@@ -141,7 +140,7 @@ def main() -> int:
         log_lines.append(line)
 
     _log(f"device={DEVICE} dtype={DTYPE} out={out_dir} backend={backend_name}")
-    _log(f"steps={n_steps} bs={BATCH_SIZE} seq={SEQ_LEN} lr={LR}")
+    _log(f"steps={n_steps} bs={args.batch_size} seq={SEQ_LEN} lr={LR}")
 
     # ---------------- model ----------------
     model = build_synapforge_100m(
@@ -183,7 +182,6 @@ def main() -> int:
         try:
             from synapforge.backends.triton_block import (
                 TritonBlockBackend,
-                _SharedTritonBlock,
             )
             from synapforge.backends.triton_block_kernel import _HAS_TRITON
             backend = TritonBlockBackend()
@@ -212,12 +210,12 @@ def main() -> int:
 
     # ---------------- data ----------------
     train_ds = ParquetTokenStream(DATA_GLOB, seq_len=SEQ_LEN,
-                                  batch_size=BATCH_SIZE, loop=True)
+                                  batch_size=args.batch_size, loop=True)
     train_it = iter(train_ds)
     _log(f"train stream: {train_ds!r}")
 
     val_ds = ParquetTokenStream(VAL_GLOB, seq_len=SEQ_LEN,
-                                batch_size=BATCH_SIZE, loop=False)
+                                batch_size=args.batch_size, loop=False)
     _log(f"val stream:   {val_ds!r}")
 
     from synapforge.huggingface_adapter import load_tokenizer
@@ -265,7 +263,7 @@ def main() -> int:
         if DEVICE == "cuda":
             torch.cuda.synchronize()
         step_ms = (time.time() - t_step) * 1000.0
-        cum_tok += BATCH_SIZE * SEQ_LEN
+        cum_tok += args.batch_size * SEQ_LEN
 
         if step % LOG_EVERY == 0 or step == 1:
             tok_s = cum_tok / max(time.time() - t0, 1e-6)

@@ -3,10 +3,8 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import pytest
 
 import synapforge as sf
-
 
 # ---------------------------------------------------------------------------
 # WaveFormer1D + Hyena1D + FNet1D

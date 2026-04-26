@@ -14,12 +14,7 @@ import pytest
 import torch
 
 from synapforge.surrogate import (
-    ATanSurrogate,
-    FastSigmoidSurrogate,
     PLIFCell,
-    SLAYERSurrogate,
-    SigmoidSurrogate,
-    TriangularSurrogate,
     list_surrogates,
     register,
     spike,

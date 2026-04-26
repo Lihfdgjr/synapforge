@@ -1,11 +1,10 @@
 """Tests for synapforge.bio.* — bio-inspired components."""
 from __future__ import annotations
 
-import torch
 import pytest
+import torch
 
 import synapforge as sf
-
 
 # ---------------------------------------------------------------------------
 # KWTA

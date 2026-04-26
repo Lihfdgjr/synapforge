@@ -37,20 +37,18 @@ loops.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 import torch.nn as nn
 
 from ..module import Module
-from .image import ImagePatchEmbed, sinusoidal_2d
-from .audio import AudioPatchEmbed, sinusoidal_1d
-from .video import VideoPatchEmbed
-from .screen import ScreenPatchEmbed
-from .point_cloud import PointCloudEmbed
-from .time_series import TimeSeriesEmbed
-from .graph import GraphEmbed
+from .audio import AudioPatchEmbed
 from .biosignal import BioSignalEmbed
+from .graph import GraphEmbed
+from .image import ImagePatchEmbed
+from .point_cloud import PointCloudEmbed
+from .screen import ScreenPatchEmbed
+from .time_series import TimeSeriesEmbed
+from .video import VideoPatchEmbed
 
 
 class ModalityMarkers(nn.Module):
@@ -94,7 +92,7 @@ class UnifiedEmbed(Module):
         audio_mode: str = "raw",
         # video
         video_temporal_patch: int = 4,
-        video_spatial_patch: Optional[int] = None,
+        video_spatial_patch: int | None = None,
         # screen
         patch_screen: int = 32,
         # point cloud
@@ -181,7 +179,7 @@ class UnifiedEmbed(Module):
         marker = self.markers.text.to(z.dtype).expand(B, 1, self.hidden)
         return torch.cat([marker, z], dim=1)
 
-    def _modality_seq(self, batch: dict, key: str) -> Optional[torch.Tensor]:
+    def _modality_seq(self, batch: dict, key: str) -> torch.Tensor | None:
         if key not in batch or batch[key] is None:
             return None
         if key == "text_tokens":
@@ -224,7 +222,7 @@ class UnifiedEmbed(Module):
 
         # Determine batch size from the first present modality.
         present: list[tuple[str, torch.Tensor]] = []
-        B: Optional[int] = None
+        B: int | None = None
         device = None
         dtype = self.token_embedding.weight.dtype  # default
 

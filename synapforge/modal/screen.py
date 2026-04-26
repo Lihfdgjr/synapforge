@@ -19,8 +19,6 @@ dims, and a learned <|screen|> marker is the first token.
 """
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -56,7 +54,7 @@ class ScreenPatchEmbed(Module):
         self,
         image: torch.Tensor,
         cursor: torch.Tensor,
-        roi_hw: Tuple[int, int],
+        roi_hw: tuple[int, int],
     ) -> torch.Tensor:
         """Per-sample crop of (h, w) centered at cursor (cy, cx). Padded if OOB."""
         B, C, H, W = image.shape
@@ -105,8 +103,8 @@ class ScreenPatchEmbed(Module):
     def forward(
         self,
         screen: torch.Tensor,
-        cursor: Optional[torch.Tensor] = None,
-        roi: Optional[Tuple[int, int]] = None,
+        cursor: torch.Tensor | None = None,
+        roi: tuple[int, int] | None = None,
     ) -> torch.Tensor:
         if screen.dim() != 4:
             raise ValueError(

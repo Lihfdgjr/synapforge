@@ -43,11 +43,12 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 
 import torch
 
-from .optim import build_optimizer, PlasticityAwareAdamW
+from .optim import PlasticityAwareAdamW, build_optimizer
 
 try:
     from .plasticity import PlasticityEngine
@@ -111,10 +112,10 @@ def train(
     log_every: int = 10,
     save_every: int = 0,
     device: str = "cuda",
-    out_dir: Optional[str] = None,
+    out_dir: str | None = None,
     plasticity_engine: Any = None,
     plasticity_source: str = "hebb",
-    optimizer: Optional[PlasticityAwareAdamW] = None,
+    optimizer: PlasticityAwareAdamW | None = None,
 ) -> dict[str, list]:
     """Train ``model`` for ``n_steps`` using synapforge optim + plasticity.
 

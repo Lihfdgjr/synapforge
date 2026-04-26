@@ -15,7 +15,6 @@ import math
 import os
 import sys
 import time
-from typing import Dict, List
 
 import torch
 import torch.nn as nn
@@ -98,7 +97,7 @@ class RepeatingPatternDataset(torch.utils.data.Dataset):
         self.seq_len = int(seq_len)
         self.vocab = int(vocab)
         rng = torch.Generator().manual_seed(123)
-        self.cycles: List[torch.Tensor] = []
+        self.cycles: list[torch.Tensor] = []
         for _ in range(self.n):
             # Each row is a fixed-length permutation/repeat over 8 unique tokens.
             base = torch.randperm(8, generator=rng) % vocab
@@ -108,12 +107,12 @@ class RepeatingPatternDataset(torch.utils.data.Dataset):
     def __len__(self) -> int:
         return self.n
 
-    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         ids = self.cycles[idx]
         return {"input_ids": ids, "labels": ids.clone()}
 
 
-def collate(features: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+def collate(features: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
     return {
         "input_ids": torch.stack([f["input_ids"] for f in features]),
         "labels": torch.stack([f["labels"] for f in features]),
@@ -126,7 +125,7 @@ def collate(features: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
 
 
 def test_sf_trainer_50_steps_loss_decreases():
-    from transformers import TrainingArguments, TrainerCallback
+    from transformers import TrainerCallback, TrainingArguments
 
     # Disable accelerate's distributed init helpers (single-GPU); HF still
     # uses Accelerate internally for autocast/data movement.
@@ -140,7 +139,7 @@ def test_sf_trainer_50_steps_loss_decreases():
     out_dir = "/tmp/sf_hf_trainer_smoke"
     os.makedirs(out_dir, exist_ok=True)
 
-    losses_collected: List[float] = []
+    losses_collected: list[float] = []
 
     class _Capture(TrainerCallback):
         def on_log(self, args, state, control, logs=None, **kw):
@@ -293,7 +292,7 @@ if __name__ == "__main__":
         try:
             print(f"\n=== {name} ===", flush=True)
             globals()[name]()
-            print(f"  PASS", flush=True)
+            print("  PASS", flush=True)
         except Exception as exc:
             print(f"  FAIL: {exc!r}", flush=True)
             import traceback

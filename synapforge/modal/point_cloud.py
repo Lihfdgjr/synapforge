@@ -31,13 +31,10 @@ Notes
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 import torch.nn as nn
 
 from ..module import Module
-from .image import sinusoidal_2d  # reused for 3D positional encoding
 
 
 def sinusoidal_3d(V: int, dim: int, device, dtype) -> torch.Tensor:
@@ -111,7 +108,7 @@ class PointCloudEmbed(Module):
     def _voxel_pool(
         self,
         points: torch.Tensor,
-        mask: Optional[torch.Tensor],
+        mask: torch.Tensor | None,
     ) -> torch.Tensor:
         """Voxel-hash + max-pool. Returns (B, V**3, F)."""
         B, N, F_dim = points.shape
@@ -184,7 +181,7 @@ class PointCloudEmbed(Module):
     def forward(
         self,
         points: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if points.dim() != 3:
             raise ValueError(

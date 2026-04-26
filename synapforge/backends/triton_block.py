@@ -13,18 +13,15 @@ API returning `(spikes, v_final)` rather than PLIF's `(spk, mem)` tuple.
 
 from __future__ import annotations
 
-from typing import List, Tuple
-
 import torch
 import torch.nn as nn
 
-from .base import Backend
 from ..ir.graph import IRGraph
+from .base import Backend
 from .triton_block_kernel import (
-    TritonHybridBlock,
     _HAS_TRITON,
+    TritonHybridBlock,
 )
-
 
 # ---------------------------------------------------------------------------
 # Adapter modules
@@ -135,7 +132,7 @@ class _FusedPLIFCellSeq(nn.Module):
 _PLIF_LIKE_NAMES = ("PLIF", "PLIFCell")
 
 
-def _find_pairs(root: nn.Module) -> List[Tuple[nn.Module, str, str, str]]:
+def _find_pairs(root: nn.Module) -> list[tuple[nn.Module, str, str, str]]:
     """Return list of (parent, liquid_attr, plif_attr, plif_kind).
 
     plif_kind in {"PLIF", "PLIFCell"} so the fusion knows which adapter to
@@ -178,8 +175,8 @@ def _fuse_one_pair(
     liquid = getattr(parent, liquid_attr)
     plif = getattr(parent, plif_attr)
 
-    d_in = int(getattr(liquid, "in_dim"))
-    d_hidden = int(getattr(liquid, "hidden_dim"))
+    d_in = int(liquid.in_dim)
+    d_hidden = int(liquid.hidden_dim)
     alpha = float(getattr(plif, "alpha", 2.0))
 
     shared = _SharedTritonBlock(
@@ -224,7 +221,7 @@ def _fuse_one_pair(
 def _apply_fusion(root: nn.Module) -> dict:
     """Walk the model and rewrite every Liquid->PLIF/PLIFCell pair."""
     pairs = _find_pairs(root)
-    fused_blocks: List[_SharedTritonBlock] = []
+    fused_blocks: list[_SharedTritonBlock] = []
     for parent, l_attr, p_attr, kind in pairs:
         sb = _fuse_one_pair(parent, l_attr, p_attr, kind)
         fused_blocks.append(sb)

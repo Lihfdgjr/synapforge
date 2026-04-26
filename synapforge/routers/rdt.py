@@ -51,7 +51,6 @@ import torch.nn.functional as F
 
 from ..module import Module
 
-
 # ---------------------------------------------------------------------------
 # 1. Loop-index sinusoidal embedding
 # ---------------------------------------------------------------------------

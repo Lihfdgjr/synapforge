@@ -9,8 +9,8 @@ PlasticityEngine on equal footing with sf.LiquidCell / sf.PLIF.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable, Tuple
 
 import torch
 import torch.nn as nn
@@ -18,13 +18,12 @@ import torch.nn.functional as F
 
 from ..module import Module
 
-
 # ---------------------------------------------------------------------------
 # Action-type vocabulary and key vocabulary (default values, override via
 # OSActionSpec).
 # ---------------------------------------------------------------------------
 
-ACTION_TYPES: Tuple[str, ...] = (
+ACTION_TYPES: tuple[str, ...] = (
     "click",         # 0
     "double_click",  # 1
     "right_click",   # 2
@@ -37,7 +36,7 @@ ACTION_TYPES: Tuple[str, ...] = (
 )
 
 # 80-key desktop vocabulary (letters + digits + modifiers + nav + chords).
-KEY_VOCAB: Tuple[str, ...] = (
+KEY_VOCAB: tuple[str, ...] = (
     *"abcdefghijklmnopqrstuvwxyz",
     *"0123456789",
     "ctrl", "shift", "alt", "meta",
@@ -72,14 +71,14 @@ class OSActionSpec:
     modifying the global KEY_VOCAB tuple.
     """
 
-    action_types: Tuple[str, ...] = ACTION_TYPES
-    key_vocab: Tuple[str, ...] = KEY_VOCAB
-    extra_keys: Tuple[str, ...] = field(default_factory=tuple)
+    action_types: tuple[str, ...] = ACTION_TYPES
+    key_vocab: tuple[str, ...] = KEY_VOCAB
+    extra_keys: tuple[str, ...] = field(default_factory=tuple)
     mlp_hidden: int | None = None
     dropout: float = 0.0
 
     @classmethod
-    def default(cls) -> "OSActionSpec":
+    def default(cls) -> OSActionSpec:
         return cls()
 
     @property
@@ -87,7 +86,7 @@ class OSActionSpec:
         return len(self.action_types)
 
     @property
-    def all_keys(self) -> Tuple[str, ...]:
+    def all_keys(self) -> tuple[str, ...]:
         return self.key_vocab + self.extra_keys
 
     @property

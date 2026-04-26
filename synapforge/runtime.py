@@ -46,13 +46,13 @@ class Runtime:
             return iter([])
         return root.parameters()
 
-    def train(self, mode: bool = True) -> "Runtime":
+    def train(self, mode: bool = True) -> Runtime:
         root = self.graph.modules.get("root")
         if root is not None:
             root.train(mode)
         return self
 
-    def eval(self) -> "Runtime":
+    def eval(self) -> Runtime:
         return self.train(False)
 
     def __repr__(self) -> str:

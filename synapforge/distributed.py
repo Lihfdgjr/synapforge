@@ -40,13 +40,10 @@ Launch
 from __future__ import annotations
 
 import os
-import warnings
-from typing import List, Optional, Sequence
 
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
 
 # ---------------------------------------------------------------------------
 # Plasticity-buffer pattern matching
@@ -153,7 +150,7 @@ def _unwrap(model: torch.nn.Module) -> torch.nn.Module:
     return model.module if hasattr(model, "module") else model
 
 
-def get_plastic_buffers(model: torch.nn.Module) -> List[torch.Tensor]:
+def get_plastic_buffers(model: torch.nn.Module) -> list[torch.Tensor]:
     """Enumerate all floating-point plasticity buffers in `model`.
 
     Filters:
@@ -165,7 +162,7 @@ def get_plastic_buffers(model: torch.nn.Module) -> List[torch.Tensor]:
         backends register before dim is known)
     """
     raw = _unwrap(model)
-    out: List[torch.Tensor] = []
+    out: list[torch.Tensor] = []
     for name, buf in raw.named_buffers():
         if not is_plastic_buffer(name):
             continue
@@ -177,7 +174,7 @@ def get_plastic_buffers(model: torch.nn.Module) -> List[torch.Tensor]:
     return out
 
 
-def get_plastic_buffer_names(model: torch.nn.Module) -> List[str]:
+def get_plastic_buffer_names(model: torch.nn.Module) -> list[str]:
     """Same as `get_plastic_buffers` but returns names. Debug helper."""
     raw = _unwrap(model)
     return [
@@ -221,7 +218,7 @@ class PlasticBufferSync:
 
     def __init__(self, model: torch.nn.Module) -> None:
         self.model = model
-        self.bufs: List[torch.Tensor] = get_plastic_buffers(model)
+        self.bufs: list[torch.Tensor] = get_plastic_buffers(model)
         self._has_avg_op = self._probe_avg_op()
 
     @staticmethod
@@ -257,7 +254,7 @@ class PlasticBufferSync:
 
         # Group by dtype (NCCL all-reduce wants a single dtype per call).
         from collections import defaultdict
-        by_dtype: dict[torch.dtype, List[torch.Tensor]] = defaultdict(list)
+        by_dtype: dict[torch.dtype, list[torch.Tensor]] = defaultdict(list)
         for b in self.bufs:
             by_dtype[b.dtype].append(b)
 

@@ -17,7 +17,6 @@ import argparse
 import os
 import sys
 import time
-from typing import Optional
 
 # Make /workspace importable so both `synapforge` and `mscfc` resolve.
 _WS = "/workspace"
@@ -26,7 +25,6 @@ if _WS not in sys.path:
 
 import torch
 import torch.nn.functional as F
-
 
 # ------------------------------------------------------------------ sampling
 
@@ -72,8 +70,8 @@ def generate(
     top_k: int = 40,
     top_p: float = 0.9,
     temperature: float = 0.7,
-    device: Optional[str] = None,
-    max_seq: Optional[int] = None,
+    device: str | None = None,
+    max_seq: int | None = None,
 ) -> str:
     """Generate up to `max_new` tokens after `prompt`. Returns decoded string.
 
@@ -127,8 +125,8 @@ def load_tokenizer(name: str = "gpt2"):
     return tok
 
 
-def load_synapforge(ckpt_path: Optional[str] = None,
-                    fresh_warmstart_from: Optional[str] = None,
+def load_synapforge(ckpt_path: str | None = None,
+                    fresh_warmstart_from: str | None = None,
                     device: str = "cuda"):
     """Load a synapforge 100M model.
 

@@ -35,7 +35,6 @@ import torch.nn.functional as F
 import synapforge as sf
 import synapforge.action as sfa
 
-
 # ----------------------------------------------------------------------------
 # NeuralComputerAgent — built on synapforge primitives.
 # ----------------------------------------------------------------------------

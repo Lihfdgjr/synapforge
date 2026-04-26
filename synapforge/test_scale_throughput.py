@@ -1,10 +1,17 @@
 """Apples-to-apples throughput: 1-GPU at global B=64 vs 2-GPU at B=32/rank (=64 global)."""
 from __future__ import annotations
-import sys, time, os, torch, torch.nn.functional as F, torch.distributed as dist
+
+import os
+import sys
+import time
+
+import torch
+import torch.nn.functional as F
+
 sys.path.insert(0, "/workspace")
-import synapforge as sf
-from synapforge import distributed as sfd
 from test_distributed_smoke import TinyHybrid
+
+from synapforge import distributed as sfd
 
 D, L, T = 512, 4, 64
 GLOBAL_B = 64

@@ -23,15 +23,12 @@ Returns
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from ..module import Module
 from .audio import sinusoidal_1d
-
 
 # Standard EEG bands in Hz.
 _EEG_BANDS = (

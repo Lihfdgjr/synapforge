@@ -38,12 +38,10 @@ if "/workspace" not in sys.path:
     sys.path.insert(0, "/workspace")
 
 from synapforge.cells.liquid import LiquidCell
-from synapforge.surrogate import PLIFCell
-from synapforge.optim import build_optimizer
-from synapforge.plasticity import Hebbian, PlasticityEngine
-from synapforge.train import train
 from synapforge.data import ParquetTokenStream
-
+from synapforge.plasticity import Hebbian, PlasticityEngine
+from synapforge.surrogate import PLIFCell
+from synapforge.train import train
 
 WARMSTART_CKPT = "/workspace/runs/step_001250.pt"  # adv29
 OUT_DIR = "/workspace/runs/synapforge_smoke"

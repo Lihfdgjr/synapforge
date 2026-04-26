@@ -14,8 +14,6 @@ Outputs a table to bench_mfu_roofline.txt
 
 from __future__ import annotations
 
-import os
-
 A100_PEAK = 312e12
 A100_HBM = 2.04e12  # 2.04 TB/s
 RIDGE = A100_PEAK / A100_HBM  # ~153 FLOPs/byte
@@ -101,7 +99,7 @@ def main() -> None:
         f.write(f"{'op':<24} {'shape (MxKxN)':<22} {'GFLOPs':>10} {'MB':>10} {'AI':>8} {'regime':<14} {'ceil TF':>10}\n")
         f.write("-" * 105 + "\n")
         f.write("\n".join(out_lines) + "\n\n")
-        f.write(f"[summary]\n")
+        f.write("[summary]\n")
         f.write(f"  LM head GEMM share of fwd FLOPs: {head_share*100:.1f}%\n")
         f.write(f"  LM head regime:    {rows[0]['regime']} (AI={rows[0]['AI']:.1f}, ceil {rows[0]['ceiling_TFLOPS']:.0f} TF)\n")
         f.write(f"  SwiGLU regime:     {rows[2]['regime']} (AI={rows[2]['AI']:.1f}, ceil {rows[2]['ceiling_TFLOPS']:.0f} TF)\n")

@@ -23,12 +23,12 @@ input dtype on forward.
 
 from __future__ import annotations
 
-from .kwta import KWTA
-from .tau import TauSplit, MultiBandTau
-from .learnable_threshold import LearnableThreshold
-from .stdp_fast import STDPFastWeight
-from .predictive import PredictiveCoding
 from .astrocyte import AstrocyteGate
+from .kwta import KWTA
+from .learnable_threshold import LearnableThreshold
+from .predictive import PredictiveCoding
+from .stdp_fast import STDPFastWeight
+from .tau import MultiBandTau, TauSplit
 
 __all__ = [
     "KWTA",

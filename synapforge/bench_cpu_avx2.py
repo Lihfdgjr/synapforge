@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import os
 import sys
-import time
-import subprocess
 import threading
+import time
 
 import numpy as np
 import torch
@@ -24,15 +23,12 @@ import torch.nn as nn
 
 sys.path.insert(0, "/workspace")
 
+from synapforge.backends.cpu_avx2 import (  # noqa: E402
+    _HAS_NUMBA,
+    NumbaHybridBlock,
+)
 from synapforge.cells.liquid import LiquidCell  # noqa: E402
 from synapforge.cells.plif import PLIF  # noqa: E402
-from synapforge.backends.cpu_avx2 import (  # noqa: E402
-    CpuAvx2Backend,
-    NumbaHybridBlock,
-    _fused_forward,
-    _HAS_NUMBA,
-)
-
 
 # ---------------------------------------------------------------------------
 # Shapes
@@ -166,7 +162,7 @@ def main():
 
     def rel(a, b):
         a, b = a.flatten().float(), b.flatten().float()
-        return float(((a - b).abs().max() / (b.abs().max() + 1e-12)))
+        return float((a - b).abs().max() / (b.abs().max() + 1e-12))
 
     print(f"  rel_err  y  : {rel(y_n, y_ref):.2e}  (eager max: {y_ref.abs().max():.3f})")
     print(f"  rel_err spk : {rel(spk_n, spk_ref):.2e}  (rate ref: {spk_ref.mean():.3f}, numba: {spk_n.mean():.3f})")
@@ -205,7 +201,8 @@ def main():
     try:
         if torch.cuda.is_available():
             from synapforge.backends.triton_block_kernel import (
-                TritonHybridBlock, _HAS_TRITON,
+                _HAS_TRITON,
+                TritonHybridBlock,
             )
             if _HAS_TRITON:
                 gpu = TritonHybridBlock(d_in=D, d_hidden=D).cuda().eval()

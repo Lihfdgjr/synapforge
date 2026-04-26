@@ -17,7 +17,6 @@ Validates
 
 from __future__ import annotations
 
-import os
 import sys
 import time
 
@@ -231,7 +230,7 @@ def main() -> None:
     if rank == 0:
         print("\n=== SMOKE SUMMARY ===", flush=True)
         print(f"  world_size           : {world_size}", flush=True)
-        print(f"  steps                : 50", flush=True)
+        print("  steps                : 50", flush=True)
         print(f"  ms/step (2-GPU)      : {ms_step:.2f}", flush=True)
         print(f"  div WITHOUT sync     : {div_before:.6e}  (must be > 0)", flush=True)
         print(f"  div AFTER one sync   : {div_after_first:.6e}", flush=True)

@@ -48,7 +48,6 @@ import torch.nn.functional as F
 
 from .module import Module
 
-
 # ----------------------------------------------------------------------------
 # L1: recent window — RoPE + local sliding-window GQA
 # ----------------------------------------------------------------------------
@@ -807,7 +806,7 @@ class ChunkedStateCarry:
         step_fn,
         chunk: int = 4096,
         max_memory_tokens: int = 0,
-        disk_archive: "DiskMemmapArchive | None" = None,
+        disk_archive: DiskMemmapArchive | None = None,
     ):
         self.step_fn = step_fn
         self.chunk = int(chunk)
@@ -905,7 +904,7 @@ class StreamingInfiniteEvaluator:
         step_fn,
         chunk_size: int = 8192,
         checkpoint_every: int = 8,
-        checkpoint_path: "str | os.PathLike | None" = None,
+        checkpoint_path: str | os.PathLike | None = None,
         accumulator=None,
     ):
         self.step_fn = step_fn

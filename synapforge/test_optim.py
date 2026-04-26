@@ -1,8 +1,6 @@
 """Tests for sf.optim — pure BP, pure plasticity, mixed, and convergence."""
 from __future__ import annotations
 
-import copy
-
 import torch
 
 from synapforge.optim import (

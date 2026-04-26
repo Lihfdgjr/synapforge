@@ -19,7 +19,6 @@ Tests
 from __future__ import annotations
 
 import math
-import os
 import sys
 import time
 
@@ -31,7 +30,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from synapforge.quantize import (
-    DEFAULT_GAMMA_WARMUP_STEPS,
     TernaryLinear,
     TernaryQuantizer,
     convert_model_to_ternary,
@@ -39,7 +37,6 @@ from synapforge.quantize import (
     freeze_gamma,
     quantize_ternary,
 )
-
 
 # Tests run on GPU 1 to avoid colliding with other agents on GPU 0.
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")  # GPU 1 mapped via CUDA_VISIBLE_DEVICES=1

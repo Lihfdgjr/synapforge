@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .graph import IRGraph, IRNode
 from .compiler import compile_module
+from .graph import IRGraph, IRNode
 from .synaptogenesis import (
     CompilerPass,
     RigL,

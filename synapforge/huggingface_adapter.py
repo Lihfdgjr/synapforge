@@ -31,10 +31,10 @@ from __future__ import annotations
 import os
 import re
 import sys
-import time
 import warnings
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any
 
 import torch
 
@@ -189,7 +189,7 @@ def _apply_rename(name: str, rules: Sequence[tuple[str, str]]) -> str:
     return out
 
 
-def _attempt_shape_fit(src: torch.Tensor, dst_shape: tuple[int, ...]) -> Optional[torch.Tensor]:
+def _attempt_shape_fit(src: torch.Tensor, dst_shape: tuple[int, ...]) -> torch.Tensor | None:
     """Try to fit a source tensor into a target shape via:
        (a) exact match, (b) transpose if 2D and shapes are reversed,
        (c) pad / slice along channel dims for embeddings (e.g. 256->512).
@@ -216,7 +216,7 @@ def adv_warmstart(
     model: torch.nn.Module,
     ckpt_path: str,
     *,
-    name_map: Optional[Sequence[tuple[str, str]]] = None,
+    name_map: Sequence[tuple[str, str]] | None = None,
     state_key: str = "model",
     strict: bool = False,
     allow_partial_shape: bool = True,
@@ -276,7 +276,7 @@ def adv_warmstart(
     for tgt_name, tgt_tensor in target_sd.items():
         # Try direct, then suffix-match, then rule-then-direct.
         candidate = None
-        cand_key: Optional[str] = None
+        cand_key: str | None = None
         if tgt_name in renamed_src:
             candidate = renamed_src[tgt_name]
             cand_key = tgt_name

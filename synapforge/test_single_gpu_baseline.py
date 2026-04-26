@@ -1,8 +1,13 @@
 """1-GPU baseline for throughput comparison with DDP smoke."""
 from __future__ import annotations
-import sys, time, torch, torch.nn.functional as F
+
+import sys
+import time
+
+import torch
+import torch.nn.functional as F
+
 sys.path.insert(0, "/workspace")
-import synapforge as sf
 from test_distributed_smoke import TinyHybrid
 
 torch.manual_seed(42)

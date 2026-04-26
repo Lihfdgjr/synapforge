@@ -51,8 +51,8 @@ from __future__ import annotations
 
 import time
 import warnings
-from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import torch
 
@@ -78,8 +78,7 @@ def is_available() -> bool:
 # consistency — both transports must agree on which buffers to average).
 # ---------------------------------------------------------------------------
 
-from .distributed import _PLASTIC_PATTERNS, is_plastic_buffer  # noqa: E402
-
+from .distributed import is_plastic_buffer  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Worker (Ray actor when Ray is available, otherwise an in-proc shim)
@@ -104,31 +103,31 @@ class _WorkerImpl:
         # Cached parameter-name list — used to flatten/unflatten gradients
         # for transport. Fixed at init (Ray actors don't see structural
         # mutations on the coordinator).
-        self._param_names: List[str] = [
+        self._param_names: list[str] = [
             n for n, _ in self.model.named_parameters()
         ]
-        self._buf_names: List[str] = [
+        self._buf_names: list[str] = [
             n for n, b in self.model.named_buffers()
             if is_plastic_buffer(n) and b.is_floating_point() and b.numel() > 0
         ]
 
     # --------------------------------------------------------------- weights
 
-    def get_weights(self) -> Dict[str, torch.Tensor]:
+    def get_weights(self) -> dict[str, torch.Tensor]:
         """Return a copy of all parameter tensors (CPU, for transport)."""
         return {
             n: p.detach().cpu().clone()
             for n, p in self.model.named_parameters()
         }
 
-    def set_weights(self, weights: Dict[str, torch.Tensor]) -> None:
+    def set_weights(self, weights: dict[str, torch.Tensor]) -> None:
         """In-place copy of weights into local model."""
         with torch.no_grad():
             for n, p in self.model.named_parameters():
                 if n in weights:
                     p.copy_(weights[n].to(p.device))
 
-    def get_plastic_buffers(self) -> Dict[str, torch.Tensor]:
+    def get_plastic_buffers(self) -> dict[str, torch.Tensor]:
         """Return CPU copies of plasticity buffers, for averaging."""
         named = dict(self.model.named_buffers())
         return {
@@ -137,7 +136,7 @@ class _WorkerImpl:
             if n in named
         }
 
-    def set_plastic_buffers(self, bufs: Dict[str, torch.Tensor]) -> None:
+    def set_plastic_buffers(self, bufs: dict[str, torch.Tensor]) -> None:
         """In-place copy of averaged buffers back into local model."""
         named = dict(self.model.named_buffers())
         with torch.no_grad():
@@ -152,7 +151,7 @@ class _WorkerImpl:
         x: torch.Tensor,
         y: torch.Tensor,
         loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    ) -> Tuple[Dict[str, torch.Tensor], float]:
+    ) -> tuple[dict[str, torch.Tensor], float]:
         """Forward + backward on this worker's data slice.
 
         Returns (flat dict of grads keyed by param name, loss value).
@@ -164,7 +163,7 @@ class _WorkerImpl:
         out = self.model(x_d)
         loss = loss_fn(out, y_d)
         loss.backward()
-        grads: Dict[str, torch.Tensor] = {}
+        grads: dict[str, torch.Tensor] = {}
         for n, p in self.model.named_parameters():
             if p.grad is None:
                 grads[n] = torch.zeros_like(p, device="cpu")
@@ -230,15 +229,15 @@ class AsyncTrainer:
     def __init__(
         self,
         model_factory: Callable[[], torch.nn.Module],
-        cfg: Optional[AsyncTrainerConfig] = None,
+        cfg: AsyncTrainerConfig | None = None,
         device: str = "cpu",
     ) -> None:
         self.cfg = cfg or AsyncTrainerConfig()
         self.model_factory = model_factory
         self.device = device
-        self.workers: List = []
-        self.coord_model: Optional[torch.nn.Module] = None
-        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self.workers: list = []
+        self.coord_model: torch.nn.Module | None = None
+        self.optimizer: torch.optim.Optimizer | None = None
         self._step_count = 0
         self._using_ray = bool(self.cfg.use_ray and _HAS_RAY)
         if self.cfg.use_ray and not _HAS_RAY:
@@ -296,7 +295,7 @@ class AsyncTrainer:
 
     # --------------------------------------------------------------- transport
 
-    def _broadcast_weights(self, weights: Dict[str, torch.Tensor]) -> None:
+    def _broadcast_weights(self, weights: dict[str, torch.Tensor]) -> None:
         """Push the same set of weights into every worker."""
         if self._using_ray:
             handles = [w.set_weights.remote(weights) for w in self.workers]  # type: ignore[attr-defined]
@@ -305,7 +304,7 @@ class AsyncTrainer:
             for w in self.workers:
                 w.set_weights(weights)
 
-    def _broadcast_buffers(self, bufs: Dict[str, torch.Tensor]) -> None:
+    def _broadcast_buffers(self, bufs: dict[str, torch.Tensor]) -> None:
         if self._using_ray:
             handles = [w.set_plastic_buffers.remote(bufs) for w in self.workers]  # type: ignore[attr-defined]
             ray.get(handles)  # type: ignore[union-attr]
@@ -315,10 +314,10 @@ class AsyncTrainer:
 
     def _gather_grads(
         self,
-        xs: List[torch.Tensor],
-        ys: List[torch.Tensor],
+        xs: list[torch.Tensor],
+        ys: list[torch.Tensor],
         loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    ) -> Tuple[List[Dict[str, torch.Tensor]], List[float]]:
+    ) -> tuple[list[dict[str, torch.Tensor]], list[float]]:
         """Fan out compute_grad to N workers, gather grads + losses."""
         if self._using_ray:
             handles = [
@@ -335,7 +334,7 @@ class AsyncTrainer:
         losses = [r[1] for r in results]
         return grads, losses
 
-    def _gather_buffers(self) -> List[Dict[str, torch.Tensor]]:
+    def _gather_buffers(self) -> list[dict[str, torch.Tensor]]:
         if self._using_ray:
             handles = [w.get_plastic_buffers.remote() for w in self.workers]  # type: ignore[attr-defined]
             return ray.get(handles)  # type: ignore[union-attr]
@@ -345,10 +344,10 @@ class AsyncTrainer:
 
     def step(
         self,
-        xs_per_worker: List[torch.Tensor],
-        ys_per_worker: List[torch.Tensor],
+        xs_per_worker: list[torch.Tensor],
+        ys_per_worker: list[torch.Tensor],
         loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor],
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """One gradient step:
 
         broadcast W -> compute grads -> avg -> optim.step -> avg buffers
@@ -367,7 +366,7 @@ class AsyncTrainer:
         t1 = time.perf_counter()
 
         # 2) average grads, write into coord_model.grad
-        avg_grads: Dict[str, torch.Tensor] = {}
+        avg_grads: dict[str, torch.Tensor] = {}
         for k in grads_list[0]:
             stacked = torch.stack([g[k] for g in grads_list], dim=0)
             avg_grads[k] = stacked.mean(dim=0)
@@ -393,7 +392,7 @@ class AsyncTrainer:
         ):
             bufs_list = self._gather_buffers()
             if bufs_list and bufs_list[0]:
-                avg_bufs: Dict[str, torch.Tensor] = {}
+                avg_bufs: dict[str, torch.Tensor] = {}
                 for k in bufs_list[0]:
                     stacked = torch.stack([b[k] for b in bufs_list], dim=0)
                     avg_bufs[k] = stacked.mean(dim=0)

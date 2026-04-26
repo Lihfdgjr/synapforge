@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import torch
 
+from ..ir.graph import IRGraph
 from .base import Backend
 from .gpu_dense import GPUDenseBackend
-from ..ir.graph import IRGraph
 
 
 class CPUEventBackend(Backend):

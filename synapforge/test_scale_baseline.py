@@ -1,9 +1,15 @@
 """1-GPU baseline at the bigger scale."""
 from __future__ import annotations
-import sys, time, torch, torch.nn.functional as F
+
+import sys
+import time
+
+import torch
+import torch.nn.functional as F
+
 sys.path.insert(0, "/workspace")
-import synapforge as sf
 from test_distributed_smoke import TinyHybrid
+
 torch.manual_seed(42)
 device = torch.device("cuda:0"); torch.cuda.set_device(device)
 D, L, B, T = 512, 4, 32, 64

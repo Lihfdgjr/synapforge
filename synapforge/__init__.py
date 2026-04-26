@@ -17,40 +17,43 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
-from .module import Module
+# sf.action — direct neural OS/UI control (NeuroMCP + ActionHead).
+# sf.modal -- first-class multimodal embedding (text + image + audio + video).
+from . import action, distributed, interop_torch, modal
+from .action import (
+    ActionHead,
+    DynamicActionCodebook,
+    NeuroMCPHead,
+    OSActionSpec,
+    OSActuator,
+)
 from .cells.liquid import LiquidCell
 from .cells.plif import PLIF
 from .cells.synapse import SparseSynapse
-from .plasticity import (
-    HebbianPlasticity, STDP,
-    PlasticityRule, Hebbian, BCM, SynaptogenesisGrowPrune, PlasticityEngine,
-)
-from .runtime import compile, Runtime
-from .optim import build_optimizer, MultiSourceParam, PlasticityAwareAdamW, Param
-from .surrogate import spike, PLIFCell, register as register_surrogate
-from .train import train
 from .data import ParquetTokenStream
-from . import distributed
-from .distributed import init_dist, wrap_model, PlasticBufferSync
-from . import interop_torch
+from .distributed import PlasticBufferSync, init_dist, wrap_model
 from .interop_torch import (
-    SFAsTorchModule, TorchAsSFModule,
-    replace_linear_with_sparse, replace_relu_with_plif,
+    SFAsTorchModule,
+    TorchAsSFModule,
     convert_sparse_to_linear,
+    replace_linear_with_sparse,
+    replace_relu_with_plif,
 )
-# sf.action — direct neural OS/UI control (NeuroMCP + ActionHead).
-from . import action
-from .action import (
-    ActionHead,
-    NeuroMCPHead,
-    OSActuator,
-    OSActionSpec,
-    DynamicActionCodebook,
+from .module import Module
+from .optim import MultiSourceParam, Param, PlasticityAwareAdamW, build_optimizer
+from .plasticity import (
+    BCM,
+    STDP,
+    Hebbian,
+    HebbianPlasticity,
+    PlasticityEngine,
+    PlasticityRule,
+    SynaptogenesisGrowPrune,
 )
-
-
-# sf.modal -- first-class multimodal embedding (text + image + audio + video).
-from . import modal
+from .runtime import Runtime, compile
+from .surrogate import PLIFCell, spike
+from .surrogate import register as register_surrogate
+from .train import train
 
 
 def tied_lm_head(hidden, vocab, embedding=None):
@@ -105,38 +108,61 @@ __all__ = [
 # Bio-inspired modules (sub-package).
 from . import bio  # re-exported as sf.bio.{KWTA, TauSplit, ...}
 
-# Wave / depth mixers (sequence-axis spectral).
-from .wave_mixer import (
-    WaveFormer1D, Hyena1D, FNet1D, attach_wave_mixer_to_block,
-)
-
-# World-model head + hypothesis search.
-from .world_model import (
-    WorldModelHead, WorldModelLoss, WorldModelOutput,
-    HypothesisGenerator, HypothesisOutput, WorldModelCritic,
-)
-
-# Latent-space thinking (Coconut / Quiet-STaR style).
-from .latent_thinking import (
-    ThinkingTokens, ThinkingActionTokens,
-    LatentLoopController, LatentConsistencyLoss, LatentSearchBeam,
+# Long-context (5-tier memory hierarchy).
+from .infinite import (
+    AdaptiveSlowTau,
+    ChunkedStateCarry,
+    DeltaCompress,
+    DiskMemmapArchive,
+    ExternalVectorMemory,
+    HierarchicalMemory,
+    HierarchicalMemoryConfig,
+    InfiniteContextReader,
+    InfiniteReaderConfig,
+    LocalGQAttention,
+    LongContextMonitor,
+    RotaryPositionEncoding,
+    SSMDiagScan,
+    StreamingInfiniteEvaluator,
 )
 
 # Intrinsic-motivation (curiosity / homeostasis / self-goals).
 from .intrinsic import (
-    FreeEnergySurprise, SelfGoalProposer, ImaginationRollout,
-    NoveltyDrive, HomeostaticRegulator, IdleLoop, GoalMemory,
+    FreeEnergySurprise,
+    GoalMemory,
+    HomeostaticRegulator,
+    IdleLoop,
+    ImaginationRollout,
     IntrinsicReward,
+    NoveltyDrive,
+    SelfGoalProposer,
 )
 
-# Long-context (5-tier memory hierarchy).
-from .infinite import (
-    RotaryPositionEncoding, LocalGQAttention,
-    HierarchicalMemoryConfig, HierarchicalMemory, DeltaCompress,
-    AdaptiveSlowTau, SSMDiagScan,
-    ExternalVectorMemory, DiskMemmapArchive,
-    InfiniteReaderConfig, InfiniteContextReader,
-    ChunkedStateCarry, LongContextMonitor, StreamingInfiniteEvaluator,
+# Latent-space thinking (Coconut / Quiet-STaR style).
+from .latent_thinking import (
+    LatentConsistencyLoss,
+    LatentLoopController,
+    LatentSearchBeam,
+    ThinkingActionTokens,
+    ThinkingTokens,
+)
+
+# Wave / depth mixers (sequence-axis spectral).
+from .wave_mixer import (
+    FNet1D,
+    Hyena1D,
+    WaveFormer1D,
+    attach_wave_mixer_to_block,
+)
+
+# World-model head + hypothesis search.
+from .world_model import (
+    HypothesisGenerator,
+    HypothesisOutput,
+    WorldModelCritic,
+    WorldModelHead,
+    WorldModelLoss,
+    WorldModelOutput,
 )
 
 __all__ += [
@@ -166,11 +192,23 @@ __all__ += [
 # Routers (sub-package: MoR / CoE / MoE / RDT depth-control primitives).
 from . import routers  # re-exported as sf.routers.{ChainOfExperts, RDTLoop, ...}
 from .routers import (
-    MoRStack, ChainOfExperts, RDTLoop, RDTConfig,
-    LoopIndexEmbedding, LayerScale, ResidualGateBias, DepthLoRAAdapter, AccelExit,
-    DeepSeekMoE, FineGrainedExpert, SharedExpertGroup, TopKRouter,
-    RouterOutput, MoELoadBalanceLoss,
-    attach_coe_to_block, attach_moe_to_block,
+    AccelExit,
+    ChainOfExperts,
+    DeepSeekMoE,
+    DepthLoRAAdapter,
+    FineGrainedExpert,
+    LayerScale,
+    LoopIndexEmbedding,
+    MoELoadBalanceLoss,
+    MoRStack,
+    RDTConfig,
+    RDTLoop,
+    ResidualGateBias,
+    RouterOutput,
+    SharedExpertGroup,
+    TopKRouter,
+    attach_coe_to_block,
+    attach_moe_to_block,
 )
 
 # Aliases preserving the original mscfc class names so legacy callers /
@@ -203,37 +241,53 @@ __all__ += [
 #  feedback_tool_use_web_access.md — these are MANDATORY bedrock features).
 # ---------------------------------------------------------------------------
 
-from . import self_learn  # noqa: E402
-from .self_learn import (  # noqa: E402
-    ExperienceReplayBuffer, TestTimeTraining, SelfPlayLoop,
-    MAMLAdapter, SelfLearnEngine,
+from . import (
+    adversarial,  # noqa: E402
+    defense,  # noqa: E402
+    distill,  # noqa: E402
+    self_learn,  # noqa: E402
+    tools,  # noqa: E402
 )
-
-from . import defense  # noqa: E402
-from .defense import (  # noqa: E402
-    PoisonDetector, ProvenanceTracker, ProvenanceRecord,
-    WeightFirewall, AdversarialRedTeam,
-    DefenseConfig, DefenseStack,
-)
-
-from . import tools  # noqa: E402
-from .tools import (  # noqa: E402
-    ToolSpec, ToolRegistry,
-    WebSearchTool, WebFetchTool, WebScrapeTool,
-    ShellTool, CodeExecTool,
-    ToolCaller, ToolLearningLoop,
-)
-
-from . import adversarial  # noqa: E402
 from .adversarial import (  # noqa: E402
-    FastGradientSignAttack, ProjectedGradientDescentAttack,
-    TokenDiscriminator, adversarial_losses,
-    AdversarialTrainerCfg, AdversarialTrainer,
+    AdversarialTrainer,
+    AdversarialTrainerCfg,
+    FastGradientSignAttack,
+    ProjectedGradientDescentAttack,
+    TokenDiscriminator,
+    adversarial_losses,
 )
-
-from . import distill  # noqa: E402
+from .defense import (  # noqa: E402
+    AdversarialRedTeam,
+    DefenseConfig,
+    DefenseStack,
+    PoisonDetector,
+    ProvenanceRecord,
+    ProvenanceTracker,
+    WeightFirewall,
+)
 from .distill import (  # noqa: E402
-    TeacherCache, DistillationLoss, DistillConfig, DistillTrainer,
+    DistillationLoss,
+    DistillConfig,
+    DistillTrainer,
+    TeacherCache,
+)
+from .self_learn import (  # noqa: E402
+    ExperienceReplayBuffer,
+    MAMLAdapter,
+    SelfLearnEngine,
+    SelfPlayLoop,
+    TestTimeTraining,
+)
+from .tools import (  # noqa: E402
+    CodeExecTool,
+    ShellTool,
+    ToolCaller,
+    ToolLearningLoop,
+    ToolRegistry,
+    ToolSpec,
+    WebFetchTool,
+    WebScrapeTool,
+    WebSearchTool,
 )
 
 __all__ += [

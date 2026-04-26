@@ -23,7 +23,6 @@ The point of this bench is to confirm two things:
 from __future__ import annotations
 
 import io
-import os
 import sys
 import time
 
@@ -31,7 +30,6 @@ sys.path.insert(0, "/workspace")
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from synapforge.quantize import (
     TernaryLinear,
@@ -39,7 +37,6 @@ from synapforge.quantize import (
     count_ternary_params,
     freeze_gamma,
 )
-
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(0)

@@ -25,7 +25,7 @@ stateful spiking neuron, not a pointwise nonlinearity).
 from __future__ import annotations
 
 import warnings
-from typing import Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 import torch
 import torch.nn as nn
@@ -144,7 +144,7 @@ class TorchAsSFModule(SFModule):
 
 def list_replaceable_modules(
     model: nn.Module, target_cls: type
-) -> List[Tuple[str, nn.Module]]:
+) -> list[tuple[str, nn.Module]]:
     """Return ``(qualified_name, module)`` pairs for instances of ``target_cls``."""
     return [(n, m) for n, m in model.named_modules() if isinstance(m, target_cls)]
 
@@ -172,10 +172,10 @@ def replace_linear_with_sparse(
     model: nn.Module,
     density: float = 0.05,
     *,
-    skip_modules: Optional[Iterable[str]] = None,
+    skip_modules: Iterable[str] | None = None,
     copy_weights: bool = True,
     verbose: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Walk ``model``; replace each ``nn.Linear`` with :class:`sf.SparseSynapse`.
 
     Useful for retrofit-ing existing models to add structural plasticity
@@ -196,7 +196,7 @@ def replace_linear_with_sparse(
         List of qualified names of replaced linears.
     """
     skip = set(skip_modules or ())
-    replaced: List[str] = []
+    replaced: list[str] = []
     targets = list_replaceable_modules(model, nn.Linear)
     # SparseSynapse is itself a Linear-like; don't recurse into our own.
     for qn, mod in targets:
@@ -234,10 +234,10 @@ def replace_relu_with_plif(
     model: nn.Module,
     threshold: float = 1.0,
     *,
-    skip_modules: Optional[Iterable[str]] = None,
-    hidden_dim_hint: Optional[int] = None,
+    skip_modules: Iterable[str] | None = None,
+    hidden_dim_hint: int | None = None,
     verbose: bool = True,
-) -> List[str]:
+) -> list[str]:
     """Walk ``model``; replace each ``nn.ReLU`` with :class:`sf.PLIF`.
 
     .. warning::
@@ -261,7 +261,7 @@ def replace_relu_with_plif(
         List of qualified names of replaced ReLUs.
     """
     skip = set(skip_modules or ())
-    replaced: List[str] = []
+    replaced: list[str] = []
     targets = list_replaceable_modules(model, nn.ReLU)
     if not targets:
         return replaced
@@ -273,8 +273,8 @@ def replace_relu_with_plif(
         )
 
     # Pre-build a mapping from each name -> the latest dim seen prior.
-    dim_by_name: dict[str, Optional[int]] = {}
-    last_dim: Optional[int] = hidden_dim_hint
+    dim_by_name: dict[str, int | None] = {}
+    last_dim: int | None = hidden_dim_hint
     for n, m in model.named_modules():
         # Update last_dim when we see something with a clear out-channel.
         if isinstance(m, nn.Linear):
@@ -333,7 +333,7 @@ def replace_relu_with_plif(
 
 def convert_sparse_to_linear(
     model: nn.Module, *, verbose: bool = False
-) -> List[str]:
+) -> list[str]:
     """Walk ``model``; replace each :class:`sf.SparseSynapse` back to ``nn.Linear``.
 
     Multiplies the weight by the boolean mask before copying so the
@@ -344,7 +344,7 @@ def convert_sparse_to_linear(
     Returns:
         List of qualified names of replaced SparseSynapses.
     """
-    replaced: List[str] = []
+    replaced: list[str] = []
     targets = list_replaceable_modules(model, SparseSynapse)
     for qn, mod in targets:
         if qn == "":

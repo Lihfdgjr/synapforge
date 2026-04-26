@@ -24,7 +24,6 @@ Validated on the 4-button toy env in /workspace/mscfc_neuromcp.py:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -32,7 +31,6 @@ import torch.nn.functional as F
 
 from ..module import Module
 from ..plasticity import SynaptogenesisGrowPrune
-
 
 # ---------------------------------------------------------------------------
 # Configs
@@ -267,9 +265,9 @@ class NeuroMCPHead(Module):
         codebook_max: int = 64,
         synapse_density: float = 0.05,
         synapse_max_density: float = 0.40,
-        codebook_cfg: Optional[CodebookConfig] = None,
-        synapse_cfg: Optional[SynaptogenesisConfig] = None,
-        growth_rule: Optional[SynaptogenesisGrowPrune] = None,
+        codebook_cfg: CodebookConfig | None = None,
+        synapse_cfg: SynaptogenesisConfig | None = None,
+        growth_rule: SynaptogenesisGrowPrune | None = None,
     ) -> None:
         super().__init__()
         if codebook_cfg is None:

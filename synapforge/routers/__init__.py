@@ -30,25 +30,25 @@ That's why every API takes a ``body=`` arg. CfC+PLIF stays untouched.
 
 from __future__ import annotations
 
-from .mor import MoRStack, MoRRouter
 from .coe import ChainOfExperts, attach_coe_to_block
 from .moe import (
     DeepSeekMoE,
     FineGrainedExpert,
+    MoELoadBalanceLoss,
+    RouterOutput,
     SharedExpertGroup,
     TopKRouter,
-    RouterOutput,
-    MoELoadBalanceLoss,
     attach_moe_to_block,
 )
+from .mor import MoRRouter, MoRStack
 from .rdt import (
-    RDTLoop,
-    RDTConfig,
-    LoopIndexEmbedding,
-    LayerScale,
-    ResidualGateBias,
-    DepthLoRAAdapter,
     AccelExit,
+    DepthLoRAAdapter,
+    LayerScale,
+    LoopIndexEmbedding,
+    RDTConfig,
+    RDTLoop,
+    ResidualGateBias,
 )
 
 __all__ = [

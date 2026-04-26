@@ -17,14 +17,14 @@ from __future__ import annotations
 
 import warnings
 from collections import OrderedDict
-from typing import Any, Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .module import Module
-
 
 # ---------------------------------------------------------------------------
 # 1. Experience replay (DER++ style)

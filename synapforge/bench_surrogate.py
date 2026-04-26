@@ -16,7 +16,6 @@ Run: /opt/conda/bin/python /workspace/synapforge/bench_surrogate.py
 
 from __future__ import annotations
 
-import math
 import time
 
 import torch

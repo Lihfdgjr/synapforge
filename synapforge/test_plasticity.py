@@ -16,11 +16,10 @@ import torch
 
 from synapforge.plasticity import (
     BCM,
+    STDP,
     Hebbian,
     HebbianPlasticity,
     PlasticityEngine,
-    PlasticityRule,
-    STDP,
     SynaptogenesisGrowPrune,
 )
 
