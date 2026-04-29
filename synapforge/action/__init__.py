@@ -61,6 +61,8 @@ from .neuromcp import (
     SparseSynapticLayer,
     SynaptogenesisConfig,
 )
+from .skill_log import SkillEntry, SkillLog
+from .per_domain_neuromcp import PerDomainNeuroMCP, SingleDomainHead
 
 __all__ = [
     # head.py
@@ -84,4 +86,9 @@ __all__ = [
     "FourButtonEnv",
     "PatchEncoder",
     "SpatialXYHead",
+    # v4.2: persistent skill memory + per-domain heads
+    "SkillEntry",
+    "SkillLog",
+    "PerDomainNeuroMCP",
+    "SingleDomainHead",
 ]
