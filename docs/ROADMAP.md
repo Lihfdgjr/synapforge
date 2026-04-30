@@ -117,6 +117,43 @@ Risk: SmolLM2-360M reaches WikiText ppl ~20; we currently sit at ~50. Either
 train longer (200 GPU-h) or lead with energy/inference advantages instead of
 quality parity.
 
+## Reasoning length penalty (ALP, arXiv 2506.05256)
+
+After v4.2 has stable chat ckpt, add **Adaptive Length Penalty** RL on top of
+Coconut latent thinking. Reward formula:
+
+```
+r(y, q) = 1[answer(y) = y*] − β · N · max(p_solve(q), 1/K)
+```
+
+- `N` = num Coconut thinking steps + 0.5 × num NeuroMCP tool calls
+- `p_solve(q)` = empirical solve rate over K=8 GRPO rollouts
+- Easy prompts → steep length penalty (force shortcut)
+- Hard prompts → near-zero penalty (let it think)
+- **GRPO-λ guard** (2505.18086): only penalize when group accuracy ≥ 0.4
+
+Curriculum: `β = 0` until base `p_solve > 0.3` on held-out set; then ramp.
+Premature length pressure collapses small models (warning from 2602.09591).
+
+Reach goal: model learns "use as few thinking steps as possible while staying
+correct." Effective on Coconut because k=1→8 is exactly the cost axis being
+penalized.
+
+Estimated cost: 60 GPU-h on top of base v4.2.
+
+## Async chat kernel deployment
+
+The `synapforge.chat` kernel (event_loop + interrupt_policy + streaming +
+turn_taking + proactive) replaces synchronous request-response. Production
+chat needs:
+
+- WebSocket / SSE bridge from web UI to `kernel.send_user_*` / `outbox_stream`
+- Per-keystroke partial-message support (already in kernel)
+- Mute button → `kernel.send_mute(seconds)`
+- Cron schedule UI → `kernel.proactive.cron.schedule(fire_at_ts, message)`
+
+Estimated cost: 20 GPU-h for end-to-end testing with real users.
+
 ## Total resource estimate
 
 | Item | GPU-h | Cost (¥7/h A100×2) |
@@ -127,8 +164,10 @@ quality parity.
 | 3D DUSt3R+EGNN | 140 | 980 |
 | OSWorld actuator + DreamerV3 | 400 | 2800 |
 | Anthropic safety | 12 | 85 |
+| ALP reasoning RL (2506.05256) | 60 | 420 |
+| Async chat kernel test runs | 20 | 140 |
 | Misc eval / re-runs | 100 | 700 |
-| **Total** | **1100** | **¥7650** |
+| **Total** | **1180** | **¥8210** |
 
 8 weeks elapsed. Single dev. Ship NeurIPS submission + EMNLP backup.
 
