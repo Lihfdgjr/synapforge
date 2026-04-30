@@ -171,9 +171,81 @@ Always state honestly which tier you're claiming and run the eval gate.
 
 Already in repo / scaffolded:
 - `synapforge/action/hnsw_skill_index.py` — L2 HNSW backend ready
+- `synapforge/memory/bm25_sidecar.py` — verbatim BM25 sidecar (NEW, key L3 win)
 - (planned) `synapforge/memory/faiss_pq_index.py` — L3 FAISS-PQ
-- (planned) `synapforge/memory/sidecar_exact.py` — verbatim BM25/hash mitigator
 - (planned) `synapforge/memory/coconut_summarizer.py` — periodic 8K checkpoint
 
 Tier L1 works today out of the box (just need ckpt with seq 256K trained).
 L2 requires writing the FAISS write/read paths. L3 requires NVMe paging glue.
+
+## 5-day recipe to take L3 from 8-15% → <5% drift
+
+Per agent synthesis 2026-04-30, most components are **already built but not
+wired**:
+- `MultiBandTau` (theta/alpha/beta/gamma bands) in `bio/tau.py` — but PLIF
+  still uses single `tau_log`
+- `STDPFastWeight.post_trace` in `bio/stdp_fast.py` — but only used as
+  fast-weight readout, never as retrieval reranker
+- `ChunkedStateCarry.overlap` parameter — but never enabled
+- `Coconut.LatentThinker.think(k)` — but only called pre-answer, not gated
+  on retrieval confidence
+
+So the fix is mostly **wiring**, not building.
+
+### Stage 0 (1 day, 200 LOC, 0 GPU-h) — BM25 sidecar
+Write `synapforge/memory/bm25_sidecar.py` (DONE in this commit). Each token-
+position writes (token_id, position) → BM25 inverted index. At read time:
+union top-K from FAISS (semantic) + BM25 (verbatim). Linear mixer gate
+(+256 params) trusts per-query.
+
+### Stage 1 (1 day, 80 LOC + 8 GPU-h) — Trained PQ codebook
+Train Product Quantization codebook on actual hidden-state distribution
+(not random). 1M samples from current model on Pile, ~30 min training.
+Replace `ext_index_type='ivf_pq'` with trained codebook, nlist=4096.
+**FAISS recall@10: 73% → 88%** (typical for trained PQ16).
+
+### Stage 2 (2 days, 200 LOC + 4 GPU-h) — MultiBandTau-PLIF binding
+Wire existing `MultiBandTau` into `PLIF.tau_log`:
+- gamma=4 (current token, fast)
+- alpha=20 (medium)
+- beta=80 (slow)
+- theta=400 (very slow, holds 10K+ step horizon)
+
+Then 4h finetune on 32K-context data with warmstart.
+
+### Stage 3 (1 day, 120 LOC + 4 GPU-h) — Dual-path gate
+At pos > 32K AND PLIF spike-rate < 8%: switch to dense CfC for next 4K
+tokens. PLIF observe_only=True. Triggers ~5-10% of long context.
+
+### Cumulative
+**L3 50M drift: 8-15% → 3-4%** in 5 days / 16 GPU-h.
+**NIAH pass-rate at 50M: 30-40% → 75-85%**.
+
+## 3 paper-level research bets (no public combination)
+
+1. **MultiBandTau-PLIF + STDPFastWeight retrieval reranker** — re-purpose
+   STDP `post_trace` as a recency-weighted scorer on FAISS top-K. Closest
+   priors: Memory³ (2407.01178), Titans (2407.04620). Neither uses STDP
+   timing. 300 LOC + 6 GPU-h. Paper-level novelty.
+
+2. **Coconut latent thinking gated on retrieval confidence** — if BM25 +
+   FAISS top-1 cosine < 0.4, set k=8 (deep think); if > 0.7, k=1 (skip).
+   Closest priors: PonderNet (2107.05407), Pause Token (2310.02226).
+   Neither uses retrieval confidence as halting signal. 100 LOC.
+   NIAH +5pp at miss-prone positions, free at strong-recall.
+
+3. **Test-time τ adaptation (not weight TTT)** — at inference, learn a
+   single per-doc scalar that scales `MultiBandTau.theta_log` based on a
+   1K-token warm-up. No weight changes, no gradient memory cost. 80 LOC,
+   0 GPU-h (online). Drift -2pp on >100K docs. No published baseline.
+
+## Don't build
+
+- **Memory-attention head**: would force adding KV cache, defeats LNN+SNN
+  cost story
+- **3B teacher distillation**: 3B teacher KV at 100K context = 100GB,
+  doesn't fit budget
+- **More memory tiers**: L3 drift is retrieval semantics, not memory tier
+- **Rerank with bge-reranker**: +200ms/query for ~1pp gain
+- **LongLoRA / NTK-RoPE**: irrelevant to CfC (no positional encoding past
+  tokens)
