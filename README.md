@@ -1,303 +1,146 @@
-<div align="center">
+# SynapForge
 
-# synapforge
+A small (375M-parameter) **LNN + SNN hybrid language model** — *not a transformer*.
 
-**Train dense, deploy async — purpose-built ML for liquid + spiking + plastic networks.**
+CfC continuous-time recurrent cells (Hasani 2022) + PLIF spiking neurons (Fang 2021) +
+neuroplastic action routing (NeuroMCP), persistent skill memory, two-track continual
+learning, and Anthropic-style output safety. Trained from scratch in 7h on a single
+A100×2 rental.
 
-[![PyPI version](https://img.shields.io/pypi/v/synapforge.svg)](https://pypi.org/project/synapforge/)
-[![Python](https://img.shields.io/pypi/pyversions/synapforge.svg)](https://pypi.org/project/synapforge/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/Lihfdgjr/synapforge/actions/workflows/test.yml/badge.svg)](https://github.com/Lihfdgjr/synapforge/actions/workflows/test.yml)
-
-</div>
-
----
-
-## Why synapforge
-
-PyTorch is a tensor framework. Liquid Neural Networks (LNN), Spiking Neural Networks (SNN),
-and synaptic plasticity break almost every assumption it was built on:
-
-| Assumption                                | Breaks because                                                |
-|-------------------------------------------|---------------------------------------------------------------|
-| Forward writes activations once           | Plasticity rewrites weights *during* forward                  |
-| Backprop is the only learning signal      | Hebbian / STDP / BCM are local, gradient-free                 |
-| Layers are differentiable                 | Spikes are non-differentiable; need surrogate gradients       |
-| Dense matmul is the bottleneck            | Spike rasters are <5% sparse — dense waste >95% FLOPs         |
-| Time is a leading dim, not a state        | Liquid ODEs need true continuous-time dynamics                |
-| All optimizers see the same `param.grad`  | Plasticity-aware AdamW must merge gradient + plastic-delta    |
-
-**synapforge** is a thin layer on top of PyTorch that fixes all seven, while keeping
-the friendly `nn.Module`-style ergonomics. Train a hybrid model with `sf.LiquidCell` +
-one call.
-
-```python
-import synapforge as sf
-
-class HybridBlock(sf.Module):
-    def __init__(self, d):
-        super().__init__()
-        self.cfc  = sf.LiquidCell(d, d)            # liquid (continuous-time)
-        self.plif = sf.PLIF(d, threshold=0.3)      # spiking with surrogate
-        self.syn  = sf.SparseSynapse(d, d, sparsity=0.9)
-        self.stdp = sf.STDP(self.syn, tau_pre=20., tau_post=20.)
-
-    def forward(self, x):
-        h        = self.cfc(x)
-        spk, mem = self.plif(h)
-        out      = self.syn(spk)
-        self.stdp(spk_pre=spk, spk_post=out)       # plastic update, gradient-free
-        return out
-
-model = HybridBlock(256)
-y     = rt(torch.randn(32, 100, 256, device="cuda"))
+```
+┌──────────────────┐    ┌──────────────────┐    ┌────────────────────┐
+│ token / patch in │───▶│ HybridBlock × 14 │───▶│ tied LM head       │
+│ Qwen vocab 151K  │    │ (CfC + PLIF +    │    │ + NeuroMCP action  │
+│ + 9-modal byte   │    │  SwiGLU FFN)     │    │   vector emit      │
+└──────────────────┘    └──────────────────┘    └────────────────────┘
+                              │
+                              ▼
+                    ┌────────────────────┐
+                    │ skill_log.json     │  ← LTP/LTD persistent
+                    │ HNSW index (100k+) │     across sessions
+                    └────────────────────┘
 ```
 
----
+## What's actually different from a transformer LM
 
-## Install
+1. **No attention.** CfC continuous-time recurrence handles long-range dependencies via
+   ODE-discretized state evolution. STDP plasticity matrix doubles as content-addressable
+   retrieval (no need for KV cache).
+2. **No tool-call tokens.** NeuroMCP emits action vectors directly through a
+   SparseSynapticLayer (5%→40% density, with Hebbian-grown connections) and a
+   DynamicCodebook (K=4 per domain growing to K=64 by co-activation, persisted to
+   `skill_log.json` so users get their grown skills back next session).
+3. **Spiking neurons in the LM path.** PLIF cells learn per-channel τ. Spike rates
+   tracked as health signal; `observe_only=True` bootstrap recipe avoids dead-PLIF
+   collapse.
+4. **Plasticity ≠ backprop.** Three-factor STDP aux loss aligns local Hebbian/STDP
+   updates with global BP gradient direction, gated by a `M_t = α·FreeEnergy +
+   β·Novelty − γ·Homeostatic` neuromodulator.
+
+## Status (2026-04-30)
+
+| Component | State |
+|-----------|-------|
+| v4.0 base 375M Qwen-vocab pretrain | ✅ done, 36k steps, ckpt at `step_036000.pt` |
+| v4.1 NeuroMCP wire-in | ✅ done, 60k steps, **best ppl 44.2** at step 46350 |
+| v4.2 Universal trainer (Coconut + per-domain NeuroMCP + skill persistence + STDP aux) | ⚠ launched, 3 known bugs being patched (mask>95%, KD silent, 17× slow) |
+| 7-gate continual ingest (Track A) | ✅ deployed, autonomous_daemon running |
+| Track B retrieval-only chat memory (Claude Memory pattern) | ✅ scaffold ready |
+| HNSW skill index (100k+ prototypes) | ✅ written, awaiting deploy |
+| L1/L2 compositional codebook (Hebbian co-firing → option discovery) | ✅ scaffold written |
+| Anthropic safety stack (CAI + red/blue DPO + judge) | ✅ written, training queued |
+| Multimodal 9-modality byte-patch | ⏳ encoder paths exist, only text trained so far |
+| 3D understanding (DUSt3R + EGNN, ¥980 budget) | ⏳ designed, queued |
+| R-fold 167× inference speedup | ⏳ being investigated |
+
+## Quickstart
 
 ```bash
-pip install synapforge
+git clone https://github.com/Lihfdgjr/synapforge
+cd synapforge
+pip install -r requirements.txt
+
+# Train (375M from scratch — needs 1×A100 80GB, ~7h)
+python -m synapforge.train_v42_universal \
+    --warmstart /path/to/v41_best.pt \
+    --teacher-path Qwen/Qwen2.5-0.5B \
+    --steps 60000 --batch-size 8 --seq-len 1024 \
+    --neuromcp-enabled --kd-weight 0.3 \
+    --skill-log /path/to/skill_log.json
 ```
 
-Optional extras:
+For full setup (rental SSH, dataset prep, autonomous learn daemon, safety pipeline)
+see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
-```bash
-pip install "synapforge[triton]"     # Triton-fused parallel scan (Linux+CUDA)
-pip install "synapforge[data,hf]"    # Parquet streaming + HF tokenizer adapter
-pip install "synapforge[dev]"        # pytest, ruff, mypy, build, twine
-```
-
-Core dependencies are minimal: `torch>=2.0` and `numpy`. Everything else is opt-in.
-
----
-
-## Quickstart (10 lines)
-
-```python
-import torch, synapforge as sf
-
-class M(sf.Module):
-    def __init__(self): super().__init__(); self.cell = sf.LiquidCell(16, 16)
-    def forward(self, x): return self.cell(x)
-
-m  = M().cuda()
-rt = sf.compile(m, backend="gpu_dense")
-y  = rt(torch.randn(4, 32, 16, device="cuda"))
-print(y.shape)  # torch.Size([4, 32, 16])
-```
-
-That's it. No custom training loop, no manual surrogate registration, no boilerplate.
-
----
-
-## Architecture
+## Repo layout
 
 ```
-+----------------------------------------------------------------------+
-|                         User code (sf.Module)                        |
-+----------------------------------------------------------------------+
-|  LiquidCell  |  PLIF   |  SparseSynapse  |  Plasticity  |  Optim     |
-|  (cells/)    | (cells/)| (cells/)        | (rules)      | (PA-AdamW) |
-+----------------------------------------------------------------------+
-|                     IR (graph / compiler / passes)                   |
-+----------------------------------------------------------------------+
-+----------------------------------------------------------------------+
-+----------------------------------------------------------------------+
+synapforge/
+  model_chat_600m.py          375M base model
+  train_v42_universal.py      v4.2 trainer (CE + KD + STDP + entropy bonus)
+  action/                     NeuroMCP — token-free tool use
+    skill_log.py              JSON persistent prototypes (LTP/LTD)
+    per_domain_neuromcp.py    4 codebooks × K=64, intent router
+    hnsw_skill_index.py       O(log K) for 100k+ prototypes
+    compositional_codebook.py L1 primitives + L2 compounds (option discovery)
+  thinking/coconut.py         <bot>/<eot> latent reasoning (k=1→8 curriculum)
+  moe/expert_ffn.py           top-2 noisy gate, 8 routed + 1 shared
+  defense/                    Track A/B + 7-gate ingest
+    poison_detector.py        Multi-signal scoring (PromptGuard / Mahalanobis / TRAK)
+    provenance.py             Per-source trust EMA + blocklist
+    weight_firewall.py        KL anchor + EWC SI + grad clip
+    gates.py                  WebPoisonGate + ChatPoisonGate + SourceBudget
+  safety/                     Anthropic-style output alignment
+    constitutional.py         CAI critique-revise loop (4 iters)
+    red_blue.py               Same-model self-play DPO pair generator
+    dpo.py                    Iterative DPO trainer (β=0.1, ref-refresh @ 50)
+    judge.py                  Rule / API / Hybrid judges
+    red_team_corpus.py        12 attack categories, ZH+EN seeds
+  learn/
+    autonomous_daemon.py      Self-goal-proposing web learner
+    retrieval_memory.py       Track B per-user cache (no weight update)
+docs/
+  ARCHITECTURE.md             Full model description
+  ROADMAP.md                  Training + paper timeline
+  HONEST_ASSESSMENT.md        What works, what doesn't
+  CONTINUAL_LEARNING.md       Track A/B, 7-gate ingest, TRAK gating
+  SAFETY.md                   Output alignment stack
+  3D.md                       Cheap 3D understanding plan
 ```
 
-- **cells/** — primitives (LiquidCell, PLIF, SparseSynapse). Every cell exposes
-  a deterministic, differentiable forward and a backend-agnostic IR descriptor.
-- **plasticity.py** — `Hebbian`, `STDP`, `BCM`, `SynaptogenesisGrowPrune`, glued
-  by `PlasticityEngine`. All rules are local, gradient-free, and JIT-friendly.
-- **surrogate.py** — pluggable surrogate-gradient registry. Built-ins: arctan,
-  sigmoid, super-spike, fast-sigmoid, triangular, multi-Gaussian. `register()`
-  to add custom.
-- **optim.py** — `PlasticityAwareAdamW` merges Adam moments with `Param`
-  plastic-delta tensors; `MultiSourceParam` lets one tensor carry both gradient
-  and plastic gradient streams.
-- **runtime.py / runtime_cuda_graph.py** — compiles a `sf.Module` into one of
-  the four backends. CUDA-graph runtime delivers ~2x throughput on small RNNs.
-- **distributed.py** — DDP wrapper with `PlasticBufferSync`, which all-reduces
-  plasticity buffers (synaptic weights mutated in forward) on a configurable
-  cadence so plastic state stays consistent across ranks.
-- **quantize.py** — BitNet-style ternary {-1, 0, +1} post-training quantization;
-  ~20x weight compression, <2pp accuracy loss on tested workloads.
-  pending).
+## Anchor papers
 
-The IR layer (`ir/graph.py`, `ir/compiler.py`) is the hinge: it lets one model
-description target wildly different runtimes without rewriting kernels.
+Architecture:
+- CfC: Hasani et al, *Closed-form continuous-time neural networks*, 2022
+- PLIF: Fang et al, *Incorporating learnable membrane time constant…*, ICCV 2021
+- Coconut: Hao et al, 2412.06769
 
----
+Training methods:
+- Constitutional AI: Bai et al, 2212.08073
+- DPO: Rafailov et al, 2305.18290
+- TRAK influence: Park et al, 2303.14186
+- TR-DPO iterative ref refresh: 2404.10719
 
-## Benchmarks
+Safety findings:
+- Anthropic poisoning fixed-count = 250: 2510.07192
+- Concealed data poisoning: Wallace et al, 2010.12563
+- Sleeper Agents: Hubinger et al, 2401.05566
 
-Numbers measured on `/workspace/synapforge` rental box (2x A800-80G, torch 2.1.2,
-triton 2.1, fp32):
-
-| Component                            | Baseline                  | synapforge        | Speedup        |
-|--------------------------------------|---------------------------|-------------------|----------------|
-| LiquidCell forward (B=8, T=128, D=256)  | PyTorch eager unfused     | Triton block scan | **29.0x**      |
-| PlasticityAwareAdamW step (10M params)  | torch AdamW + manual sync | fused step kernel | 1.8x           |
-| Multi-GPU DDP throughput (2x A800)      | torch DDP                 | sf.wrap_model     | **1.78x**      |
-| Ternary post-training quantization      | fp32 weights              | ternary {-1,0,+1} | **20.1x compression** |
-| CPU event-driven inference (sparse <5%) | torch.eager fp32 dense    | numba CSR raster  | 6.4x           |
-| Surrogate fwd+bwd (atan, B=64, D=512)   | naive autograd            | fused atan kernel | 4.2x           |
-
-Reproduce: `python benchmarks/bench_triton.py`,
-`python benchmarks/bench_surrogate.py`, `python benchmarks/bench_ternary.py`.
-
----
-
-## Roadmap
-
-| Milestone | Status     | What                                                        |
-|-----------|------------|-------------------------------------------------------------|
-| M1        | done       | sf.Module, LiquidCell, PLIF, SparseSynapse                  |
-| M2        | done       | Hebbian / STDP / BCM / synaptogenesis                       |
-| M3        | done       | Surrogate-gradient registry (6 built-ins)                   |
-| M4        | done       | gpu_dense backend (numerical-equivalent to mscfc)           |
-| M5        | done       | PlasticityAwareAdamW + MultiSourceParam                     |
-| M6        | done       | Triton block-fused parallel scan (29x fwd)                  |
-| M7        | done       | DDP wrapper + PlasticBufferSync (1.78x on 2-GPU)            |
-| M8        | done       | Ternary BitNet 1.58 PTQ (~20x compression)                  |
-| M9        | done       | CPU event-driven inference (numba raster)                   |
-| M10       | done       | CUDA-graph runtime (~2x small-model throughput)             |
-
-hardware. Today's release is `v0.5.0`.
-
----
-
-## Examples
-
-The `examples/` directory ships 5 runnable scripts:
-
-| File                              | Demonstrates                                       |
-|-----------------------------------|----------------------------------------------------|
-| `examples/01_hello.py`            | Minimal `sf.Module` end-to-end (10 lines)          |
-| `examples/02_train_lnn.py`        | Train a `LiquidCell` stack on a toy regression    |
-| `examples/03_plasticity.py`       | Hebbian + STDP rules with `PlasticityEngine`       |
-| `examples/04_triton_speedup.py`   | Bench gpu_dense vs triton_block forward            |
-| `examples/05_distributed.py`      | 2-GPU DDP smoke with `PlasticBufferSync`           |
-
-```bash
-python examples/01_hello.py
-torchrun --nproc-per-node 2 examples/05_distributed.py
-```
-
----
-
-## Testing
-
-```bash
-pip install -e ".[dev]"
-pytest tests/ -v
-pytest tests/ --cov=synapforge --cov-report=term
-```
-
-Tests are CPU-friendly where possible; GPU/Triton tests skip cleanly when
-hardware is missing.
-
----
-
-## Citing synapforge
-
-If you use synapforge in academic work:
-
-```bibtex
-@software{synapforge_2026,
-  author    = {Liu},
-  title     = {synapforge: Train dense, deploy async — a framework for liquid + spiking + plastic networks},
-  year      = {2026},
-  version   = {0.5.0},
-  url       = {https://github.com/Lihfdgjr/synapforge}
-}
-```
-
----
-
-## Contributing
-
-We welcome PRs. See [CONTRIBUTING.md](CONTRIBUTING.md). Quick checklist:
-
-- `pip install -e ".[dev]"`
-- `ruff check .` (lint)
-- `pytest tests/ -v` (must stay green on CPU)
-- Open issues before large refactors
-
----
+3D foundation (planned):
+- DUSt3R / MASt3R: Wang et al, 2312.14132 / 2406.09756
+- EGNN: Satorras et al, 2102.09844
 
 ## License
 
-[MIT](LICENSE) © 2026 Liu
+MIT.
 
----
+## Citation
 
-<div align="center">
-<sub>synapforge is purpose-built. PyTorch for tensors, synapforge for synapses.</sub>
-</div>
-
----
-
-## v1.5 Roadmap (in progress, 2026-04-26)
-
-`train_v15_full.py` joint trains the 9-modal model with KD + intrinsic exploration:
-
-### Components
-
-- **9-modality byte-patch** — text / image / audio / video / screen / point_cloud /
-  time_series / graph / biosignal, all via `sf.modal.UnifiedEmbed` (Fuyu/Chameleon-style
-  reshape + Linear, **no convolutional encoders**).
-- **CfC + PLIF backbone** — 2 layers; PLIF tau init defaults to **DA-LIF bimodal**
-  (half fast tau~3, half slow tau~30) for heterogeneous time constants from step 0.
-- **Knowledge distillation** — Qwen2.5-0.5B teacher, **rep-level** (mean-pooled hidden
-  state -> Linear projection -> MSE). Vocab-agnostic so any teacher tokenizer works.
-- **Web-augmented data** — `/workspace/data/` mixes WT103 + agent-generated Q/A pairs
-  + FineWeb-Edu chunks. Data pulled one-shot at training prep, **never** as runtime
-  tool-calls — preserves the rule that the model itself only emits actions through
-  `ActionHead` / `NeuroMCPHead` (neuronal direct, no schema).
-- **Semantic understanding aux losses**:
-  - Triplet (anchor / synonym / antonym) — InfoNCE-style margin loss on `sem_proj`.
-  - Definition modeling — `word: definition` CE loss.
-  - Char-level aux head — predicts next byte from hidden state (256-class).
-  - Cross-modal contrastive — image+caption InfoNCE (when COCO data lands).
-- **Intrinsic exploration** — every `--idle-every` steps the model self-rolls a
-  `Q:` continuation via its own LM head. Future versions feed the rollout into
-  `sf.self_learn.ExperienceReplayBuffer` weighted by `sf.intrinsic.NoveltyDrive`.
-- **Safety**:
-  - z-loss + label smoothing for stable softmax.
-  - Optimizer m/v restored on warm-start (no momentum cold-start).
-  - Gradient clipping (norm 0.5) + linear warmup + cosine decay.
-  - Per-layer PLIF spike-rate monitor flags dead/saturated neurons.
-
-### Training-time tools (NOT inference)
-
-- `auto_ckpt_backup.py` — periodically promotes best-val-ppl ckpts per run to
-  `/workspace/best_ckpts/`, tar.gz uploads to GitHub release every 4h.
-- `auto_rsync_ckpt.py` — glob-scans run dirs and pushes `.log/.json/.csv` to
-  `Lihfdgjr/synapforge-runs` every 10 min.
-- `github_push_retry.py` — handles intermittent github.com network filtering.
-- `train_100m_kd.py` — text-only logit-KD trainer (used for v1.3 baseline).
-
-All daemons read `GH_TOKEN` from env, **never hardcoded**.
-
-### Distributed (NV12 NVLink, 2× A100-80GB)
-
-```bash
-torchrun --nproc_per_node=2 /workspace/synapforge/train_v15_full.py \
-    --warmstart /workspace/runs/synapforge_full_modal/ckpt_step4000.pt \
-    --steps 6000 --batch-size 16 --lr 1.5e-4 --warmup 300
+```bibtex
+@misc{synapforge2026,
+  title  = {SynapForge: A 375M LNN+SNN Hybrid Language Model with Neuroplastic Action Routing},
+  author = {Liu Hfdgjr},
+  year   = {2026},
+  url    = {https://github.com/Lihfdgjr/synapforge}
+}
 ```
-
-`synapforge.distributed.wrap_model` adds plastic-buffer-aware DDP (1.78x scaling
-already verified on 2× A800 with `PlasticBufferSync`).
-
-### Known limitations
-
-- WT103 alone caps ppl around ~150 even with a 100M-param model; **ppl < 50 needs
-  more pretrain tokens** (FineWeb-Edu mixin partially addresses this).
-- Triton fused kernel works in fresh subprocess but occasionally fails the first
-  compile in cold rentals — script falls back to pure-PyTorch (slower but correct).
-- Self-rolled Q: prompts are not yet fed back as training targets; that closes
-  the loop in v1.6.

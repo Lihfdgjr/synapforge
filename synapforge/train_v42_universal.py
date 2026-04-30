@@ -304,7 +304,7 @@ def main() -> None:
         bot_id = eot_id = pause_id = None
 
     log("loading model...")
-    model = SynapForgeChat600M(vocab_size=len(tok))
+    model = SynapForgeChat600M()
     if Path(args.warmstart).exists():
         sd = torch.load(args.warmstart, map_location="cpu")
         if "model" in sd:
@@ -335,7 +335,7 @@ def main() -> None:
         skill_log = neuromcp = None
 
     teacher = None
-    if args.kd_weight > 0 and Path(args.teacher_path).exists():
+    if args.kd_weight > 0 and (Path(args.teacher_path).exists() or "/" in args.teacher_path):
         log("loading Qwen 0.5B teacher...")
         teacher = AutoModelForCausalLM.from_pretrained(args.teacher_path, torch_dtype=torch.float16)
         teacher.eval()
@@ -395,7 +395,8 @@ def main() -> None:
             else:
                 k = 0
 
-            logits, hidden = model(input_ids, return_hidden=True)
+            hidden = model.encode(input_ids)
+            logits = model.lm_logits(hidden)
             ce = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)),
                 labels.reshape(-1),
