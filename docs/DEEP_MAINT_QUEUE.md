@@ -339,7 +339,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.8: ternary CfC weights AbsMean QAT`.
 
 ## T2.9 — Coconut latent thinking
-- [x] (00:47, PENDING_HASH, latent k=8 forward smoke pass; status=wired-default-off — was orphan in synapforge/thinking/coconut.py, now wired into SynapForge100M.encode + train_100m_kd --latent-k flag, default 0=zero overhead, k=8 forward non-NaN <5s on CPU, 6/6 integration tests pass)
+- [x] (00:50, 3aa1419, latent k=8 forward smoke pass; status=wired-default-off — was orphan in synapforge/thinking/coconut.py, now wired into SynapForge100M.encode + train_100m_kd --latent-k flag, default 0=zero overhead, k=8 forward non-NaN <5s on CPU, 6/6 integration tests pass)
 - **Goal**: enable `<bot>/<eot>` continuous latent reasoning at k=8.
 - **Steps**: verify code path live (not orphan), Agent: enable `--latent-k 8` and run forward — should not NaN.
 - **Commit**: `auto-T2.9: coconut latent k=8 forward smoke pass`.
