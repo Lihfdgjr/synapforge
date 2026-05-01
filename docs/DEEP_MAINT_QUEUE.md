@@ -434,7 +434,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.2: synth image pretrain 50K pairs`.
 
 ## T3.3 — Audio synthetic data generator
-- [x] (HH:MM, COMMIT_HASH_PLACEHOLDER, mel_spectrogram truncated to 100 frames; 8/8 tests PASS)
+- [x] (01:44, 5918724, mel_spectrogram truncated to 100 frames; 8/8 tests PASS)
 - **Status**: shipped 2026-05-02. Generator at `scripts/synth_audio_pretrain.py`
   with 3 classes (sine 220-880 Hz, noise, chirp), pure-numpy STFT + mel
   filter bank + uint8 quant, 16K-sample 1-s wavs -> 80x100 = 8000-byte
