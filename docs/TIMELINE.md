@@ -1,6 +1,39 @@
 # Synap-1 Timeline — 真实 ETA
 
-**最后更新**: 2026-05-01 22:08（Run 3e step 1100）
+**最后更新**: 2026-05-02 01:51（Run 3m step 6770, VAL 7004 holdout）
+
+## ⚠️ 重大修正: lm-head-spectral-norm 重置成本
+
+Run 3l 灾难发散后 (step5500 val=2522), Run 3m 用 step_002000.pt warmstart + 启 T2.6
+`--lm-head-spectral-norm`. 该参数包装 lm_head 为 `weight_orig` + `weight_v`/`weight_u`,
+但 step_002000.pt 只存了 `weight` — 加载时 spectral_norm 模块用未训练的 v/u 重新归一化,
+**有效让 lm_head 完全重置**. 损失代价: step 1 ce=11.93 (随机初始化水平).
+
+恢复轨迹（实测）:
+| step | VAL ppl holdout | Δ vs prev | Δ rate |
+|------|----------------|-----------|--------|
+| 3000 | 16031 | — | — |
+| 4000 | 11838 | -4193 | -26% |
+| 5500 | 8226  | -3612 | -31% |
+| 6000 | 7460  | -766  | -9%  |
+| 6500 | 7004  | -456  | -6%  |
+| 6770 (train ce 8.99) | — | — | — |
+
+**关键发现**: 恢复**减速** (logarithmic). step 4000→5500 -1500步降 -3612 ppl,
+step 6000→6500 -500步只降 -456 ppl. 后期斜率 ~-1 ppl/step.
+
+**新 ETA 推算** (基于 -1 ppl/step 后期斜率):
+- val ≤ 6000 (next milestone, no flag change): step ~7770, **+10 min** (02:01)
+- val ≤ 1000: step ~12500, +1.5h (03:30)
+- val ≤ 500: step ~13000, +1.7h (03:40)
+- val ≤ 250 (**phase 1 trigger**): step ~13500, **+2h (04:00 May 2)**
+- val ≤ 100 (phase 2): step ~14500, +3h (05:00)
+- val ≤ 60 (phase 3 trigger): step ~16000, +5h (06:50)
+
+**vs 原计划 (Run 3l/3b 健康轨迹)**: 慢了 5-8h 因 lm-head 重置. 但 spectral-norm 防 z-loss 漂移
+对长 horizon 有价值, 不全是 sunk cost.
+
+---
 
 > 真实数据驱动的时间表。不是 aspirational schedule，是基于已发生 GPU-h 实测推算的剩余时间。每次 turn 都更新这份文档。
 
