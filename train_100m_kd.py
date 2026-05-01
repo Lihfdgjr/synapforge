@@ -201,6 +201,10 @@ def _parse_args() -> argparse.Namespace:
                         "of steps")
     p.add_argument("--kd-temperature", type=float, default=4.0,
                    help="softmax temperature T; KD scaled by T*T")
+    p.add_argument("--kd-chunk", type=int, default=0,
+                   help="MASTER_PLAN.md §6 P2/P13: KD chunk size override. "
+                        "0 (default) = auto-tune from torch.cuda.mem_get_info() "
+                        "with 50%% headroom. >0 forces fixed chunk size.")
     p.add_argument("--teacher-fallback-ckpt", default="",
                    help="path to a self-distill teacher ckpt (used if HF teacher load fails)")
     # ---- Phase-gated opt-in components (default OFF, see docs/PHASE_TRAINING.md) ----
@@ -389,11 +393,47 @@ def _teacher_logits(teacher, x: "torch.Tensor") -> "torch.Tensor":
     return out
 
 
-def _kd_loss(student_logits, teacher_logits, T: float = 4.0):
+# MASTER_PLAN.md §6 P2/P13 -- one-shot guard so the auto-tune banner
+# only prints on the first call (avoids spamming train.log every step).
+_KD_CHUNK_BANNER_PRINTED = False
+
+
+def _kd_chunk_size(batch_size: int, seq_len: int, vocab: int,
+                   headroom: float = 0.5) -> int:
+    """Auto-pick KD chunk size from current GPU free VRAM.
+
+    MASTER_PLAN.md §6 P2 + P13: the prior fixed ``chunk = bs // 4`` OOM'd
+    at bs=128 / vocab=151936 on A800-80GB because the (B*T, V, fp32)
+    intermediate for ``logsumexp`` + KL is ~18.55 GiB. This sizes the
+    chunk so that intermediate fits in ``headroom`` * free_vram.
+
+    Each chunk materializes ``(chunk * seq_len, vocab)`` in fp32 for
+    log_softmax + KL, so per-row cost is ``seq_len * vocab * 4`` bytes.
+    Reserve ``headroom`` fraction of free mem; size chunk to fit. Floor
+    at 1, cap at ``batch_size`` (so VRAM-rich cards behave like the
+    pre-fix single-pass path).
+    """
+    if not torch.cuda.is_available():
+        return max(1, batch_size // 4)  # CPU fallback: keep prior behavior
+    free_b, _ = torch.cuda.mem_get_info()
+    budget_b = int(free_b * headroom)
+    per_row_b = max(1, int(seq_len) * int(vocab) * 4)  # fp32 intermediate
+    chunk = max(1, min(int(batch_size), budget_b // per_row_b))
+    return chunk
+
+
+def _kd_loss(student_logits, teacher_logits, T: float = 4.0,
+             chunk_override: int = 0):
     """Chunked KL(student_logp || teacher_p), avoids OOM on large vocab.
 
     Returns a scalar token-mean (over batch * time) scaled by T**2 (Hinton).
+
+    ``chunk_override``: if > 0, use that chunk size verbatim (CLI
+    ``--kd-chunk N`` path). If 0/absent, auto-tune from current GPU free
+    VRAM via ``_kd_chunk_size``. Behavior matches the prior hard-coded
+    ``bs // 4`` when VRAM is plentiful (cap = batch_size).
     """
+    global _KD_CHUNK_BANNER_PRINTED
     V = student_logits.size(-1); V_t = teacher_logits.size(-1)
     # Vocabulary mismatch (e.g., student=Qwen 151643, teacher=GPT-2 50257).
     # Truncate to common prefix; both vocabs must share a token-id ordering
@@ -402,7 +442,25 @@ def _kd_loss(student_logits, teacher_logits, T: float = 4.0):
         teacher_logits = teacher_logits[..., :V]
     elif V > V_t:
         student_logits = student_logits[..., :V_t]
-    bs = student_logits.size(0); chunk = max(1, bs // 4)
+    bs = student_logits.size(0)
+    seq = student_logits.size(1) if student_logits.dim() >= 3 else 1
+    vocab = student_logits.size(-1)
+    if chunk_override and chunk_override > 0:
+        chunk = max(1, min(int(chunk_override), bs))
+    else:
+        chunk = _kd_chunk_size(bs, seq, vocab)
+    if not _KD_CHUNK_BANNER_PRINTED:
+        try:
+            if torch.cuda.is_available():
+                free_b, _tot_b = torch.cuda.mem_get_info()
+                free_gb = free_b / (1024 ** 3)
+                print(f"[kd] chunk={chunk} (free={free_gb:.1f}GB, "
+                      f"vocab={vocab})", flush=True)
+            else:
+                print(f"[kd] chunk={chunk} (cpu, vocab={vocab})", flush=True)
+        except Exception:
+            pass
+        _KD_CHUNK_BANNER_PRINTED = True
     total = 0.0
     n_tokens = 0
     for i in range(0, bs, chunk):
@@ -731,7 +789,8 @@ def main() -> int:
                 if step % args.kd_every == 0:
                     with torch.no_grad():
                         t_logits = _teacher_logits(teacher, x)
-                    kd = _kd_loss(logits, t_logits, args.kd_temperature)
+                    kd = _kd_loss(logits, t_logits, args.kd_temperature,
+                                  chunk_override=args.kd_chunk)
                     loss = (1.0 - args.kd_weight) * base_loss + args.kd_weight * kd
                 else:
                     kd = torch.zeros((), device=logits.device)

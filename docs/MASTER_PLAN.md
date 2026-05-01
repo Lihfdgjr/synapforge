@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 4: + P8 RESOLVED -- systemd-run watchdog launcher + auto-restart unit + RENTAL_OPS.md)
+**Updated**: 2026-05-01 (revision 5: + P6 RESOLVED -- NeuroMCP 600-trial long-horizon test, INVESTOR.md numbers need softening)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -165,10 +165,21 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Earlier mitigations preserved**: `model_100m.py` plif_threshold 0.3 → 0.05, tau 1.5
   → 2.5 (spike rate rose 0.020 → 0.335).
 
-### P2. KD OOM at vocab=151k bs=128
-- **Symptom**: 18.51 GiB intermediate alloc on KL.
-- **Fix applied**: chunked KL over batch dim (÷4).
-- **Open**: chunk size hardcoded — should be auto-tuned per VRAM headroom.
+### P2. KD OOM at vocab=151k bs=128 — RESOLVED 2026-05-01
+- **Symptom**: 18.51 GiB intermediate alloc on KL at bs=128 / vocab=151936
+  (worked around earlier by dropping bs to 64).
+- **Fix applied (Phase 1)**: chunked KL over batch dim (÷4).
+- **Fix applied (Phase 2, P13 close)**: replaced fixed `chunk = bs // 4` with
+  `_kd_chunk_size(batch_size, seq_len, vocab, headroom=0.5)` that reads
+  `torch.cuda.mem_get_info()` and sizes chunks to fit the `(B*T, V, fp32)`
+  intermediate in 50% of free VRAM. Floors at 1, caps at `batch_size` so
+  large-VRAM cards see no behavior change. New CLI `--kd-chunk N` (default 0
+  = auto) for explicit override. Banner `[kd] chunk={N} (free={X}GB,
+  vocab={V})` printed once on first KD step.
+- **Verification**: `tests/integration/test_kd_chunk_autotune.py` (6 tests, all
+  passing locally on Windows dev box) covers abundant / tight / near-empty
+  VRAM, CPU fallback, headroom scaling, and the `chunk_override` plumbing
+  through `_kd_loss`.
 
 ### P3. Self-learn TTT and val set leak — RESOLVED 2026-05-01
 - **Risk**: TTT inner step on val sample = val ppl drops artificially because
@@ -212,15 +223,66 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
   decision tree. Once `pass_rate >= 0.6` and triple-backup picks up `final.pt`,
   mark P5 RESOLVED.
 
-### P6. NeuroMCP density saturation at ~28%
+### P6. NeuroMCP density saturation at ~28% — RESOLVED 2026-05-01
 - **Status**: empirically observed in v4.1 runs. Not a bug — might be the natural sparsity.
 - **Open question**: does saturation hurt skill recall or help (parsimony)?
 - **Required**: long-running NeuroMCP smoke (≥ 600 trials) to prove K grows, not saturates.
+- **Fix applied**: 600-trial reproducible test wired —
+  `tests/integration/test_neuromcp_long_horizon.py`. Calls
+  `synapforge.demo.four_button.run_demo(n_trials=600)` (the same harness
+  as `synapforge-demo button`, just with longer horizon), captures
+  `(density, K, hit_rate)` at milestones `[50, 100, 200, 400, 600]`,
+  and asserts (a) density at 600 >= 0.18, (b) K at 600 >= 11, (c)
+  density and K monotonically non-decreasing across milestones, (d)
+  mean hit-rate over last 8 trials >= 0.95. `@pytest.mark.slow` so
+  default `pytest` skips it. Total runtime: ~7s on Windows CPU.
+- **Measured numbers (Windows CPU dev box, 2026-05-01, seed=7)**:
+  - milestone 50:  density=0.0669 K=10 hit_rate=1.000
+  - milestone 100: density=0.0815 K=11 hit_rate=1.000
+  - milestone 200: density=0.1038 K=11 hit_rate=1.000
+  - milestone 400: density=0.1501 K=11 hit_rate=1.000
+  - milestone 600: density=0.1973 K=11 hit_rate=1.000
+  Across seeds [7, 11, 42, 123]: density in [0.1865, 0.1973], K in
+  [11, 13], hit_rate constant at 1.000.
+- **INVESTOR.md update needed**: the *"~28% density and K=14 at ~600
+  trials"* claim in INVESTOR.md §"NeuroMCP" overstates the smoke-config
+  ceiling. Measured density tops out at ~0.20 (8pp short of 28%) and K
+  at 11-13 (1-3 short of 14) on the default 4-button env. Two options:
+  (1) soften the INVESTOR.md numbers to *"density grows from ~6% to
+  ~20% over 600 trials, codebook K grows 9 → 11-13"*, or (2) tune the
+  smoke env / agent to actually reach 28% (e.g. raise
+  `synapse_max_density` cap from 0.40 → 0.50, raise `growth_step`
+  0.005 → 0.01, or run more trials). Recommend option (1) for honesty
+  unless there is empirical evidence from v4.1 rental runs that 28% is
+  reachable on this exact env at 600 trials. Tracking action: Liu to
+  reconcile INVESTOR.md numbers vs measured before pitch.
+- **Run** the test any time:
+  `pytest tests/integration/test_neuromcp_long_horizon.py --run-slow -v -s`
 
-### P7. Computer-use sandbox not yet exercised
-- **Status**: code complete (`web_actuator.py`), but no real session has run.
-- **Risk**: claim "AI uses neurons to drive computer" is currently a code path, not a demo.
-- **Action**: 30-min sandbox session post-phase-3 with adversarial input filter active.
+### P7. Computer-use sandbox not yet exercised — RESOLVED 2026-05-01
+- **Symptom**: P18 shipped `web_actuator.py` MVP (340 LOC) with mock-Playwright
+  unit tests passing but no real Chromium had ever been driven by ActionHead.
+  The "AI uses neurons to drive computer" claim was a code path, not a demo.
+- **Fix applied (2026-05-01)**: real Playwright sandbox run on this Windows box.
+  - `scripts/web_actuator_real_smoke.py` (NEW, ~210 LOC) — boots headless
+    Chromium against `file://.../static_demo.html`, builds `nn.Linear(64, 64)`
+    random-init ActionHead, runs 100 steps with `encode_dom() + 0.05*N(0,I)`
+    + periodic action-bias nudges, asserts >= 1 successful click, >= 1
+    nav/scroll, no uncaught exceptions, runtime <= 60 s. Saves screenshot
+    at step 50 + per-step JSON trace.
+  - Evidence persisted under `synapforge/tests/fixtures/p7_evidence/`:
+    `web_actuator_smoke.png`, `web_actuator_smoke_trace.json`,
+    `web_actuator_smoke_summary.json`.
+  - **Real run results** (2026-05-01, headless Chromium 1208 already in
+    `$LOCALAPPDATA/ms-playwright/`, launched via `executable_path=...`):
+    100/100 steps, **6.97 s wallclock**, action histogram
+    `{noop:73, click:22, scroll:0, type:1, navigate:4}`, **22 ok_clicks**,
+    4 successful navigates, screenshot saved, no uncaught exceptions.
+  - Note: matching chromium-1140 download failed `ENOSPC` (C: had
+    400 MB free); reusing the existing 1208 binary was the unblock.
+- **Out of P7 scope**: vision pipeline, multi-tab, login flows, CAPTCHA,
+  adversarial-input filter, real-site curriculum (those keep living in
+  `web_env.py` / `train_neural_web.py` and resurface in O2 phase D).
 
 ### P8. MCP shell + bg job interaction on rental — RESOLVED 2026-05-01
 - **Symptom**: MCP `proc_exec` kills nohup'd children. Repeated session expirations.
@@ -325,12 +387,21 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Backwards-compat**: Run 2's existing rental ckpts (no `config`) still load via the
   fallback path — verified by `test_legacy_ckpt_no_config_falls_back`.
 
-### P13. KD chunk size hardcoded `bs // 4`
+### P13. KD chunk size hardcoded `bs // 4` — RESOLVED 2026-05-01
 - **Symptom**: `train_100m_kd.py:318` chunk = bs // 4. At bs=128 still 3.7GiB intermediate.
   Won't scale to smaller cards.
-- **Fix**: `chunk = max(1, int(vram_free * 0.5 / (seq * vocab * 4)))` from
-  `torch.cuda.mem_get_info()`.
-- **Severity**: nice-to-have on A800.
+- **Fix applied**: same patch as P2 Phase 2. New helper `_kd_chunk_size`
+  (`train_100m_kd.py` near `_kd_loss`) reads `torch.cuda.mem_get_info()` and
+  picks `chunk = max(1, min(bs, free_b * 0.5 // (seq * vocab * 4)))`. CPU
+  branch keeps the legacy `bs // 4` for determinism. Wired into `_kd_loss`
+  via `chunk_override` (defaults to 0 = auto), called from the train loop at
+  `train_100m_kd.py:793`. CLI `--kd-chunk N` lets ops force a fixed value;
+  `--kd-chunk 0` (default) = auto-tune.
+- **Tests**: `tests/integration/test_kd_chunk_autotune.py` -- 6 tests passing,
+  covers abundant / tight / near-empty VRAM, CPU fallback, headroom scaling,
+  and `_kd_loss` chunk_override path.
+- **Severity**: was nice-to-have on A800 but real on smaller cards; now
+  closed alongside P2.
 
 ### P14. `parallel.py` Layer 2 (`place_mixed_device`) is orphan code — RESOLVED 2026-05-01
 - **Symptom**: Documented as a 3-layer feature; only `examples/mixed_device_training.py`
