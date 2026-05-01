@@ -198,8 +198,25 @@ synapforge-demo button   # NeuroMCP 4-button, ~1s, density grows
 synapforge-demo bench    # R-fold math correctness + speedup table
 synapforge-demo stdp     # STDP self-organization, ~1s
 synapforge-demo chat     # 5 EN + 5 ZH prompts (recorded if no ckpt)
-synapforge-demo all      # all of the above
+synapforge-demo all      # all of the above + qwenchat (v0 frontend)
 synapforge-demo json     # all demos, JSON dump for grepping
 ```
 
 Reproduces in under 5 minutes on any CPU. No API keys, no GPU.
+
+### Live demo — v0 chat frontend
+
+The architecture demos above are the *claim*. For a *live bilingual chat
+surface*, we ship a v0 frontend on top of a frozen Qwen2.5-0.5B Instruct
+with a small LoRA adapter trained in 30 min on alpaca-en + alpaca-zh.
+This is the *demo* layer — the architecture claim remains the native
+SynapForge 100M LNN+SNN.
+
+```bash
+synapforge-demo qwenchat       # 5 EN + 5 ZH live, Qwen + LoRA
+```
+
+See [docs/PLAN_C_QWEN_LORA.md](PLAN_C_QWEN_LORA.md) for the full v0/v1
+split, training recipe, and the disclosure script we use when walking
+through the demo. The native 100M model is the long-term bet; the
+v0 Qwen frontend is what ships *today* so the investor can chat.

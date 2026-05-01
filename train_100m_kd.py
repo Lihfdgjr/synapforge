@@ -686,9 +686,18 @@ def main() -> int:
                     direction = "high" if rate_mean > args.spike_target else "low"
                     _log(
                         f"  [WARN] spike rate {rate_mean:.3f} drifted {direction} "
-                        f"of target {args.spike_target:.3f} (|delta|>0.05); "
-                        f"consider threshold auto-adjust (not enabled)"
+                        f"of target {args.spike_target:.3f} (|delta|>0.05)"
                     )
+                # Auto-revive dead PLIF: if every cell is silent for 1000+ steps,
+                # the leaky-to-steady form has settled below threshold for all
+                # channels. Scale threshold down 10% per check until rate>=0.01.
+                # Bounded by LearnableThreshold min_val=1e-3 spirit.
+                if step >= 1000 and step % 200 == 0 and n_dead == len(rates):
+                    with torch.no_grad():
+                        for m in plif_cells:
+                            m.threshold.mul_(0.9).clamp_(min=5e-3)
+                    new_thr = float(plif_cells[0].threshold.mean())
+                    _log(f"  [PLIF-REVIVE] all cells dead; thr×0.9 -> mean={new_thr:.4f}")
 
         if step % SAVE_EVERY == 0:
             ckpt_path = os.path.join(out_dir, f"step_{step:06d}.pt")

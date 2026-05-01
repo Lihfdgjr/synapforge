@@ -83,6 +83,23 @@ def cmd_stdp(args) -> dict:
                     batch=args.batch, seed=args.seed)
 
 
+def cmd_qwenchat(args) -> dict:
+    """v0 chat frontend: Qwen 0.5B + LoRA. Disclosure: this is the
+    *demo* frontend; the architecture claim is the SynapForge 100M
+    LNN+SNN shown by `synapforge-demo all`."""
+    from .qwen_lora_demo import run_demo
+    print("=== Qwen-LoRA v0 chat demo (5 EN + 5 ZH) ===")
+    return run_demo(
+        adapter_path=args.adapter,
+        base_path=args.base_path,
+        n_samples=args.n,
+        max_new=args.max_new,
+        temperature=args.temperature,
+        save_path=args.save_qwen,
+        smoke=getattr(args, "smoke", False),
+    )
+
+
 def cmd_pitch(args) -> None:
     print(PITCH)
 
@@ -102,6 +119,13 @@ def cmd_all(args) -> dict:
     print()
     print("-" * 60)
     out["chat"] = cmd_chat(args)
+    # v0 frontend chat (Qwen-LoRA). Skipped if neither adapter nor base
+    # is reachable -- the qwen_lora_demo prints a "training in progress"
+    # notice in that case so the all-flow still completes cleanly.
+    if getattr(args, "include_qwenchat", True):
+        print()
+        print("-" * 60)
+        out["qwenchat"] = cmd_qwenchat(args)
     return out
 
 
@@ -135,9 +159,25 @@ def main(argv: list[str] | None = None) -> int:
     ps.add_argument("--seed", type=int, default=11)
     ps.set_defaults(fn=cmd_stdp)
 
+    pq = sub.add_parser("qwenchat",
+                        help="v0 chat frontend (Qwen 0.5B + LoRA), 5 EN + 5 ZH")
+    pq.add_argument("--adapter", default=None,
+                    help="dir from scripts/train_qwen_lora.py "
+                         "(default ~/.synapforge/release/qwen_lora_v0)")
+    pq.add_argument("--base-path", default=None,
+                    help="Qwen base path/repo (default Qwen/Qwen2.5-0.5B-Instruct)")
+    pq.add_argument("--n", type=int, default=5,
+                    help="number of EN prompts (and ZH prompts) to run")
+    pq.add_argument("--max-new", type=int, default=80)
+    pq.add_argument("--temperature", type=float, default=0.7)
+    pq.add_argument("--save-qwen", default="chat_qwen_lora_demo.json")
+    pq.add_argument("--smoke", action="store_true",
+                    help="use mock Qwen (no real ckpt needed; for smoke-tests)")
+    pq.set_defaults(fn=cmd_qwenchat)
+
     def _add_all_args(parser, default_trials):
-        # button + chat + stdp share these names; defaults chosen so
-        # `synapforge-demo all` runs in well under a minute.
+        # button + chat + stdp + qwenchat share these names; defaults chosen
+        # so `synapforge-demo all` runs in well under a minute.
         parser.add_argument("--trials", type=int, default=default_trials)
         parser.add_argument("--batch", type=int, default=16)
         parser.add_argument("--ckpt", default=None)
@@ -147,6 +187,22 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--save", default="chat_demo.json")
         parser.add_argument("--hidden", type=int, default=64)
         parser.add_argument("--seed", type=int, default=11)
+        # qwenchat-only -- safe if unused (cmd_qwenchat reads via getattr)
+        parser.add_argument("--adapter", default=None,
+                            help="Qwen-LoRA adapter dir (qwenchat)")
+        parser.add_argument("--base-path", default=None,
+                            help="Qwen base model path/repo (qwenchat)")
+        parser.add_argument("--n", type=int, default=5,
+                            help="EN prompts count for qwenchat (also ZH)")
+        parser.add_argument("--save-qwen", default="chat_qwen_lora_demo.json")
+        parser.add_argument("--smoke", action="store_true",
+                            help="use mock Qwen for qwenchat (no ckpt needed)")
+        parser.add_argument("--include-qwenchat", action="store_true",
+                            default=True,
+                            help="include Qwen-LoRA frontend demo in `all`")
+        parser.add_argument("--no-qwenchat", dest="include_qwenchat",
+                            action="store_false",
+                            help="skip Qwen-LoRA frontend demo in `all`")
 
     pa = sub.add_parser("all", help="Run pitch + button + bench + stdp + chat")
     _add_all_args(pa, default_trials=80)

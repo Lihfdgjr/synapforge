@@ -85,14 +85,21 @@ class HybridBlock(Module):
         ffn_ratio: float = 8.0,
         sparsity: float = 0.95,  # density of the synapse mask
         dropout: float = 0.0,
-        plif_threshold: float = 0.3,
+        plif_threshold: float = 0.05,  # was 0.3 — too high for tanh-bounded
+        # CfC inputs gated by (1-decay)~=0.49 in PLIFCell; eff input ceiling
+        # ~=0.49*1.0=0.49 but most channels at init have |x|<0.3, so
+        # threshold=0.3 -> nearly zero spikes (dead=N/N). Lowered to 0.05
+        # to match LearnableThreshold default and let learning bootstrap.
     ) -> None:
         super().__init__()
         self.d = int(d)
 
         self.ln1 = _RMSNorm(d)
         self.liquid = LiquidCell(d, d, init="hasani")
-        self.plif = PLIFCell(d, tau_init=1.5, threshold_init=plif_threshold,
+        # tau_init=2.5 (was 1.5): 1-decay = 0.33 (was 0.49), so per-step
+        # input drive is smaller but membrane integrates over more steps,
+        # which is the textbook LIF behavior (Fang 2021 uses tau~2-4).
+        self.plif = PLIFCell(d, tau_init=2.5, threshold_init=plif_threshold,
                              surrogate="atan", reset="subtract")
         self.synapse = SparseSynapse(d, d, sparsity=sparsity, bias=False)
         # Tag synapse weight for plasticity merge (off by default).
