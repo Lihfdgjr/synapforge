@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 10: + P24 RESOLVED -- deterministic data ordering caused step-2500 divergence in 3 runs; shuffle_buffer=10000 default in ParquetTokenStream + train_100m_kd.py)
+**Updated**: 2026-05-01 (revision 11: + P25/P26/P27/P28/P29 OPEN — training-issues retrospective doc shipped at `docs/TRAINING_ISSUES_RETROSPECTIVE.md` covering 8 root causes from Runs 1–3h + 5 next-iteration patches)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -638,6 +638,60 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
   fallback path that already supports tiny-model overrides for
   P9-smoke.
 - **Status**: RESOLVED. P5 now points at this entry + `INSURANCE_NATIVE.md`.
+
+### P25. PLIF dead 10/10 spike rate even with P1 homeostasis — OPEN
+- **Symptom**: Run 3b / 3c / 3e logged 0% spike rate across all blocks for the
+  entire run despite `homeostatic_step` firing every 50 steps and threshold
+  drifting 0.05 → 0.012. CfC-only path doing 100% of modeling work.
+- **Implication**: LNN+SNN hybrid claim aspirational; matmul-free M2/M3 claims
+  in `MATMUL_FREE.md` ride on this and would not be honest until PLIF fires.
+- **Plan**: surrogate gradient annealing (start width=10, anneal to 1 over 5000
+  steps) + threshold ramp 0.05 → 0.01 over phase 0. Combine with PLIF
+  spike-rate-target loss (P27).
+- **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.a.
+- **Status**: OPEN. ETA 1 week to first patch + eval.
+
+### P26. 70 vocab tail rows never gradient-loaded — OPEN (defensive)
+- **Symptom**: vocab padded 151643 → 151936 for matmul alignment. Rows
+  151643..151935 receive zero gradient (Qwen2.5 tokenizer max id is 151642).
+- **Risk**: future tokenizer changes or special-token additions hitting those
+  slots emit untrained-noise embeddings.
+- **Plan**: `tok_embed.weight[151643:].requires_grad = False` and same on
+  `lm_head.weight[151643:]` in `model_100m.py::__init__`. Defensive freeze.
+- **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.b + §3 patch #1.
+- **Status**: OPEN. ETA 1 day.
+
+### P27. Train ce 6–7 vs val ppl 320–400 drift — OPEN
+- **Symptom**: Train batch CE drops to 6–7 while val ppl stays 320–400 across
+  five runs. Student overfits to current minibatch context.
+- **Diagnosis**: KD signal pulls hard toward Qwen 0.5B teacher inside active
+  batch; drift undone next batch.
+- **Plan**: longer LR warmup (200 → 1000 steps), cosine schedule with longer
+  plateau, BPTT regularizer `λ · ||h_T - h_0||²`.
+- **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.c.
+- **Status**: OPEN. ETA 1 week (need to run with patches and re-eval).
+
+### P28. z-loss linearly growing across Run 3b — OPEN
+- **Symptom**: Sparse z-loss top-K=2048 (`4d0d2a9`) helps OOM but `z_loss`
+  trends linearly upward — top-K only restricts backward activation.
+- **Diagnosis**: `lm_head` logits drift per-row; bigger logits → bigger softmax
+  denominators → bigger z-loss. Cause not addressed by sparsification.
+- **Plan**: tied LM head normalization — `nn.LayerNorm(d, elementwise_affine
+  =False)` immediately before final `lm_head` projection. Optional:
+  `nn.utils.spectral_norm` on `lm_head` weight (P29 patch #4).
+- **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.d + §3 patch #4.
+- **Status**: OPEN. ETA 1 day.
+
+### P29. Run 3i — confirm shuffle solves step-2500 jump — OPEN (verification)
+- **Symptom**: P24 attributed Run 3c's step-2500 divergence to deterministic
+  data ordering. Run 3e (with shuffle ON) made it past step 1500 healthy but
+  was killed before step 2500.
+- **Honest gap**: no direct evidence shuffle solves step 2500.
+- **Plan**: Run 3i with `--shuffle-buffer 10000` past step 3000; log
+  ppl trajectory step 2000–3000 as permanent artifact. If still diverges,
+  diagnosis is *not* data ordering (look at LR / homeostasis / state drift).
+- **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.e.
+- **Status**: OPEN. ETA 1 day (just rerun trainer with current config).
 
 ---
 
