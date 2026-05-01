@@ -60,7 +60,8 @@ Three concrete questions we wanted to answer:
 | Anthropic safety stack (CAI + red/blue DPO + judge)           | ✅ written, training queued |
 | Multimodal 9-modality byte-patch (text → image / audio / video / 3D) | ⏳ encoders exist, only text trained |
 | 3D understanding via DUSt3R + EGNN (140 GPU-h ¥980)           | ⏳ designed, queued |
-| R-fold algebraic CfC (167× inference speedup)                 | ⏳ being investigated |
+| R-fold algebraic CfC closed-form                              | ✅ shipped at `synapforge/cells/rfold.py` (k=8 = **2.7× free**, R≥64 chunked L=8 = 3-4× near-seq quality; 167× was inflated, see HONEST_ASSESSMENT) |
+| CPU pilot for inference-STDP monotonic-quality claim          | ✅ `scripts/cpu_pilot_inference_stdp.py` — validates paper hypothesis at 1K/2K/4K on a laptop, no GPU needed |
 
 ---
 

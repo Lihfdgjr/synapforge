@@ -68,6 +68,23 @@ Plus env var `SYNAPFORGE_STDP_INFERENCE=on` for inference-time STDP.
 | Tokens / 8h | ~6B | ~14B | ~14B |
 | MMLU (zero-shot) | ~26% | **~38%** | **~42%** |
 
+## R-fold update (2026-05-01)
+
+Earlier drafts cited 167× speedup at R=1024 for the algebraic fold. Per agent
+re-investigation, **that number is inflated** for our gated CfC. Honest table
+(N=512 B=32 A100):
+
+| R | speedup | quality |
+|---|---------|---------|
+| 8 (Coconut k=8) | **2.7×** | Δppl +0.3-0.8% |
+| 64 single-fold | 9× | Δppl +5-12% (NIAH -8%) |
+| 1024 single-fold | 85× | NIAH catastrophic, fictional |
+| 1024 chunked L=16 | 3-4× | near-sequential |
+
+Implementation lives at `synapforge/cells/rfold.py`. Forces fp32 (bf16
+catastrophic at R>16), ridge `1e-6` on `(I-M)` solve. The k=8 win is real and
+free; longer R needs chunked re-anchoring. Don't claim 167× to investors.
+
 ## Anchor papers
 
 - BitNet b1.58: arxiv 2402.17764

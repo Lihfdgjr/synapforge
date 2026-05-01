@@ -48,9 +48,18 @@ What works, what doesn't, what's untested. 2026-04-30.
   no actual poison injection test
 - Shadow LoRA merge every 4h: code path exists, never triggered in real run
 
-**R-fold algebraic CfC closed-form:**
-- 167× speedup is from LiquidS4 paper, not yet measured on our impl
-- Agent-investigated 3 approaches, none tried at training scale yet
+**R-fold algebraic CfC closed-form (2026-05-01 honest update):**
+- The 167× claim is **inflated** for our gated CfC. It only holds for ungated
+  linear S4. Real numbers (agent synthesis, N=512 B=32 A100):
+  - R=8 Coconut latent loop → **2.7× free** (3 squarings vs 8 sequential)
+  - R=64 → 9× single-fold but +5-12% ppl drift
+  - R=1024 → 85× single-fold but **fictional**: gate drift drops NIAH 8%+
+  - R=1024 chunked (L=16 re-anchor) → 3-4× at near-sequential quality
+- Implementation now lives at `synapforge/cells/rfold.py` (`cfc_rfold` +
+  `cfc_rfold_chunked`). Forces fp32 internally (bf16 catastrophic at R>16),
+  ridge 1e-6 on `(I-M)` solve for skip-gate stability.
+- Honest investor pitch: "k=8 closed-form fold gives 2.7× free, zero quality
+  loss, zero extra params." Don't quote 167×.
 
 **Research-grade "neuromorphic" claims unverified:**
 - Energy advantage from PLIF spike rates: never measured on actual neuromorphic h/w

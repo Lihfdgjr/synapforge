@@ -6,10 +6,19 @@
 
 | Day | Task | Outcome |
 |-----|------|---------|
+| 0 | **CPU pilot** for inference-STDP (`scripts/cpu_pilot_inference_stdp.py`) | Validate monotonic-quality claim before burning 12.5h on A100 |
+| 0 | **R-fold k=8** (`synapforge/cells/rfold.py`) wired into Coconut latent loop | 2.7× free, no quality loss, no extra params |
 | 0 | Push 3 v4.2 patches: HF-repo path check, top-1 NeuroMCP routing, encode/lm_logits split | Trainer launches without errors |
 | 0 | Restart v4.2 with `--bs 8 --seq-len 1024 --grad-accum 2` | tok/s ~7000 (6× recovery from 1100) |
 | 1-2 | v4.2 run to step 30k | First chat-able ckpt, ppl ~35 |
 | 3 | One round of SFT (LIMA-30 + Alpaca-zh + GSM8K) | demo level chat, pp ~25 |
+
+**SSH-down contingency** (per agent synthesis 2026-05-01): if rental sshd is
+saturated, the highest-leverage move is the 算力牛 web console (Jupyter/noVNC
+runs independent of sshd). If that fails too, force-reboot the instance (~90s).
+Vast.ai spot A100 80GB ¥48/12.5h is the next fallback; full retrain from v4.0
+ckpt would cost ¥77 + lose v4.1 (best ppl 44.2). Always run CPU pilot in
+parallel — it de-risks the GPU spend regardless.
 
 ## Week 1: NeuroMCP enhancements + multimodal data prep
 
