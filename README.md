@@ -62,6 +62,7 @@ Three concrete questions we wanted to answer:
 | 3D understanding via DUSt3R + EGNN (140 GPU-h ¥980)           | ⏳ designed, queued |
 | R-fold algebraic CfC closed-form                              | ✅ shipped at `synapforge/cells/rfold.py`. Math **verified on CPU** (R=1 exact to 1.5e-6, R=8 drift 0.3%, chunk=2 shrinks error 10×). CPU is slow (linalg.solve overhead at N≥256); GPU speedup pending A100 bench. See HONEST_ASSESSMENT for the full empirical table. |
 | CPU pilot for inference-STDP monotonic-quality claim          | ✅ `scripts/cpu_pilot_inference_stdp.py` — validates paper hypothesis at 1K/2K/4K on a laptop, no GPU needed |
+| Multi-core / mixed-device / multi-node parallelism            | ✅ `synapforge/parallel.py` — 3-layer (CPU thread tune + CPU/GPU mixed placement + auto gloo/nccl DDP). Example: `examples/mixed_device_training.py`. See `docs/PARALLELISM.md`. |
 
 ---
 
