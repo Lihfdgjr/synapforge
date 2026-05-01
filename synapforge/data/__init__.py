@@ -29,7 +29,9 @@ Public API:
 from __future__ import annotations
 
 import glob
+import queue
 import random
+import threading
 from collections.abc import Iterator
 
 try:
@@ -90,6 +92,24 @@ class ParquetTokenStream:
         shuffle_seed: deterministic seed for the reservoir RNG and the
             per-epoch file-order shuffle. Default 42. Same seed +
             same buffer size ⇒ identical yield sequence.
+        prefetch_factor: number of batches to pre-fetch in a background
+            thread when ``> 0``. ``0`` (or ``1``) keeps the legacy
+            synchronous ``__iter__`` (each ``next()`` blocks on
+            tokenizer + parquet decode). ``>= 2`` spawns a producer
+            thread + bounded ``queue.Queue(maxsize=prefetch_factor)``
+            that pre-builds batches; the main iterator just consumes.
+            Pairs with ``pin_memory=True`` so the H2D copy in the
+            trainer (``x.to(device, non_blocking=True)``) overlaps with
+            the next batch's CPU work. Default 0 (off) so the legacy
+            single-thread tests keep their exact yield order; the
+            trainer enables it via ``--prefetch-factor 2``.
+        pin_memory: if True, allocate the yielded ``(tokens_in,
+            tokens_out)`` tensors in pinned (page-locked) host memory.
+            Required for ``non_blocking=True`` H2D copies to actually
+            overlap with compute on the GPU side. Costs ~bs*seq*8B*2
+            of pinned RAM per batch (~5 MiB at bs=80 / seq=256).
+            Default False (legacy + Windows-dev safe — pinning is a
+            no-op crash on no-CUDA torch builds).
     """
 
     def __init__(
@@ -104,6 +124,8 @@ class ParquetTokenStream:
         tokenizer_name: str = "gpt2",
         shuffle_buffer: int = 0,
         shuffle_seed: int = 42,
+        prefetch_factor: int = 0,
+        pin_memory: bool = False,
     ) -> None:
         self.files = sorted(glob.glob(glob_pattern))
         if not self.files:
@@ -118,6 +140,12 @@ class ParquetTokenStream:
         # callers that build kwargs from dicts.
         self.shuffle_buffer = int(shuffle_buffer or 0)
         self.shuffle_seed = int(shuffle_seed)
+        # PERF v2: prefetch + pinned-memory knobs (off by default; trainer
+        # passes --prefetch-factor 2 --pin-memory to opt in). Pinning is
+        # silently disabled when CUDA is unavailable so the constructor
+        # is no-CUDA / Windows-dev safe.
+        self.prefetch_factor = int(prefetch_factor or 0)
+        self.pin_memory = bool(pin_memory) and torch.cuda.is_available()
         self._tok = _get_tokenizer(tokenizer_name)
         # Default EOT to the tokenizer's eos_token_id, NOT the GPT-2 magic
         # number 50256 -- using a hard-coded id with a Qwen tokenizer would
@@ -225,17 +253,107 @@ class ParquetTokenStream:
 
     # ---------------------------------------------------------------- public
 
-    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
-        """Yield (tokens_in [B,T], tokens_out [B,T]) int64 cpu tensors."""
+    def _build_batch(self, chunks: list[list[int]]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Materialise a (B, T+1) tensor and split into (in, out).
+
+        Optionally allocates the result tensors in pinned (page-locked)
+        host memory so the trainer's ``x.to(device, non_blocking=True)``
+        H2D copy can run concurrently with the next batch's CPU work.
+        Pinning is a silent no-op when CUDA is unavailable.
+        """
+        arr = torch.tensor(chunks, dtype=torch.long)  # (B, T+1)
+        tokens_in = arr[:, :-1].contiguous()
+        tokens_out = arr[:, 1:].contiguous()
+        if self.pin_memory:
+            # `pin_memory()` returns a new pinned-memory tensor on torch
+            # builds with CUDA support. On no-CUDA builds we already
+            # guarded the flag in ``__init__`` so this branch is dead.
+            tokens_in = tokens_in.pin_memory()
+            tokens_out = tokens_out.pin_memory()
+        return tokens_in, tokens_out
+
+    def _iter_sync(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        """Legacy single-thread iterator: each ``next()`` blocks on
+        tokenizer + parquet decode. Same yield order as before
+        ``prefetch_factor`` was added (with ``pin_memory`` opt-in for
+        the resulting tensors).
+        """
         chunks: list[list[int]] = []
         for c in self._iter_token_chunks():
             chunks.append(c)
             if len(chunks) >= self.batch_size:
-                arr = torch.tensor(chunks, dtype=torch.long)  # (B, T+1)
-                tokens_in = arr[:, :-1].contiguous()
-                tokens_out = arr[:, 1:].contiguous()
-                yield tokens_in, tokens_out
+                yield self._build_batch(chunks)
                 chunks = []
+
+    def _iter_prefetch(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        """Background-thread producer + bounded queue consumer.
+
+        A daemon thread pulls token chunks from ``_iter_token_chunks``,
+        groups them into ``batch_size`` batches, calls ``_build_batch``
+        (which pins memory when ``pin_memory`` is on), and pushes the
+        ``(tokens_in, tokens_out)`` tuple onto a bounded
+        ``queue.Queue(maxsize=prefetch_factor)``.
+
+        The main loop just ``q.get()``s. Pinned memory + the GIL release
+        inside parquet/tokenizer decode lets the trainer's GPU step
+        overlap with the next batch's CPU work, which is the
+        ~10-20% win advertised in ``docs/PERF_KNOBS.md``.
+
+        Termination: the producer pushes a sentinel ``None`` when the
+        underlying iterator is exhausted (only happens with
+        ``loop=False``; train streams loop forever). An exception in the
+        producer is wrapped in a ``("__exc__", exc)`` tuple so the
+        consumer can re-raise on the main thread (silent worker-thread
+        crashes are the worst class of bug for distillation runs).
+        """
+        q: queue.Queue = queue.Queue(maxsize=max(2, int(self.prefetch_factor)))
+        _SENTINEL = object()
+
+        def _producer() -> None:
+            try:
+                chunks: list[list[int]] = []
+                for c in self._iter_token_chunks():
+                    chunks.append(c)
+                    if len(chunks) >= self.batch_size:
+                        batch = self._build_batch(chunks)
+                        q.put(batch)
+                        chunks = []
+                # Drain partial batch only matters when loop=False; in
+                # that case the trainer never sees it (StopIteration).
+            except BaseException as exc:  # noqa: BLE001
+                q.put(("__exc__", exc))
+            finally:
+                q.put(_SENTINEL)
+
+        thread = threading.Thread(
+            target=_producer, name="ParquetPrefetch", daemon=True,
+        )
+        thread.start()
+        try:
+            while True:
+                item = q.get()
+                if item is _SENTINEL:
+                    return
+                if isinstance(item, tuple) and len(item) == 2 and item[0] == "__exc__":
+                    # re-raise producer exception on the consumer's stack
+                    raise item[1]
+                yield item
+        finally:
+            # Daemon thread exits with the process; no explicit join
+            # needed. (Drain queue on early break to unblock the
+            # producer's last put().)
+            try:
+                while True:
+                    q.get_nowait()
+            except queue.Empty:
+                pass
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        """Yield (tokens_in [B,T], tokens_out [B,T]) int64 cpu tensors."""
+        if self.prefetch_factor >= 2:
+            yield from self._iter_prefetch()
+        else:
+            yield from self._iter_sync()
 
     def __repr__(self) -> str:
         return (
@@ -243,7 +361,9 @@ class ParquetTokenStream:
             f"seq_len={self.seq_len}, batch_size={self.batch_size}, "
             f"tokenizer={self.tokenizer_name!r}, "
             f"shuffle_buffer={self.shuffle_buffer}, "
-            f"shuffle_seed={self.shuffle_seed})"
+            f"shuffle_seed={self.shuffle_seed}, "
+            f"prefetch_factor={self.prefetch_factor}, "
+            f"pin_memory={self.pin_memory})"
         )
 
 

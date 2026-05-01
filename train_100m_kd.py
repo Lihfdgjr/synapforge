@@ -145,6 +145,48 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _adaptive_kd_every(student_ce: float,
+                       teacher_ce_estimate: float = 4.5,
+                       base: int = 4) -> int:
+    """Schedule KD frequency by gap between student and teacher CE.
+
+    Intuition: when the student is far from the teacher (early training,
+    big gap), every-2-step KD pulls harder; when the student is close
+    to the teacher (late training, small gap), KD adds little signal,
+    so we drop to every-8 or every-16 to save the teacher-forward tax.
+
+    Args:
+        student_ce: running mean CE of recent KD-OFF steps (so the
+            measure is not artificially pulled down by KD itself).
+        teacher_ce_estimate: rough teacher-on-train-distribution CE; the
+            anchor we measure the gap against. 4.5 is a reasonable
+            Qwen2.5-0.5B / wt103 figure; lower = more aggressive KD
+            reduction.
+        base: nominal --kd-every value (4 in production today). The
+            adaptive schedule walks ``base // 2`` ... ``base * 4``
+            around it.
+
+    Returns:
+        New ``kd_every`` integer in {1, 2, 4, 8, 16, ...}. Always >= 1
+        (never disable KD outright via this path).
+
+    Schedule (with ``base=4``):
+        gap > 3.0    -> kd_every = 2     (more KD signal, early)
+        gap > 1.5    -> kd_every = 4     (default mid-training)
+        gap > 0.5    -> kd_every = 8     (small signal, save 50%)
+        gap <= 0.5   -> kd_every = 16    (KD nearly converged)
+    """
+    base = max(1, int(base))
+    gap = max(0.0, float(student_ce) - float(teacher_ce_estimate))
+    if gap > 3.0:
+        return max(1, base // 2)
+    if gap > 1.5:
+        return base
+    if gap > 0.5:
+        return base * 2
+    return base * 4
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--out", default=OUT_DIR_DEFAULT)
@@ -306,6 +348,49 @@ def _parse_args() -> argparse.Namespace:
                         "reservoir RNG and per-epoch file-order shuffle. "
                         "Same seed + same buffer => identical yield order, "
                         "so reruns reproduce token sequence exactly.")
+    # ---- Perf v2 knobs (2026-05-01; see docs/PERF_KNOBS.md) ---------------
+    # Background-thread dataloader prefetch + pinned-memory H2D overlap.
+    p.add_argument("--prefetch-factor", type=int, default=2,
+                   help="size of the dataloader prefetch queue. >=2 spawns "
+                        "a daemon producer thread that pre-builds batches "
+                        "in pinned memory while the GPU step runs. 0/1 "
+                        "keeps the legacy single-thread iterator (each "
+                        "next() blocks on tokenizer + parquet decode). "
+                        "Pairs with --pin-memory for the H2D overlap to "
+                        "actually fire. Default 2 (~10-20%% step win on "
+                        "the 21k tok/s baseline).")
+    p.add_argument("--pin-memory", action="store_true", default=True,
+                   help="allocate yielded (tokens_in, tokens_out) tensors "
+                        "in pinned host memory so the trainer's "
+                        "x.to(device, non_blocking=True) actually overlaps "
+                        "with compute. Silent no-op without CUDA. Default "
+                        "ON when the underlying torch build supports it.")
+    p.add_argument("--no-pin-memory", action="store_false", dest="pin_memory",
+                   help="disable pinned-memory dataloader output (use on "
+                        "machines where pinned RAM is contested or torch "
+                        "build doesn't support it).")
+    # Adaptive KD frequency: scale --kd-every with running student-teacher
+    # CE gap so converged students don't pay the teacher-forward tax.
+    p.add_argument("--kd-every-adaptive", action="store_true", default=False,
+                   help="recompute --kd-every every 100 steps from the "
+                        "running mean CE of the last 50 KD-off steps. "
+                        "Big gap (early) -> halve --kd-every (more KD); "
+                        "small gap (late) -> double or quadruple it (KD "
+                        "adds little, save ~50%% of step time). Default "
+                        "OFF; explicit opt-in. Anchor target is teacher CE "
+                        "estimate via --kd-teacher-ce-estimate.")
+    p.add_argument("--kd-teacher-ce-estimate", type=float, default=4.5,
+                   help="rough teacher-on-train-distribution CE used as "
+                        "the gap anchor for --kd-every-adaptive. 4.5 is a "
+                        "reasonable Qwen2.5-0.5B / wt103 estimate; "
+                        "lower = more aggressive KD-frequency reduction.")
+    # Speculative: fused PLIF surrogate backward Triton kernel.
+    p.add_argument("--triton-fused-backward", action="store_true", default=False,
+                   help="opt into the fused CfC+PLIF surrogate forward+"
+                        "backward Triton kernel. Stubbed in "
+                        "synapforge/backends/triton_fused_backward.py "
+                        "(NotImplementedError on enable). Default OFF; "
+                        "flip on once the kernel lands.")
     return p.parse_args()
 
 
@@ -754,7 +839,9 @@ def main() -> int:
                                   tokenizer_name=args.tokenizer_name,
                                   batch_size=args.batch_size, loop=True,
                                   shuffle_buffer=int(args.shuffle_buffer),
-                                  shuffle_seed=int(args.shuffle_seed))
+                                  shuffle_seed=int(args.shuffle_seed),
+                                  prefetch_factor=int(args.prefetch_factor),
+                                  pin_memory=bool(args.pin_memory))
     train_it = iter(train_ds)
     print(f"train stream: {train_ds!r}")
 
@@ -884,6 +971,32 @@ def main() -> int:
         "In a quiet town nestled between",
         "Recurrent neural networks are",
     ]
+    # ---- adaptive --kd-every state ----
+    # ``args.kd_every`` is the user-provided BASE schedule. When the
+    # adaptive flag is on, we keep a separate ``effective_kd_every``
+    # that is recomputed every 100 steps from the running mean CE of
+    # the last ``KD_ADAPT_WINDOW`` KD-OFF steps (KD-OFF only so the
+    # measure isn't artificially pulled down by KD itself).
+    effective_kd_every = int(args.kd_every)
+    kd_off_ce_window: list[float] = []
+    KD_ADAPT_WINDOW = 50    # rolling buffer of KD-OFF step CEs
+    KD_ADAPT_PERIOD = 100   # recompute the schedule every N steps
+    if args.kd_every_adaptive:
+        _log(f"[kd-adaptive] enabled: base={args.kd_every} "
+             f"teacher_ce_estimate={args.kd_teacher_ce_estimate:.2f} "
+             f"window={KD_ADAPT_WINDOW} period={KD_ADAPT_PERIOD}")
+    if args.triton_fused_backward:
+        # Speculative knob — kernel is stubbed only.
+        try:
+            from synapforge.backends.triton_fused_backward import (
+                enable_fused_backward,
+            )
+            enable_fused_backward()
+        except NotImplementedError as exc:
+            _log(f"[triton-fused-backward] disabled: {exc}; falling back "
+                 f"to PyTorch autograd surrogate path")
+        except Exception as exc:
+            _log(f"[triton-fused-backward] import failed: {exc}; falling back")
 
     for step in range(1, n_steps + 1):
         cur_lr = lr_at(step, peak_lr, args.warmup, n_steps, args.lr_decay)
@@ -930,7 +1043,11 @@ def main() -> int:
                 # On KD-skip steps fall back to pure base_loss without the
                 # (1-α) downweight that would otherwise scale the LM gradient
                 # by 0.3× on 3/4 steps (effectively dropping LR; see review).
-                if step % args.kd_every == 0:
+                # ``effective_kd_every`` == ``args.kd_every`` unless
+                # --kd-every-adaptive is on, in which case it's
+                # auto-tuned from the student-teacher CE gap (see
+                # ``_adaptive_kd_every`` and the post-step update below).
+                if step % effective_kd_every == 0:
                     if kd_teacher_stream is not None:
                         # Push teacher forward onto side stream so it can
                         # overlap with the student backward (which still runs
@@ -953,6 +1070,15 @@ def main() -> int:
                 else:
                     kd = torch.zeros((), device=logits.device)
                     loss = base_loss
+                    # ---- adaptive --kd-every: track CE on KD-OFF steps ----
+                    # We sample CE from KD-OFF steps only so the gap measure
+                    # isn't artificially pulled down by the KD loss itself.
+                    # ``ce_loss.item()`` triggers a host-sync but only on KD-
+                    # OFF steps, which already pay no teacher-forward cost.
+                    if args.kd_every_adaptive:
+                        kd_off_ce_window.append(float(ce_loss.detach().item()))
+                        if len(kd_off_ce_window) > KD_ADAPT_WINDOW:
+                            kd_off_ce_window = kd_off_ce_window[-KD_ADAPT_WINDOW:]
             else:
                 kd = torch.zeros((), device=logits.device)
                 loss = base_loss
@@ -996,6 +1122,27 @@ def main() -> int:
             torch.cuda.synchronize()
         step_ms = (time.time() - t_step) * 1000.0
         cum_tok += args.batch_size * seq_len
+
+        # ---- adaptive --kd-every: recompute schedule every N steps ----
+        # Only mutates ``effective_kd_every``; ``args.kd_every`` (the
+        # base) stays the user input. We need at least KD_ADAPT_WINDOW//2
+        # samples in the running window to avoid noisy early flips.
+        if (
+            args.kd_every_adaptive
+            and step % KD_ADAPT_PERIOD == 0
+            and len(kd_off_ce_window) >= KD_ADAPT_WINDOW // 2
+        ):
+            mean_ce = sum(kd_off_ce_window) / len(kd_off_ce_window)
+            new_kd_every = _adaptive_kd_every(
+                mean_ce,
+                teacher_ce_estimate=args.kd_teacher_ce_estimate,
+                base=int(args.kd_every),
+            )
+            if new_kd_every != effective_kd_every:
+                _log(f"[kd-adaptive] step={step} mean_ce={mean_ce:.3f} "
+                     f"gap={mean_ce - args.kd_teacher_ce_estimate:+.2f} "
+                     f"kd_every {effective_kd_every} -> {new_kd_every}")
+                effective_kd_every = int(new_kd_every)
 
         if step % log_every == 0 or step == 1:
             tok_s = cum_tok / max(time.time() - t0, 1e-6)

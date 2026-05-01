@@ -128,3 +128,113 @@ def test_sparse_z_loss_helper_is_module_level():
     assert callable(mod._sparse_z_loss), (
         "_sparse_z_loss should be exposed at module scope"
     )
+
+
+# ---------------------------------------------------------------------------
+# Perf v2 knobs (2026-05-01): prefetch + pin-memory + adaptive KD-every +
+# triton fused backward stub. See ``docs/PERF_KNOBS.md`` v2 section.
+# ---------------------------------------------------------------------------
+
+
+def test_prefetch_factor_default_is_2():
+    """``--prefetch-factor`` defaults to 2 (background producer thread on)."""
+    mod = _import_module()
+    args = _parse(mod, [])
+    assert args.prefetch_factor == 2, (
+        f"--prefetch-factor default should be 2; got {args.prefetch_factor}"
+    )
+    args_off = _parse(mod, ["--prefetch-factor", "0"])
+    assert args_off.prefetch_factor == 0
+
+
+def test_pin_memory_default_on_with_negation():
+    """``--pin-memory`` defaults ON; ``--no-pin-memory`` flips it off."""
+    mod = _import_module()
+    args = _parse(mod, [])
+    assert args.pin_memory is True
+    args_off = _parse(mod, ["--no-pin-memory"])
+    assert args_off.pin_memory is False
+
+
+def test_kd_every_adaptive_default_off():
+    """Adaptive KD-every must be explicit opt-in (default OFF)."""
+    mod = _import_module()
+    args = _parse(mod, [])
+    assert args.kd_every_adaptive is False
+    args_on = _parse(mod, ["--kd-every-adaptive"])
+    assert args_on.kd_every_adaptive is True
+
+
+def test_kd_teacher_ce_estimate_default_4_5():
+    mod = _import_module()
+    args = _parse(mod, [])
+    assert args.kd_teacher_ce_estimate == 4.5
+    args_low = _parse(mod, ["--kd-teacher-ce-estimate", "3.5"])
+    assert args_low.kd_teacher_ce_estimate == 3.5
+
+
+def test_triton_fused_backward_default_off():
+    """Speculative knob — flag plumbed but kernel stubbed."""
+    mod = _import_module()
+    args = _parse(mod, [])
+    assert args.triton_fused_backward is False
+    args_on = _parse(mod, ["--triton-fused-backward"])
+    assert args_on.triton_fused_backward is True
+
+
+def test_adaptive_kd_every_helper_schedule():
+    """``_adaptive_kd_every`` produces the documented schedule for the
+    four gap regions. Pin the math so a future regression on the
+    schedule surfaces here, not at training time."""
+    mod = _import_module()
+    fn = mod._adaptive_kd_every
+    teacher = 4.5
+    base = 4
+    # gap > 3.0 -> base // 2 = 2 (early, more KD)
+    assert fn(student_ce=8.0, teacher_ce_estimate=teacher, base=base) == 2
+    # gap in (1.5, 3.0] -> base = 4
+    assert fn(student_ce=6.5, teacher_ce_estimate=teacher, base=base) == 4
+    # gap in (0.5, 1.5] -> base * 2 = 8
+    assert fn(student_ce=5.5, teacher_ce_estimate=teacher, base=base) == 8
+    # gap <= 0.5 -> base * 4 = 16 (KD nearly converged)
+    assert fn(student_ce=4.7, teacher_ce_estimate=teacher, base=base) == 16
+    # student CE under teacher CE clamps gap to 0 (still in last bucket)
+    assert fn(student_ce=2.0, teacher_ce_estimate=teacher, base=base) == 16
+
+
+def test_recommended_a800_v2_combo_composes():
+    """The 2026-05-01 recommended A800-80GB combo composes:
+
+      bs=80 --prefetch-factor 4 --pin-memory --kd-every-adaptive
+      --shuffle-buffer 10000
+    """
+    mod = _import_module()
+    args = _parse(
+        mod,
+        [
+            "--batch-size", "80",
+            "--prefetch-factor", "4",
+            "--pin-memory",
+            "--kd-every-adaptive",
+            "--shuffle-buffer", "10000",
+        ],
+    )
+    assert args.batch_size == 80
+    assert args.prefetch_factor == 4
+    assert args.pin_memory is True
+    assert args.kd_every_adaptive is True
+    assert args.shuffle_buffer == 10000
+
+
+def test_triton_fused_backward_stub_raises():
+    """The fused-backward kernel is stubbed; ``enable_fused_backward``
+    raises ``NotImplementedError`` so the trainer falls back gracefully.
+    """
+    pytest.importorskip("torch")
+    from synapforge.backends.triton_fused_backward import (
+        enable_fused_backward,
+        is_available,
+    )
+    assert is_available() is False
+    with pytest.raises(NotImplementedError):
+        enable_fused_backward()

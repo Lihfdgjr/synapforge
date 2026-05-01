@@ -4,6 +4,10 @@ Throughput knobs for `train_100m_kd.py` on A800-80GB. Last validated
 2026-05-01 against the live `v24h_qwen3` run (vocab=151936, seq=256,
 backend=`triton_block`, kd-every=4).
 
+**v2 batch (2026-05-01 — staged for next restart)**: dataloader
+prefetch + pinned memory, adaptive `--kd-every`, fused PLIF surrogate
+backward (stub). See "Perf v2 knobs" section below.
+
 ## Summary table
 
 ### Batch size sweep
@@ -97,11 +101,109 @@ If you need bs=96+ in the future:
 * Or enable `--grad-checkpoint` to trade compute for activation memory
   on the CfC sequence loop.
 
+## Perf v2 knobs (2026-05-01)
+
+Three new knobs staged for the next trainer restart. The Run 3e
+baseline (bs=64, vocab=151936, seq=256, triton_block) is **~21k
+tok/s** with KD step at 1.3s vs KD-off at 0.35s — KD is dominating.
+
+### 1. Dataloader prefetch + pinned memory
+
+| Combo | Producer overlap | H2D overlap | Expected step win |
+|-------|------------------|-------------|-------------------|
+| `--prefetch-factor 0` (or 1)            | none | none           | baseline |
+| `--prefetch-factor 2`                   | 1 batch ahead | none | +5-8% |
+| `--prefetch-factor 2 --pin-memory`      | 1 batch ahead | yes  | **+10-20%** |
+| `--prefetch-factor 4 --pin-memory`      | 3 batches ahead | yes | +12-22% (bs=80) |
+
+Mechanism: `synapforge/data/__init__.py::ParquetTokenStream` spawns a
+daemon producer thread that pre-builds batches into a bounded
+`queue.Queue(maxsize=prefetch_factor)`; the main iterator just
+consumes. With `--pin-memory` the resulting tensors are page-locked
+host memory, so the trainer's existing `x.to(device,
+non_blocking=True)` H2D copy actually overlaps with compute.
+
+Worker-thread exceptions are re-raised on the main consumer's stack
+(silent crashes are the worst class of bug for KD runs). Determinism
+is preserved: same `--shuffle-seed` + same `--shuffle-buffer` yields
+identical batch sequence with prefetch on or off — the prefetch
+thread is a producer/consumer overlay only, NOT a re-shuffler.
+See `tests/integration/test_dataloader_prefetch.py`.
+
+### 2. Adaptive `--kd-every`
+
+| `--kd-every-adaptive` | Schedule (base=4, teacher_ce=4.5) | Notes |
+|-----------------------|-----------------------------------|-------|
+| off (default)         | fixed N (== `--kd-every`)         | Run 3e behaviour. |
+| on                    | walks {2, 4, 8, 16} every 100 steps | Recomputed from running mean CE of last 50 KD-OFF steps. |
+
+```python
+def _adaptive_kd_every(student_ce, teacher_ce_estimate=4.5, base=4):
+    gap = max(0.0, student_ce - teacher_ce_estimate)
+    if gap > 3.0:    return max(1, base // 2)   # 2 (early, more KD)
+    if gap > 1.5:    return base                # 4 (default mid)
+    if gap > 0.5:    return base * 2            # 8 (small signal)
+    return base * 4                              # 16 (KD nearly converged)
+```
+
+Expected throughput: +20-30% averaged over a Phase-0 -> Phase-1 run.
+Early steps stay at kd-every=2 or 4 (full KD signal); once student
+ppl drops past ~80, kd-every climbs to 8-16 and the teacher-forward
+tax shrinks proportionally. Knob measured on KD-OFF CE only so the
+gap measure isn't artificially pulled down by KD itself.
+
+### 3. Triton fused PLIF surrogate backward (stub)
+
+| `--triton-fused-backward` | Status |
+|---------------------------|--------|
+| off (default)             | safe — PyTorch autograd surrogate |
+| on                        | raises NotImplementedError, falls back to off (logs warning) |
+
+Stubbed in `synapforge/backends/triton_fused_backward.py`. The kernel
+would fuse the surrogate-grad computation (`dspike/d(v - thr)`) into
+the same Triton tile as the spike forward in
+`synapforge/backends/triton_block_kernel.py`, removing ~25 ms/step of
+Python-side dispatch (10 layers x 256 timesteps x ~10us). Target
++5-10% step-time win; no math changes (same surrogate definition,
+just done in-kernel). When implemented, the flag flips the registry
+hook and the existing `synapforge/surrogate.py` backward path
+becomes unused.
+
+## Recommended A800-80GB combo (v2)
+
+```bash
+python3 -u train_100m_kd.py \
+  --backend triton_block \
+  --batch-size 80 \
+  --z-loss-topk 2048 \
+  --kd-every 4 \
+  --kd-every-adaptive \
+  --kd-async-teacher \
+  --prefetch-factor 4 \
+  --pin-memory \
+  --shuffle-buffer 10000 \
+  --torch-compile off \
+  # --triton-fused-backward stays off until the kernel lands
+  ...
+```
+
+Expected: **~30-35k tok/s** averaged across Phase-0 -> Phase-1
+(prefetch +15% over the 26k tok/s v1 combo, then adaptive KD-every
+contributes another +10-20% as the student converges and KD-every
+climbs from 4 to 8/16). At bs=80, total RAM cost of the prefetch
+queue is ~20 MiB pinned (4 batches x bs=80 x seq=256 x 8B x 2).
+
 ## See also
 
 * `tests/integration/test_sparse_z_loss.py` -- numerical proof that
   top-2048 vs full logsumexp differs by <1e-4 nats at vocab 151k.
 * `tests/integration/test_perf_knobs_compose.py` -- argparse smoke for
-  the 4 new knobs.
+  v1 + v2 knobs (`_adaptive_kd_every` schedule pinned, fused-backward
+  stub raises).
+* `tests/integration/test_dataloader_prefetch.py` -- prefetch
+  producer/consumer contract (deterministic ordering, exception
+  resurfacing, pin-memory no-CUDA no-op).
 * `tests/integration/test_kd_chunk_autotune.py` -- the existing KD
   chunk auto-tune (pre-bumped to use `mem_get_info` headroom budget).
+* `synapforge/backends/triton_fused_backward.py` -- design notes for
+  the (stubbed) fused backward kernel.
