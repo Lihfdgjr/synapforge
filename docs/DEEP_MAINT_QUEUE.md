@@ -470,7 +470,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.6: mohuanfang warehouse activated, rental disk N% -> M%`.
 
 ## T3.7 — Pre-tokenize wikitext-103
-- [x] (01:58, hash-pending, scripts/tokenize_wikitext103.py + 4 tests; awaits rental run)
+- [x] (01:58, 1f0d480, scripts/tokenize_wikitext103.py + 4 tests; awaits rental run)
 - **Status**: tokenizer script shipped 2026-05-02 01:58 — `scripts/tokenize_wikitext103.py` (~270 LOC). Probes `/workspace/data/wikitext-103/*.txt`, `/workspace/data/wikitext-103/wt103_raw/*.txt`, `/workspace/data/wt103/*.txt` in priority order; first non-empty wins. Concatenates train splits, runs Qwen 2.5 0.5B tokenizer (`AutoTokenizer.from_pretrained("/workspace/teachers/qwen2.5-0.5b" -> "Qwen/Qwen2.5-0.5B")`) with `max_length=512`+`truncation=True`, slices flat stream into fixed `max_length` chunks (drops <8-token tail). Writes BOTH `--output-pkl` (Python pickle, list[list[int]]) AND `--output-parquet` (single column `input_ids: list<int32>` + companion `.manifest.json` with kind/tokenizer/rows). `--smoke` mode bypasses FS scan + Qwen download and emits 100 mock token sequences for unit tests; tests at `tests/integration/test_tokenize_wt103.py` — 6/6 PASS on CPU in 1.42s without `transformers` installed (4 spec'd: smoke_writes_pkl / smoke_writes_parquet / missing_files_clear_error / token_count_in_smoke + 2 helper bonuses: find_input_files priority, _chunk_into_sequences short-tail-drop). Missing files exit `1` with clear `[tokenize_wt103] FATAL: no wikitext-103 source files found.` on stderr.
 - **Rental run command**:
   ```bash
