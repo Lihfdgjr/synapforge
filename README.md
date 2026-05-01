@@ -65,6 +65,24 @@ Three concrete questions we wanted to answer:
 | Multi-core / mixed-device / multi-node parallelism            | ✅ `synapforge/parallel.py` — 3-layer (CPU thread tune + CPU/GPU mixed placement + auto gloo/nccl DDP). Example: `examples/mixed_device_training.py`. See `docs/PARALLELISM.md`. |
 | Investor demo (NeuroMCP 4-button + R-fold bench)              | ✅ `python -m synapforge.demo.cli all` — runs in <2s on CPU, includes 30s pitch. CPU 4-button: density 5.7%→6.7%, K 9→10, hit_rate 100%. GPU bench: N=64 R=16 = **2.99×** (matches the agent's 2.7× prediction). |
 | Full-volume triple-path backup (mohuanfang + GitHub + HF)     | ✅ `scripts/triple_backup_daemon.py`, auto-spawned by trainer at startup (`--backup-interval 600`). After 2026-04-30 v4.1 disaster, every step's full out-dir is mirrored off-rental within 10 min. See `docs/BACKUP.md`. |
+| 🤖 Auto-eval per checkpoint (chat samples + bench subset)     | ✅ `scripts/auto_eval_daemon.py` — watches `out_dir`, on every fresh ckpt dumps 5 EN + 5 ZH chat samples and runs MMLU/HellaSwag/LAMBADA (logits-only, ~3 min). On `best*.pt` also runs HumanEval/MBPP/GSM8K. Aggregates to `auto_eval/index.json`; render with `scripts/plot_eval_curves.py` (ASCII, no matplotlib needed). See `docs/AUTO_EVAL.md`. |
+
+---
+
+## 📚 Documentation
+
+The repo ships 30+ docs under `docs/`. The single source of truth for navigation
+is **[docs/INDEX.md](docs/INDEX.md)** — it groups every doc by audience
+("Just want to use it" / "Want to train it" / "Want to verify our claims" /
+"Reliability + ops" / "Architecture deep-dive" / "Code reviews" /
+"Continual learning + safety") and lists primary + secondary cross-refs.
+
+**Three reading orders by audience**:
+- **Investor / non-technical**: [INVESTOR](docs/INVESTOR.md) → [QUICKSTART](docs/QUICKSTART.md) (path 1) → [HONEST_ASSESSMENT](docs/HONEST_ASSESSMENT.md).
+- **New collaborator (30 min)**: [QUICKSTART](docs/QUICKSTART.md) → [ARCHITECTURE](docs/ARCHITECTURE.md) → [HONEST_ASSESSMENT](docs/HONEST_ASSESSMENT.md) → [ROADMAP](docs/ROADMAP.md).
+- **Reviewer of the paper draft**: [RFOLD_PAPER](docs/RFOLD_PAPER.md) → [BENCHMARKS](docs/BENCHMARKS.md) → [AUTO_EVAL](docs/AUTO_EVAL.md) → [NEUROMCP_UNIVERSAL](docs/NEUROMCP_UNIVERSAL.md).
+
+Don't read docs in alphabetical order — see the [INDEX](docs/INDEX.md).
 
 ---
 
