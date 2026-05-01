@@ -75,6 +75,12 @@ from .skill_synthesizer import (
     SkillSynthesizer,
     SynthConfig,
 )
+from .web_actuator import (
+    ACTION_NAMES,
+    NUM_ACTION_TYPES,
+    StepResult,
+    WebActuator,
+)
 
 __all__ = [
     # head.py
@@ -129,4 +135,9 @@ __all__ = [
     # skill_synthesizer.py (NEW — high-level mint API + dedup + LTD pass)
     "SkillSynthesizer",
     "SynthConfig",
+    # web_actuator.py (NEW — DOM-only Computer-Use MVP, P18)
+    "WebActuator",
+    "StepResult",
+    "ACTION_NAMES",
+    "NUM_ACTION_TYPES",
 ]

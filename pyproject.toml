@@ -48,6 +48,7 @@ bitnet = []  # quantize.py is pure-python torch — listed for discoverability
 lava   = ["lava-nc>=0.10.0"]
 data   = ["pyarrow>=12.0"]
 hf     = ["transformers>=4.30", "datasets>=2.10"]
+web    = ["playwright>=1.40"]  # sf.action.web_actuator — DOM-only Computer-Use MVP (P18)
 dev    = [
     "pytest>=7.0",
     "pyarrow>=12.0",
@@ -89,6 +90,11 @@ minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra -q"
+markers = [
+    "slow: long-running validation (>= 10 min). Skipped by default; opt in with `pytest -m slow`.",
+    "gpu: requires CUDA GPU (typically >= 70 GB for 1M+ context). Skipped on CPU-only boxes.",
+    "needs_playwright: requires playwright; auto-skipped when not installed.",
+]
 
 
 [tool.mypy]

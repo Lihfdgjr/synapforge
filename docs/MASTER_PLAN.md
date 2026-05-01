@@ -205,12 +205,21 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Open**: Run 2 (PID 13663) was launched before this patch. Restart with patched code at
   next ckpt boundary. **Do NOT** lose Run 2's progress — warmstart from latest best ckpt.
 
-### P12. `chat_demo` strict=False silently swallows shape mismatch
+### P12. `chat_demo` strict=False silently swallows shape mismatch — RESOLVED 2026-05-01
 - **Symptom**: `synapforge/demo/chat_demo.py:69-82` calls `load_state_dict(strict=False)`.
   If a future ckpt's `d`/`n_layers`/`ffn_ratio` differs, demo loads garbage.
-- **Fix**: Save `{"model": ..., "config": {...}}` in trainer; chat_demo reads config from
-  ckpt. Until then: log WARNING when >5% of params drop.
-- **Severity**: pre-pitch-required.
+- **Fix applied**: Both trainers (`train_100m_kd.py`, `train_100m_sft.py`) now persist a
+  full architecture-config dict via the `_build_config_dict(args)` helper into every
+  `torch.save({"model": ..., "config": {...}})` call (best/periodic/final/phase-aware).
+  The `config` carries `vocab/d/n_layers/loop_depth/max_seq/ffn_ratio/sparsity/dropout/tie_lm_head`.
+  Loaders (`synapforge/demo/chat_demo.py::_try_load_live` + `scripts/chat_repl.py::load_model`)
+  read `ckpt["config"]` first; if absent (legacy ckpts) they fall back to the documented
+  defaults and emit `[chat_demo] WARNING: ckpt has no config; using fallback values ...`.
+  After `load_state_dict(strict=False)` they also warn when `len(missing)+len(unexpected) > 5`,
+  so silent shape drift surfaces visibly. Round-trip integration test:
+  `tests/integration/test_ckpt_config_roundtrip.py` (2 tests, both passing).
+- **Backwards-compat**: Run 2's existing rental ckpts (no `config`) still load via the
+  fallback path — verified by `test_legacy_ckpt_no_config_falls_back`.
 
 ### P13. KD chunk size hardcoded `bs // 4`
 - **Symptom**: `train_100m_kd.py:318` chunk = bs // 4. At bs=128 still 3.7GiB intermediate.

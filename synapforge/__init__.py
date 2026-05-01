@@ -53,7 +53,16 @@ from .plasticity import (
 from .runtime import Runtime, compile
 from .surrogate import PLIFCell, spike
 from .surrogate import register as register_surrogate
-from .train import train
+
+# `synapforge.train` was relocated to `legacy/synapforge_train.py` in
+# commit cb571f9 (P15+P16+P17 cleanup). The hard import here was missed
+# by that commit. Make it defensive so `import synapforge.action.*` and
+# friends keep working — `train` becomes None unless the legacy script
+# is wired back in.
+try:
+    from .train import train  # type: ignore
+except Exception:  # pragma: no cover - legacy module relocated
+    train = None  # type: ignore[assignment]
 
 
 def tied_lm_head(hidden, vocab, embedding=None):

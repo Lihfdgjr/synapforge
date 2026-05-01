@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<!-- MIT-licensed test fixture for sf.action.web_actuator (P18). -->
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SynapForge WebActuator Smoke Fixture</title>
+    <style>body{font-family:sans-serif;padding:24px;}button,input{margin:6px;}</style>
+</head>
+<body>
+    <h1>SynapForge WebActuator Fixture</h1>
+    <p>Static page exercised by <code>scripts/web_actuator_smoke.sh</code>.</p>
+    <button id="btn-alpha" data-test-id="alpha" onclick="window.__clicks=(window.__clicks||0)+1">Alpha</button>
+    <button id="btn-beta"  data-test-id="beta"  onclick="window.__clicks=(window.__clicks||0)+1">Beta</button>
+    <button id="btn-gamma" data-test-id="gamma" onclick="window.__clicks=(window.__clicks||0)+1">Gamma</button>
+    <input id="search-box" data-test-id="searchbox" type="text" placeholder="search...">
+    <p><a id="link-home" data-test-id="home" href="#home">home anchor</a></p>
+</body>
+</html>

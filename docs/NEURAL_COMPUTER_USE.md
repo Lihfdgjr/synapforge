@@ -6,6 +6,19 @@ This document describes how SynapForge agents drive a real browser **without
 emitting a single tool-call token**. The action manifold lives in the
 synapses, not in JSON.
 
+**Entry point** (P18 MVP): `synapforge/action/web_actuator.py::WebActuator`.
+DOM-only, Playwright headless, maps `ActionHead` hidden vector to one of
+`{noop, click(x,y), scroll(dy), type(text), navigate(url)}`. See §11 below.
+
+```bash
+pip install -e ".[web]"
+playwright install chromium
+bash scripts/web_actuator_smoke.sh   # 50 random steps, asserts >=1 click
+```
+
+Convention: `action_dim=64`, hidden tensor of shape `(64,)` or `(N, 64)`,
+`action_head` is any `nn.Module` mapping `(action_dim,) -> (>=action_dim,)`.
+
 ---
 
 ## 1. Architecture
@@ -246,3 +259,95 @@ python scripts/train_neural_web.py --episodes 50 --max-steps 24 \
 Synapse density growth + K_alive growth + reward curve land in the JSON.
 That's the artifact for investor demos — pure pixels in, neural action
 out, no `<tool_call>` tokens emitted on either side of the loop.
+
+---
+
+## 11. WebActuator — DOM-only Computer-Use MVP (P18)
+
+The `WebActuator` is the **minimum viable** version of the Computer-Use
+claim. It exists to make MASTER_PLAN.md §5 row "Computer-use" demoable
+*today* without a vision pipeline, login flows, or multi-tab.
+
+### Install
+
+```bash
+pip install -e ".[web]"
+playwright install chromium
+```
+
+The `[web]` extra pulls `playwright>=1.40`. Without it the WebActuator
+module still imports (the Playwright import is optional / lazy), it just
+won't run end-to-end.
+
+### Basic usage
+
+```python
+import torch.nn as nn
+from playwright.sync_api import sync_playwright
+from synapforge.action.web_actuator import WebActuator
+
+ACTION_DIM = 64
+action_head = nn.Linear(ACTION_DIM, ACTION_DIM)   # in real use: ActionHead
+
+with sync_playwright() as pw:
+    browser = pw.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto("https://example.com")
+    actuator = WebActuator(page, action_head, action_dim=ACTION_DIM)
+    for hidden in hidden_seq:                     # (N, action_dim)
+        rec = actuator.step(hidden)               # → {"action": ..., "result": ...}
+    browser.close()
+```
+
+### Action space
+
+| ID | Name      | Effect                                           |
+|----|-----------|--------------------------------------------------|
+| 0  | `noop`    | observe only                                     |
+| 1  | `click`   | `page.mouse.click(x, y)`                         |
+| 2  | `scroll`  | `page.mouse.wheel(0, dy)`                        |
+| 3  | `type`    | `page.keyboard.type(text)` (codebook-indexed)   |
+| 4  | `navigate`| `page.goto(url)` (codebook-indexed)             |
+
+The `ActionHead` produces logits of length `action_dim`. Slots 0..4 are
+the action-type slots (argmax decides what to do). Slots 5..7 are
+sigmoid/tanh-decoded `xy` and `scroll_dy`. The remaining slots index
+into `url_codebook` and `type_codebook`. This keeps the ABI small (≤ a
+few dozen bytes per step) and **emits no tokens**.
+
+### action_dim convention
+
+We use `action_dim = 64` so callers can swap an `nn.Linear(64, 64)` for
+the smoke / unit test, and a real backbone-fed `ActionHead` later
+without changing the actuator. Anything `>= 16` works (the codebook
+slots need room).
+
+### Smoke test
+
+```bash
+bash scripts/web_actuator_smoke.sh
+```
+
+Boots Playwright headless against `synapforge/tests/fixtures/static_demo.html`,
+runs 50 random `ActionHead` steps, asserts at least one successful click,
+and prints the action-type histogram. Typical output:
+
+```
+[web_actuator_smoke] step histogram:
+  noop        12
+  click        9
+  scroll      11
+  type        10
+  navigate     8
+[web_actuator_smoke] successful clicks: 5
+[web_actuator_smoke] OK
+```
+
+### What's intentionally NOT in MVP scope
+
+Per MASTER_PLAN.md §12: **vision pipeline, multi-tab, login flows,
+CAPTCHA, real-site curriculum**. Those live in
+`synapforge/action/web_env.py` (full pixel-observation loop) and
+`scripts/train_neural_web.py` (PPO training). The `WebActuator` MVP is
+the pre-pitch artifact that proves "neurons drive a browser" in 30
+seconds on a clean clone.
