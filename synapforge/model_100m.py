@@ -18,7 +18,7 @@ HybridBlock (sf primitives only):
         h_in = h_in + dropout(ff)
     return h_in
 
-The block is applied with WEIGHT-SHARED loop_depth=4 (params used 4× per
+The block is applied with WEIGHT-SHARED loop_depth=1 default for speed (or 4 for used 4× per
 forward, but only counted 1× — this is the RDT trick). All weights are
 typed as sf.Param with grad_source=["bp"] for the synapse and ["bp"] for
 the rest; flipping a synapse to ["bp", "hebb"] enables plasticity merge.

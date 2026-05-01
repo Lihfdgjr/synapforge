@@ -96,6 +96,7 @@ def _parse_args() -> argparse.Namespace:
                    help="HF model id for KD teacher (frozen); see HF_ENDPOINT for mirror")
     p.add_argument("--kd-weight", type=float, default=0.7,
                    help="alpha for KD loss; loss = (1-alpha)*ce + alpha*kd")
+    p.add_argument("--kd-every", type=int, default=4)
     p.add_argument("--kd-temperature", type=float, default=4.0,
                    help="softmax temperature T; KD scaled by T*T")
     p.add_argument("--teacher-fallback-ckpt", default="",
@@ -217,7 +218,7 @@ def _load_teacher(name: str, fallback_ckpt: str = "") -> "torch.nn.Module":
             ck = torch.load(fallback_ckpt, map_location="cpu")
             sd = ck.get("model", ck)
             t_model = build_synapforge_100m(
-                vocab=50257, d=512, n_layers=10, loop_depth=4,
+                vocab=151643, d=512, n_layers=10, loop_depth=1,
                 max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
                 use_grad_checkpoint=False,
             )
@@ -238,22 +239,22 @@ def _teacher_logits(teacher, x: "torch.Tensor") -> "torch.Tensor":
     return out
 
 
-def _kd_loss(
-    student_logits: "torch.Tensor",
-    teacher_logits: "torch.Tensor",
-    T: float,
-) -> "torch.Tensor":
-    """KL(student_logp || teacher_p) at temperature T, scaled by T*T (per Hinton 2015)."""
-    V_s = student_logits.size(-1)
-    V_t = teacher_logits.size(-1)
-    if V_s != V_t:
-        V = min(V_s, V_t)
-        student_logits = student_logits[..., :V]
-        teacher_logits = teacher_logits[..., :V]
-    student_logp = F.log_softmax(student_logits.float() / T, dim=-1)
-    teacher_p = F.softmax(teacher_logits.float() / T, dim=-1)
-    return F.kl_div(student_logp, teacher_p, reduction="batchmean") * (T * T)
-
+def _kd_loss(student_logits, teacher_logits, T: float = 4.0):
+    """Chunked KL(student_logp || teacher_p), avoids OOM on large vocab."""
+    import torch
+    import torch.nn.functional as F
+    V = student_logits.size(-1); V_t = teacher_logits.size(-1)
+    if V_t > V: teacher_logits = teacher_logits[..., :V]
+    elif V > V_t: student_logits = student_logits[..., :V_t]
+    bs = student_logits.size(0); chunk = max(1, bs // 4)
+    total = 0.0
+    for i in range(0, bs, chunk):
+        sl = student_logits[i:i+chunk]; tl = teacher_logits[i:i+chunk].detach()
+        slp = F.log_softmax(sl.float() / T, dim=-1)
+        tp = F.softmax(tl.float() / T, dim=-1)
+        total = total + F.kl_div(slp, tp, reduction='sum') / sl.size(0) / sl.size(1)
+    n_chunks = (bs + chunk - 1) // chunk
+    return (total / n_chunks) * (T * T)
 
 def main() -> int:
     args = _parse_args()
@@ -270,19 +271,19 @@ def main() -> int:
         print(line, flush=True)
         log_lines.append(line)
 
-    _log(f"device={DEVICE} dtype={DTYPE} out={out_dir} backend={backend_name}")
-    _log(f"steps={n_steps} bs={args.batch_size} seq={SEQ_LEN} lr={LR}")
+    print(f"device={DEVICE} dtype={DTYPE} out={out_dir} backend={backend_name}")
+    print(f"steps={n_steps} bs={args.batch_size} seq={SEQ_LEN} lr={LR}")
 
     # ---------------- model ----------------
     model = build_synapforge_100m(
-        vocab=50257, d=512, n_layers=10, loop_depth=4,
+        vocab=151643, d=512, n_layers=10, loop_depth=1,
         max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
         use_grad_checkpoint=args.grad_checkpoint,
     )
     n_params = model.num_parameters()
-    _log(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
+    print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
     plif_cells = [m for m in model.modules() if isinstance(m, PLIFCell)]
-    _log(f"plif cells found: {len(plif_cells)}")
+    print(f"plif cells found: {len(plif_cells)}")
 
     # ---------------- warm-start ----------------
     if warm_ckpt and os.path.exists(warm_ckpt):
@@ -359,7 +360,7 @@ def main() -> int:
 
     # ---------------- optimizer ----------------
     optim = build_optimizer(model, lr=LR, weight_decay=WEIGHT_DECAY)
-    _log(f"optimizer: {type(optim).__name__} lr={LR} wd={WEIGHT_DECAY}")
+    print(f"optimizer: {type(optim).__name__} lr={LR} wd={WEIGHT_DECAY}")
 
     # Load optimizer state from warmstart ckpt (preserves Adam m/v momentum;
     # without this, warmstart loses momentum state and the run cold-starts
@@ -377,17 +378,17 @@ def main() -> int:
             _log(f"warmstart optim load skipped: {exc}")
 
     # ---------------- data ----------------
-    train_ds = ParquetTokenStream(DATA_GLOB, seq_len=SEQ_LEN,
+    train_ds = ParquetTokenStream(DATA_GLOB, seq_len=SEQ_LEN, tokenizer_name="/workspace/teachers/qwen2.5-0.5b",
                                   batch_size=args.batch_size, loop=True)
     train_it = iter(train_ds)
-    _log(f"train stream: {train_ds!r}")
+    print(f"train stream: {train_ds!r}")
 
-    val_ds = ParquetTokenStream(VAL_GLOB, seq_len=SEQ_LEN,
+    val_ds = ParquetTokenStream(VAL_GLOB, seq_len=SEQ_LEN, tokenizer_name="/workspace/teachers/qwen2.5-0.5b",
                                 batch_size=args.batch_size, loop=False)
-    _log(f"val stream:   {val_ds!r}")
+    print(f"val stream:   {val_ds!r}")
 
     from synapforge.huggingface_adapter import load_tokenizer
-    tok = load_tokenizer("gpt2")
+    tok = load_tokenizer("/workspace/teachers/qwen2.5-0.5b")
 
     # ---------------- training ----------------
     metrics = {"step": [], "loss": [], "step_ms": [], "tok_per_s": [],
@@ -429,7 +430,7 @@ def main() -> int:
             if teacher is not None and args.kd_weight > 0:
                 with torch.no_grad():
                     t_logits = _teacher_logits(teacher, x)
-                kd = _kd_loss(logits, t_logits, args.kd_temperature)
+                kd = _kd_loss(logits, t_logits, args.kd_temperature) if (step % args.kd_every == 0) else torch.tensor(0., device=logits.device)
                 loss = (1.0 - args.kd_weight) * base_loss + args.kd_weight * kd
             else:
                 kd = torch.zeros((), device=logits.device)
@@ -527,7 +528,7 @@ def main() -> int:
     with open(os.path.join(out_dir, "live.log"), "w") as f:
         f.write("\n".join(log_lines))
     elapsed = time.time() - t0
-    _log(f"done in {elapsed:.1f}s ({cum_tok} tokens, "
+    print(f"done in {elapsed:.1f}s ({cum_tok} tokens, "
          f"{cum_tok/max(elapsed,1e-6):.0f} tok/s)")
     return 0
 

@@ -38,11 +38,13 @@ _TOKENIZER = None
 
 
 def _get_tokenizer(name: str = "gpt2"):
-    """Lazy-load GPT-2 BPE; cached locally on first call."""
+    """Lazy-load tokenizer (any HF AutoTokenizer-compatible); cached."""
     global _TOKENIZER
     if _TOKENIZER is None:
-        from transformers import GPT2TokenizerFast
-        _TOKENIZER = GPT2TokenizerFast.from_pretrained(name)
+        from transformers import AutoTokenizer
+        _TOKENIZER = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
+        if _TOKENIZER.pad_token_id is None:
+            _TOKENIZER.pad_token = _TOKENIZER.eos_token
     return _TOKENIZER
 
 
