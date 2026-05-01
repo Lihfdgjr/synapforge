@@ -212,3 +212,10 @@ _Last refreshed: 2026-05-01 by SynapForge agent. Refresh: bump table §2 + add �
 - H1-H3: trainer alive PID 24075 (Run 3l), GPU 95% / 70.5GB. Disk 30%. Mohuanfang count 2 vs rental 3 (drift 1, OK).
 - Run 3l: step 210 ce=5.71 (KD off), 22k tok/s, healthy. VAL eval at step 500 pending.
 - Tasks advanced: T1.4 (STDP density 0→59.8%), T1.6 (R-fold A800 N64R16 2.28×), T2.1 (5 papers via agent ad6e959).
+
+## Cron deep-fire 2026-05-02 00:00
+
+- H1-H5: trainer alive PID 24075 (Run 3l) GPU 99%/70.5GB. Disk 30%.
+- Run 3l VAL: step 1000=312, 1500=362, 2000=417 (slow rise, NOT Run 3c-style catastrophe). step_2000.pt written.
+- Tasks advanced: T1.5 (NeuroMCP density 40% K=12 hit 1.0), T2.4 freeze vocab tail (281336a), T2.5 spike-rate-target loss (2b086ec), T2.6 LM head spectral norm (16f5de5), T2.7 grad accumulation (2bc443f). 4 worktree agents shipped.
+- Pending: T1.1 chat sample (needs ckpt > step 4000 of CURRENT run, step_002000_run3l doesn't qualify).
