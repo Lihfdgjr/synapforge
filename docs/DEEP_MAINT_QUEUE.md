@@ -641,9 +641,24 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 # Tier 7 — Self-improvement
 
 ## T7.1 — Doc stamp refresh
-- [ ] **Status**: pending
+- [x] (02:30, see commit, 38 stale -> 28 stale; 35 docs stamp-refreshed (13 bumped + 22 stamp-initialized for previously-unstamped docs); 14 STALE flagged content-outdated (dead refs to deleted files); 14 MAYBE STALE flagged for ref-change verification)
+- **Status**: shipped 2026-05-02. Two script fixes landed alongside: (a) `--update-stamps` now also initializes stamps for previously-unstamped docs (was: only bumped existing stamps), pinned to the doc's own last-touched sha so re-runs converge to `fresh`; (b) `classify()` now checks dead refs BEFORE the auto-fresh shortcut so a doc that references deleted files reports `STALE` regardless of how recently its own text was edited (previously hidden behind auto-fresh).
+- **Content-outdated docs flagged STALE (need real edit, NOT just stamp refresh)**:
+  - `docs/ANTI_LORA.md` — refs deleted Plan C scripts (`scripts/launch_plan_c_cpu.sh`, `scripts/qwen_lora_chat_repl.py`, `scripts/train_qwen_lora.py`, `synapforge/demo/qwen_lora_demo.py`)
+  - `docs/BACKUP.md`, `docs/PARETO_OPTIMIZATION.md` — ref deleted `synapforge/train_v42_universal.py`
+  - `docs/BENCHMARKS.md` — ref deleted `synapforge/bench/NEWBENCH.py`
+  - `docs/CONTEXT_SCALING.md` — refs deleted `synapforge/memory/coconut_summarizer.py`, `synapforge/memory/faiss_pq_index.py`
+  - `docs/COVERAGE.md` — refs deleted test files (`test_infinite_smoke.py`, `test_self_learn_smoke.py`, `test_tools_registry.py`)
+  - `docs/DATA_SOURCES.md` — ref deleted `synapforge/scripts/sync_to_mohuanfang.sh`
+  - `docs/DEEP_MAINT_QUEUE.md` (this file) — refs `scripts/upload_hf_hub.py` (T4.2 not yet shipped) + deleted `synapforge/triton_block_kernel.py`
+  - `docs/MASTER_PLAN.md` — refs deleted `synapforge/foo.py`, `synapforge/memory.py`, `synapforge/train.py` + 4 deleted tests
+  - `docs/MATMUL_FREE.md` — ref deleted `synapforge/backends/triton_binspike_ternary.py`
+  - `docs/MOE_AUDIT.md` — ref unimplemented `tests/integration/test_coe_wired_in_100m.py`
+  - `docs/PHASE_TRAINING.md` — ref deleted `scripts/cache_modal.py`
+  - `docs/RELEASE_FLOW.md` — ref deleted `tests/test_release_pipeline.py`
+  - `docs/REVIEW_TRAINER.md` — ref deleted `synapforge/data.py`
 - **Cmd**: `python scripts/check_doc_stamps.py --update-stamps`
-- **Commit**: `auto-T7.1: doc stamps refreshed (N stale -> M stale)`.
+- **Commit**: `auto-T7.1: doc stamps refreshed (38 stale -> 28 stale)`.
 
 ## T7.2 — Memory entries for durable session-discoveries
 - [ ] **Status**: pending — done lazily as we learn

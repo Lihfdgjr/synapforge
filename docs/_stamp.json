@@ -9,10 +9,20 @@
     "last_verified_sha": "9442f19b1f283972000556fcd723adc9999f071d",
     "verifier": "agent_p10"
   },
+  "docs/ANTI_LORA.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "6dd7f16af3401a6d08034b917d5f258a79db2052",
+    "verifier": "agent"
+  },
   "docs/ARCHITECTURE.md": {
     "last_verified_date": "2026-05-01",
     "last_verified_sha": "89e4a8e28f360f55aabeca3e8a8bbea37c348e6a",
     "verifier": "agent_p10"
+  },
+  "docs/ARCHIVE_NEW_PAPERS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "ad6e959aeeeecb388b42a0500d1d8195a5ca3fbf",
+    "verifier": "agent"
   },
   "docs/AUTO_EVAL.md": {
     "last_verified_date": "2026-05-01",
@@ -21,12 +31,22 @@
   },
   "docs/BACKUP.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "f8194a084248377d5c680bdb5bab4c1cc62080f2",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
+  },
+  "docs/BASELINE_COMPARISON.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "c5259b0c8578162d834adcb6fb222440bc23e36d",
+    "verifier": "agent"
+  },
+  "docs/BASELINE_COMPARISON_LIVE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "7c053c961e756038e8eb97b5ba338fd6e778e4a0",
+    "verifier": "agent"
   },
   "docs/BENCHMARKS.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "9442f19b1f283972000556fcd723adc9999f071d",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
   },
   "docs/CHAT_PROTOCOL.md": {
@@ -34,9 +54,14 @@
     "last_verified_sha": "8fce009afc9ff4820b90f57a612d0d237cdca5c0",
     "verifier": "agent_p10"
   },
+  "docs/CHAT_SAMPLES.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "be1bba60c0d1fa18cacaa76c0a9bd35adaba3aad",
+    "verifier": "agent"
+  },
   "docs/CONTEXT_SCALING.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "3e4081d5b541ad4f29abc99caff71d81dc8a4341",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
   },
   "docs/CONTINUAL_LEARNING.md": {
@@ -44,10 +69,25 @@
     "last_verified_sha": "80d8c3b81665da112232ad909834d01e8b444c88",
     "verifier": "agent_p10"
   },
+  "docs/COVERAGE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "ffa7bf9dd574f9798d190fb48a2a6ff835d98e1a",
+    "verifier": "agent"
+  },
   "docs/DATA_SOURCES.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "7a3ff09fd12b2d4a3e5b9c674a071bd29e5a25d2",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
+  },
+  "docs/DEEP_MAINT_QUEUE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "d5ae97e53dd083df4befe8d0f872156dafe36f62",
+    "verifier": "agent"
+  },
+  "docs/DEMO_VIDEO_SCRIPT.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "22357e8e787580a6df5b57965df88ca228104a51",
+    "verifier": "agent"
   },
   "docs/EVAL_DATA.md": {
     "last_verified_date": "2026-05-01",
@@ -56,13 +96,18 @@
   },
   "docs/HONEST_ASSESSMENT.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "5e6130bad7acc9aaad1570d6fe5ee9abb1cf176c",
+    "last_verified_sha": "c5259b0c8578162d834adcb6fb222440bc23e36d",
     "verifier": "agent_p10"
   },
   "docs/INDEX.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "d15b800a1341544713d304616061a8573c931314",
+    "last_verified_sha": "29f86c51d1e40c96ec74a9cea1d6aacb62f3fac6",
     "verifier": "agent_p10"
+  },
+  "docs/INSURANCE_NATIVE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "7af0f9832fc228a44e61d7631827ca328834d663",
+    "verifier": "agent"
   },
   "docs/INTEGRATION_TESTS.md": {
     "last_verified_date": "2026-05-01",
@@ -71,13 +116,28 @@
   },
   "docs/INVESTOR.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "7e1c2366cb05eadd1db785092feb499888bbd9f2",
+    "last_verified_sha": "c5259b0c8578162d834adcb6fb222440bc23e36d",
     "verifier": "agent_p10"
   },
   "docs/MASTER_PLAN.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "f05125767ea4816c844c34a893336ca418936043",
+    "last_verified_sha": "8195672b7ea39259d72a060640301dd592b662e3",
     "verifier": "agent_p10"
+  },
+  "docs/MATMUL_FREE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "1771fed6e86a10e243711b165b305b030b40c730",
+    "verifier": "agent"
+  },
+  "docs/MOE_AUDIT.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "2ae3e151a6e4553a2b36f3a2fd9b88d434872a8d",
+    "verifier": "agent"
+  },
+  "docs/MONITOR_AND_CPU_JOBS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "a144026a2b1bde812fc95006a65b28da61d13eef",
+    "verifier": "agent"
   },
   "docs/MONOTONIC_QUALITY.md": {
     "last_verified_date": "2026-05-01",
@@ -94,9 +154,24 @@
     "last_verified_sha": "6017c869d76e1f1ff366da91688207367d85519d",
     "verifier": "agent_p10"
   },
+  "docs/MULTI_USER_DEMO.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "8195672b7ea39259d72a060640301dd592b662e3",
+    "verifier": "agent"
+  },
+  "docs/MULTI_USER_MEMORY.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "8195672b7ea39259d72a060640301dd592b662e3",
+    "verifier": "agent"
+  },
+  "docs/NAMING.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "8f09bc2e5aa341f4316ecb4f17af69786c8af300",
+    "verifier": "agent"
+  },
   "docs/NEURAL_COMPUTER_USE.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "2a77df9eed839efdd6d4bf68236f7188af2ad66e",
+    "last_verified_sha": "e76d6f301aa954722c723d896b9806c69edc95cd",
     "verifier": "agent_p10"
   },
   "docs/NEUROMCP_UNIVERSAL.md": {
@@ -111,12 +186,17 @@
   },
   "docs/PARETO_OPTIMIZATION.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "2673783336b17b2cc2256c58c9e3c8c529297686",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
+  },
+  "docs/PERF_KNOBS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "4215b01911cf6d74c687fad1bff8cd96d851b62b",
+    "verifier": "agent"
   },
   "docs/PHASE_TRAINING.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "cec04ed5c8e203728ba559807647f8c73b7e950c",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
   },
   "docs/PLAN_C_QWEN_LORA.md": {
@@ -139,6 +219,16 @@
     "last_verified_sha": "1bc08efc0eb2bdccc7240b4bee3779afd6ff2fd7",
     "verifier": "agent_p10"
   },
+  "docs/PROGRESS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "4ae852ef24788aff13eb86d507b7c578178aede9",
+    "verifier": "agent"
+  },
+  "docs/QUANTIZATION_FP8_PATH.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "91f06dec72fb3e4ab3fa0493bb63164c999af500",
+    "verifier": "agent"
+  },
   "docs/QUICKSTART.md": {
     "last_verified_date": "2026-05-01",
     "last_verified_sha": "cec04ed5c8e203728ba559807647f8c73b7e950c",
@@ -146,13 +236,23 @@
   },
   "docs/RELEASE_FLOW.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "7a3ff09fd12b2d4a3e5b9c674a071bd29e5a25d2",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
   },
   "docs/RELIABILITY.md": {
     "last_verified_date": "2026-05-01",
     "last_verified_sha": "cec04ed5c8e203728ba559807647f8c73b7e950c",
     "verifier": "agent_p10"
+  },
+  "docs/REMOTE_DATA_WAREHOUSE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "e2b5a442bdef60398d42f1d0301dfcbe0e1c919f",
+    "verifier": "agent"
+  },
+  "docs/RENTAL_OPS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "9bcf49f916735f994ba768efdeba981a6db7dae9",
+    "verifier": "agent"
   },
   "docs/RENTAL_RECOVERY.md": {
     "last_verified_date": "2026-05-01",
@@ -171,7 +271,7 @@
   },
   "docs/REVIEW_TRAINER.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "29bb1d4227de2ae8c3408293e42d3528cedc7dee",
+    "last_verified_sha": "c73e9cc341cdfdf4d701f86c68bf7ee5b0cee70b",
     "verifier": "agent_p10"
   },
   "docs/RFOLD_PAPER.md": {
@@ -181,8 +281,13 @@
   },
   "docs/ROADMAP.md": {
     "last_verified_date": "2026-05-01",
-    "last_verified_sha": "2673783336b17b2cc2256c58c9e3c8c529297686",
+    "last_verified_sha": "c5259b0c8578162d834adcb6fb222440bc23e36d",
     "verifier": "agent_p10"
+  },
+  "docs/RUN3L_DIAGNOSIS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "c817feeab10cc265905a14a6bd28409c84d901c3",
+    "verifier": "agent"
   },
   "docs/SAFETY.md": {
     "last_verified_date": "2026-05-01",
@@ -198,6 +303,16 @@
     "last_verified_date": "2026-05-01",
     "last_verified_sha": "d15b800a1341544713d304616061a8573c931314",
     "verifier": "agent_p10"
+  },
+  "docs/TIMELINE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "a173ca668ac2e7b26eb74a90651c0637267267d6",
+    "verifier": "agent"
+  },
+  "docs/TRAINING_ISSUES_RETROSPECTIVE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "be1bba60c0d1fa18cacaa76c0a9bd35adaba3aad",
+    "verifier": "agent"
   },
   "docs/quantize.md": {
     "last_verified_date": "2026-05-01",

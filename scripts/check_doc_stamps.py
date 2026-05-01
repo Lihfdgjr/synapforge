@@ -205,19 +205,21 @@ def classify(
     if not doc_abs.exists():
         return "STALE", f"doc file missing: {doc_rel}"
 
-    # 1) Has the doc itself been modified since the stamp sha?
+    # 1) Any referenced code path that no longer exists -> STALE.
+    #    Checked BEFORE auto-fresh: a doc that references deleted files
+    #    is content-outdated regardless of how recently it was edited.
+    dead = extract_dead_refs(doc_abs)
+    if dead:
+        joined = ", ".join(sorted(dead))
+        return "STALE", f"refs missing files: {joined}"
+
+    # 2) Has the doc itself been modified since the stamp sha?
     last_sha = last_commit_sha_for(doc_rel)
     stamped_sha = stamp.get("last_verified_sha", "")
     if last_sha and stamped_sha and last_sha != stamped_sha:
         return "auto-fresh", (
             f"doc edited since stamp ({stamped_sha[:8]} -> {last_sha[:8]})"
         )
-
-    # 2) Any referenced code path that no longer exists -> STALE.
-    dead = extract_dead_refs(doc_abs)
-    if dead:
-        joined = ", ".join(sorted(dead))
-        return "STALE", f"refs missing files: {joined}"
 
     # 3) Any referenced code modified after stamp date -> MAYBE STALE.
     refs = extract_refs(doc_abs)
@@ -287,16 +289,32 @@ def main(argv: list[str] | None = None) -> int:
     for doc in docs:
         stamp = stamps.get(doc)
         if stamp is None:
-            # Treat missing stamp as MAYBE STALE; a new doc was added.
-            rows.append((doc, "MAYBE STALE", "no stamp -- run --update-stamps"))
+            # Missing stamp = newly added doc. With --update-stamps,
+            # initialize at the doc's own last-touched sha (so the
+            # stamp tracks the file, not HEAD; matches classify() logic).
+            if args.update_stamps:
+                init_sha = last_commit_sha_for(doc) or head
+                stamps[doc] = {
+                    "last_verified_sha": init_sha,
+                    "last_verified_date": today,
+                    "verifier": "agent",
+                }
+                rows.append((doc, "auto-fresh", "stamp initialized (was missing)"))
+            else:
+                rows.append(
+                    (doc, "MAYBE STALE", "no stamp -- run --update-stamps")
+                )
             continue
         status, reason = classify(doc, stamp)
         rows.append((doc, status, reason))
         if status == "STALE":
             any_stale = True
         if args.update_stamps and status == "auto-fresh":
+            # Pin to the doc's own last-touched sha so subsequent runs
+            # report 'fresh' rather than re-firing 'auto-fresh' against HEAD.
+            doc_sha = last_commit_sha_for(doc) or head
             stamps[doc] = {
-                "last_verified_sha": head,
+                "last_verified_sha": doc_sha,
                 "last_verified_date": today,
                 "verifier": stamp.get("verifier", "agent"),
             }
