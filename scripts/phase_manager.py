@@ -57,6 +57,14 @@ PHASES = [
 ]
 
 PPL_RE = re.compile(r"step\s*(\d+).*?ce=([\d.]+)")
+# P3 (MASTER_PLAN.md §6): prefer the leak-free holdout ppl when the
+# trainer logs both. The trainer line looks like:
+#   VAL step 500: val_ppl_ttt=180.21 val_ppl_holdout=185.03 (honest)
+# Old trainers logged just  ``ppl=185.03``; the legacy regex still
+# picks that up as a fallback.
+VAL_PPL_HOLDOUT_RE = re.compile(
+    r"val[_\s]?ppl[_\s]?holdout[=:]?\s*([\d.]+)", re.IGNORECASE,
+)
 VAL_PPL_RE = re.compile(r"val.*?ppl[=:]?\s*([\d.]+)", re.IGNORECASE)
 
 
@@ -72,7 +80,16 @@ def parse_log(log_path: Path) -> dict | None:
     for m in PPL_RE.finditer(text):
         last_step = int(m.group(1))
         last_ce = float(m.group(2))
-    val_ppls = [float(m.group(1)) for m in VAL_PPL_RE.finditer(text)]
+    # P3: prefer val_ppl_holdout (TTT-leak-free) when the trainer
+    # logs it. Falls back to the generic ``val.*?ppl`` regex for
+    # legacy logs that pre-date the dual-track split.
+    holdout_ppls = [
+        float(m.group(1)) for m in VAL_PPL_HOLDOUT_RE.finditer(text)
+    ]
+    if holdout_ppls:
+        val_ppls = holdout_ppls
+    else:
+        val_ppls = [float(m.group(1)) for m in VAL_PPL_RE.finditer(text)]
     # Guard against last_ce being valid but 0.0 (which is falsy in
     # Python). 0.0 ce => exp(0) = 1.0, which is a meaningful ppl, not None.
     last_train_ppl = math.exp(last_ce) if last_ce is not None else None

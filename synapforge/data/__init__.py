@@ -176,4 +176,145 @@ class ParquetTokenStream:
         )
 
 
-__all__ = ["ParquetTokenStream"]
+# ---------------------------------------------------------------------------
+# val-set split for honest TTT-leak-free reporting (P3 in MASTER_PLAN.md §6)
+# ---------------------------------------------------------------------------
+
+
+class _RowSubsetStream:
+    """Iterates a parent ``ParquetTokenStream`` and emits only chunks whose
+    deterministic row index is in ``keep_set``.
+
+    Chunks (length seq_len+1 token windows) are filtered by an integer
+    "row index" -- the position in the parent stream's chunk iterator.
+    With a denominator D and a keep-set ``K subset {0..D-1}`` (e.g.
+    K={0,1,2,3} for the TTT side, K={4} for the holdout side at D=5),
+    every D-th chunk is routed deterministically to one side.
+
+    Why row-level (not batch-level): the TTT mixin trains on the *chunks*
+    inside a batch; if we split at batch granularity the TTT side would
+    train on chunks the holdout side will never see only because they
+    happened to be in the same batch -- not a true disjoint split.
+    Row-level filtering is the cleanest no-overlap guarantee.
+
+    The iterator re-batches the kept chunks into ``batch_size`` groups so
+    callers can use ``next(iter(side))`` exactly like the parent stream.
+    """
+
+    def __init__(
+        self,
+        parent: "ParquetTokenStream",
+        keep_indices: "set[int]",
+        denom: int,
+        side: str = "ttt",
+    ) -> None:
+        self._parent = parent
+        self._keep = set(int(i) for i in keep_indices)
+        self._denom = int(denom)
+        self._side = str(side)
+        if self._denom <= 0:
+            raise ValueError("denom must be > 0")
+        if not self._keep:
+            raise ValueError("keep_indices must be non-empty")
+        if any(i < 0 or i >= self._denom for i in self._keep):
+            raise ValueError(
+                f"keep_indices {sorted(self._keep)!r} must all lie in "
+                f"[0, {self._denom})"
+            )
+
+    @property
+    def batch_size(self) -> int:
+        return self._parent.batch_size
+
+    @property
+    def seq_len(self) -> int:
+        return self._parent.seq_len
+
+    @property
+    def keep_indices(self) -> set[int]:
+        return set(self._keep)
+
+    @property
+    def denom(self) -> int:
+        return self._denom
+
+    @property
+    def side(self) -> str:
+        return self._side
+
+    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        chunks: list[list[int]] = []
+        for row_idx, chunk in enumerate(self._parent._iter_token_chunks()):
+            if (row_idx % self._denom) not in self._keep:
+                continue
+            chunks.append(chunk)
+            if len(chunks) >= self._parent.batch_size:
+                arr = torch.tensor(chunks, dtype=torch.long)  # (B, T+1)
+                tokens_in = arr[:, :-1].contiguous()
+                tokens_out = arr[:, 1:].contiguous()
+                yield tokens_in, tokens_out
+                chunks = []
+
+    def __repr__(self) -> str:
+        return (
+            f"_RowSubsetStream(side={self._side!r}, "
+            f"keep={sorted(self._keep)!r}/{self._denom}, "
+            f"parent={self._parent!r})"
+        )
+
+
+def split_val_stream(
+    parent: "ParquetTokenStream",
+    ttt_fraction: float = 0.8,
+    denom: int = 5,
+) -> tuple["_RowSubsetStream", "_RowSubsetStream"]:
+    """Split a val ``ParquetTokenStream`` into disjoint TTT and holdout sides.
+
+    The split is **row-deterministic**: each length-(seq_len+1) chunk in
+    the parent stream's chunk iterator is routed to exactly one side
+    based on ``row_idx % denom``. The default ``denom=5`` with
+    ``ttt_fraction=0.8`` puts 4 of every 5 chunks on the TTT side and 1
+    on the holdout side.
+
+    P3 in ``docs/MASTER_PLAN.md`` §6: ``SelfLearnMixin.adapt_on_failures``
+    runs an inner step on the TTT side, which artificially drops val ppl
+    on that set. The holdout side is **never touched by TTT** so its ppl
+    is the honest signal phase_manager should gate on.
+
+    Returns:
+        ``(val_ttt, val_holdout)`` -- two ``_RowSubsetStream`` objects
+        whose row sets are disjoint and whose union equals the parent.
+
+    Args:
+        parent: a ``ParquetTokenStream`` (or any object with the same
+            ``_iter_token_chunks()`` + ``batch_size`` interface).
+        ttt_fraction: fraction of chunks to route to the TTT side. Must
+            lie in (0, 1). Default 0.8.
+        denom: denominator of the integer split. ``num = round(
+            ttt_fraction * denom)`` chunks per ``denom`` go to TTT. The
+            default ``denom=5`` gives an exact 4:1 split for
+            ``ttt_fraction=0.8``.
+    """
+    if not (0.0 < ttt_fraction < 1.0):
+        raise ValueError(
+            f"ttt_fraction must be strictly in (0, 1); got {ttt_fraction!r}"
+        )
+    denom = int(denom)
+    if denom < 2:
+        raise ValueError(f"denom must be >= 2; got {denom!r}")
+    num_ttt = int(round(ttt_fraction * denom))
+    if num_ttt <= 0 or num_ttt >= denom:
+        raise ValueError(
+            f"ttt_fraction={ttt_fraction!r} with denom={denom} yields "
+            f"num_ttt={num_ttt}; must be in (0, {denom})"
+        )
+    ttt_idx = set(range(num_ttt))               # {0..num_ttt-1}
+    holdout_idx = set(range(num_ttt, denom))    # {num_ttt..denom-1}
+    ttt_stream = _RowSubsetStream(parent, ttt_idx, denom, side="ttt")
+    holdout_stream = _RowSubsetStream(
+        parent, holdout_idx, denom, side="holdout"
+    )
+    return ttt_stream, holdout_stream
+
+
+__all__ = ["ParquetTokenStream", "split_val_stream"]

@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 2: + agent audit P11-P21, vocab fix, 50M context O10-O11)
+**Updated**: 2026-05-01 (revision 3: + P3 RESOLVED -- TTT val_holdout split for honest reporting)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -168,9 +168,28 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Fix applied**: chunked KL over batch dim (÷4).
 - **Open**: chunk size hardcoded — should be auto-tuned per VRAM headroom.
 
-### P3. Self-learn TTT and val set leak
-- **Risk**: TTT inner step on val sample = val ppl converges artificially.
-- **Status**: not yet validated. Need to hold a *secondary* val set for honest reporting.
+### P3. Self-learn TTT and val set leak — RESOLVED 2026-05-01
+- **Risk**: TTT inner step on val sample = val ppl drops artificially because
+  the trainer just trained on the same examples it then evaluates against.
+- **Fix applied**: row-level deterministic 80/20 split of the val parquet
+  stream into `val_ttt` and `val_holdout` (`synapforge/data/__init__.py::
+  split_val_stream` -- `denom=5`, `ttt_fraction=0.8` puts every 5th chunk
+  on the holdout side, the other 4 on the TTT side; sets are disjoint and
+  their union equals the full parent). `train_100m_kd.py` builds both
+  streams once after `val_ds` (no extra parquet IO), runs `evaluate(...)`
+  on each, and logs `VAL step N: val_ppl_ttt=X val_ppl_holdout=Y (honest)`
+  every `EVAL_EVERY` steps. Both numbers persist in `metrics.json` as
+  `ppl_eval_ttt` / `ppl_eval_holdout`; `ppl_eval` is kept as an alias of
+  the holdout (honest) number for legacy parsers. `--self-learn-ttt` only
+  ever sees `val_ds_ttt`, so `val_ppl_holdout` is leak-free. New CLI:
+  `--ttt-val-fraction` (default 0.8). `scripts/phase_manager.py` added
+  `VAL_PPL_HOLDOUT_RE` and now gates phase 1 (ppl <= 250) on the holdout
+  number when present, with backward-compat fallback to the pre-P3
+  generic `val.*?ppl` regex for legacy logs.
+- **Verification**: `tests/integration/test_ttt_val_split.py` -- 7 passed
+  (1 skipped because `transformers` not installed; that test is the
+  end-to-end real-parquet path). Asserts disjointness, union completeness,
+  4:1 ratio, keep-indices metadata, and bad-fraction validation.
 
 ### P4. Curiosity reward vs. KD KL conflict
 - **Risk**: curiosity wants tokens teacher didn't predict; KD penalizes those.
