@@ -374,7 +374,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 # Tier 3 — Data pipeline (Agent-spawn synthesizers)
 
 ## T3.0 — KD distillation data collector (DistilBERT pattern)
-- [x] (00:48, hash, scripts/collect_kd_data.py + test, 200x storage reduction via top-64)
+- [x] (00:48, 3aa1419, scripts/collect_kd_data.py + test, 783x storage reduction via top-64)
 - **Status**: shipped 2026-05-02. Pre-compute Qwen 2.5 0.5B top-K teacher
   logits once over the source corpus; trainer reads cached parquet
   many epochs without re-running teacher (DistilBERT / MiniLM pattern).
@@ -409,7 +409,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.0: KD distillation data collector + tests`.
 
 ## T3.1 — Synth ZH pretrain to 500K rows
-- [x] (00:48, hash, dedup added; 500K runner ready, awaits rental run)
+- [x] (00:48, 3aa1419, dedup added; 500K runner ready, awaits rental run)
 - **Status**: 50K shipped; `--n 500000` already supported and now MD5
   text-dedup is on by default (oversample factor 1.10 compensates for
   drops). Local smoke `--n 100 --seed 42` verified: 100/100 unique,
@@ -463,7 +463,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.7: wt103 tokenized -> wt103_qwen_tokens.pkl (N tokens)`.
 
 ## T3.8 — HumanEval / MBPP code data
-- [x] (00:48, hash, scripts/tokenize_humaneval_mbpp.py shipped with --smoke; rental run pulls real datasets)
+- [x] (00:48, 3aa1419, scripts/tokenize_humaneval_mbpp.py shipped with --smoke; rental run pulls real datasets)
 - **Status**: tokenizer script shipped. `scripts/tokenize_humaneval_mbpp.py`
   uses `huggingface_hub` + `datasets` (not API) to fetch HumanEval (164
   via `openai_humaneval` test split) + MBPP (974 across train/val/test
