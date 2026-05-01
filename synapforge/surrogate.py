@@ -304,8 +304,24 @@ class PLIFCell(nn.Module):
         tau_init: initial tau (steps); stored as log for positivity.
         threshold_init: initial firing threshold.
         surrogate: name in registry or autograd.Function subclass.
-        alpha: surrogate sharpness.
+        alpha: surrogate sharpness; multiplied by ``surrogate_width`` at
+            forward time so anneal hooks can widen / narrow the smoothing
+            without retraining ``alpha``.
         reset: "subtract" (soft) or "zero" (hard).
+        surrogate_width: T2.3 multiplicative width on the surrogate
+            backward (default 1.0 = current behaviour). Stored as a
+            non-persistent buffer so warmstart from older checkpoints is
+            transparent. The trainer hook
+            (``--surrogate-anneal-steps > 0``) anneals this buffer from
+            ``--surrogate-anneal-start`` (e.g. 10.0 = wide / smooth
+            surrogate, generous gradient flow through dead spikes) down
+            to ``--surrogate-anneal-target`` (e.g. 1.0 = sharp,
+            near-Heaviside) over the first N steps to address P25 (PLIF
+            dead 10/10). The effective spike call uses ``alpha /
+            surrogate_width`` so larger width => smaller effective
+            alpha => wider/smoother surrogate (peak gradient drops as
+            ``alpha / (2 * width)`` for ATan, by symmetric construction
+            for the others).
     """
 
     def __init__(
@@ -316,6 +332,7 @@ class PLIFCell(nn.Module):
         surrogate: str | type[torch.autograd.Function] = "atan",
         alpha: float = 2.0,
         reset: str = "subtract",
+        surrogate_width: float = 1.0,
     ) -> None:
         super().__init__()
         if reset not in ("subtract", "zero"):
@@ -353,6 +370,21 @@ class PLIFCell(nn.Module):
         self.surrogate = surrogate
         self.alpha = float(alpha)
         self.reset = reset
+        # T2.3: surrogate gradient width (multiplicative; default 1.0 = no
+        # change vs legacy behaviour). Buffer not parameter — never gets a
+        # gradient. Trainer hook walks ``model.modules()`` and calls
+        # :meth:`update_surrogate_width` to anneal start->target during
+        # the first N steps; the spike forward then divides ``self.alpha``
+        # by this value so width=10 => effective alpha=alpha/10 = wider /
+        # smoother surrogate that lets gradient flow through dead PLIF
+        # cells at training start. Non-persistent so warmstart from
+        # legacy ckpts written before T2.3 is transparent (the buffer is
+        # re-initialised to 1.0 on load).
+        self.register_buffer(
+            "surrogate_width",
+            torch.tensor(float(surrogate_width)),
+            persistent=False,
+        )
         # Spike-rate monitor: scalar latest mean spike rate over the last
         # forward pass. Populated by forward / forward_seq. Read via the
         # public ``last_spike_rate()`` method (returns the buffer tensor).
@@ -431,7 +463,14 @@ class PLIFCell(nn.Module):
         decay_c = decay.to(x_t.dtype)
         thr_c = self.threshold.to(x_t.dtype)
         v_t = decay_c * v_prev + (1.0 - decay_c) * x_t
-        s_t = spike(v_t, thr_c, surrogate=self.surrogate, alpha=self.alpha)
+        # T2.3: divide ``alpha`` by ``surrogate_width`` so width > 1 widens
+        # the surrogate (smoother gradient, lets dead PLIF cells learn at
+        # the start of training); width = 1 (default) reproduces the
+        # legacy behaviour. Read .item() inside the forward so the buffer
+        # value is stamped on every call -- the trainer hook updates the
+        # buffer in-place every 100 steps.
+        eff_alpha = self.alpha / float(self.surrogate_width.item())
+        s_t = spike(v_t, thr_c, surrogate=self.surrogate, alpha=eff_alpha)
         if self.reset == "subtract":
             v_t = v_t - s_t * thr_c
         else:  # "zero"
@@ -537,6 +576,48 @@ class PLIFCell(nn.Module):
                 self.threshold.mul_(1.0 - gain_f)
             elif rate > target * 2.0:
                 self.threshold.mul_(1.0 + gain_f)
+
+    # -- T2.3 surrogate gradient width annealing -------------------------
+    #
+    # Updates ``self.surrogate_width`` in-place so the next forward call
+    # multiplies the effective surrogate alpha by ``alpha / new_width``.
+    # The trainer hook in ``train_100m_kd.py`` walks the model every 100
+    # steps and calls this method on every ``PLIFCell`` to interpolate
+    # ``--surrogate-anneal-start`` (e.g. 10.0) -> ``--surrogate-anneal-target``
+    # (e.g. 1.0) over the first ``--surrogate-anneal-steps`` (e.g. 5000)
+    # training steps. Default trainer flag is 0 (no anneal) so this stays
+    # a pure no-op without explicit opt-in.
+    #
+    # Resolves §6 P25: at training start spike rate is 0% across all
+    # PLIF cells; sharp surrogate (width=1) * dead spike = 0 gradient.
+    # Wider surrogate (width=10) sustains a flatter, longer-tailed
+    # gradient envelope that reaches dead cells, lets ``threshold`` and
+    # ``log_tau`` learn out of the dead zone, then narrows back to the
+    # production-time peak shape over 5k steps.
+
+    def update_surrogate_width(self, new_width: float) -> None:
+        """Update ``surrogate_width`` buffer in-place to ``new_width``.
+
+        Off the autograd path (``torch.no_grad`` + ``.copy_``) so the
+        change does not interact with the surrogate-gradient backward.
+        Caller (the trainer T2.3 hook) is responsible for the schedule:
+        ``new_width = max(target, start - (start - target) * step / N)``.
+
+        Args:
+            new_width: positive float; values < 0 are clamped to 0+ to
+                avoid division-by-zero in the spike forward (since
+                ``eff_alpha = alpha / surrogate_width``).
+        """
+        # ``surrogate_width`` is a 0-d buffer; ``.copy_`` preserves dtype
+        # and device. Avoids re-registering the buffer (which would
+        # confuse warmstart and the optimizer's parameter list).
+        w = float(new_width)
+        if not (w > 0):
+            # Defensive: zero/negative width would NaN the forward.
+            # Mirrors the clamp_threshold defensive lower bound.
+            w = 1e-6
+        with torch.no_grad():
+            self.surrogate_width.fill_(w)
 
     def extra_repr(self) -> str:
         sr = self.surrogate if isinstance(self.surrogate, str) else self.surrogate.__name__

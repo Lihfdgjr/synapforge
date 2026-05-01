@@ -290,6 +290,42 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--spike-target-loss-high", type=float, default=0.20,
                    help="upper bound of dead-zone for spike-target loss (T2.5). "
                         "rate > high -> linear penalty proportional to (rate - high)**2.")
+    # T2.3: surrogate gradient width anneal (addresses P25 PLIF dead).
+    # Linear schedule width(step) = max(target,
+    #   start - (start - target) * step / N) updated every 100 steps.
+    # The PLIFCell forward divides ``alpha`` by ``surrogate_width``, so
+    # start=10 gives a wide / smooth surrogate at training start (lets
+    # gradient flow through dead spikes) and target=1 returns to the
+    # legacy sharp ATan derivative once activations have come up.
+    # Default --surrogate-anneal-steps=0 disables annealing entirely
+    # (PLIFCell.surrogate_width buffer stays at 1.0 = no-op).
+    p.add_argument("--surrogate-anneal-start", type=float, default=10.0,
+                   help="T2.3: starting surrogate gradient width (wide / "
+                        "smooth surrogate at training start; default 10.0). "
+                        "Only used when --surrogate-anneal-steps > 0; the "
+                        "PLIFCell forward divides effective alpha by this "
+                        "value so width=10 => alpha/10 = wider Atan tail "
+                        "with peak gradient ~alpha/(2*width). Lets the "
+                        "gradient flow through dead PLIF cells at the "
+                        "start of training so threshold / log_tau can "
+                        "learn out of the dead zone.")
+    p.add_argument("--surrogate-anneal-target", type=float, default=1.0,
+                   help="T2.3: ending surrogate gradient width after the "
+                        "anneal completes (default 1.0 = sharp, "
+                        "near-Heaviside; matches legacy behaviour). The "
+                        "schedule clamps to this value once "
+                        "step >= --surrogate-anneal-steps so further "
+                        "steps reuse the production peak shape.")
+    p.add_argument("--surrogate-anneal-steps", type=int, default=0,
+                   help="T2.3: number of training steps over which to "
+                        "linearly anneal surrogate width from "
+                        "--surrogate-anneal-start down to "
+                        "--surrogate-anneal-target. Default 0 disables "
+                        "annealing (no-op: PLIFCell.surrogate_width "
+                        "stays at 1.0). 5000 is the recommended phase-0 "
+                        "value to address P25 PLIF dead 10/10 at the "
+                        "start of training without disrupting the "
+                        "production sharp-surrogate regime.")
     p.add_argument("--teacher", default="gpt2",
                    help="HF model id for KD teacher (frozen); see HF_ENDPOINT for mirror")
     p.add_argument("--kd-weight", type=float, default=0.7,
@@ -857,6 +893,20 @@ def main() -> int:
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
     plif_cells = [m for m in model.modules() if isinstance(m, PLIFCell)]
     print(f"plif cells found: {len(plif_cells)}")
+    # T2.3: stamp the start width on every PLIF cell BEFORE step 1 so the
+    # first forward already runs with the wide surrogate. The schedule
+    # then anneals it down on every 100-step boundary inside the step
+    # loop. Skipped when --surrogate-anneal-steps == 0 (default no-op:
+    # buffer stays at 1.0 = legacy behaviour).
+    if args.surrogate_anneal_steps > 0 and plif_cells:
+        for m in plif_cells:
+            m.update_surrogate_width(float(args.surrogate_anneal_start))
+        print(
+            f"surrogate-anneal: width={args.surrogate_anneal_start} -> "
+            f"{args.surrogate_anneal_target} over "
+            f"{args.surrogate_anneal_steps} steps "
+            f"({len(plif_cells)} cells stamped)"
+        )
 
     # ---------------- warm-start ----------------
     if warm_ckpt and os.path.exists(warm_ckpt):
@@ -1520,6 +1570,30 @@ def main() -> int:
                                 f"  [PLIF-REVIVE] clamp [0.005, 0.5] thr "
                                 f"{thr_before:.4f} -> {thr_after:.4f}"
                             )
+                # T2.3: surrogate gradient width anneal (default no-op).
+                # Every 100 steps, linearly interpolate the buffer
+                # ``surrogate_width`` on every PLIF cell from ``start``
+                # toward ``target`` over ``anneal_steps``. After the
+                # anneal completes the schedule clamps to ``target``
+                # (legacy sharp surrogate). Off the autograd path; reads
+                # the buffer .item() inside the spike forward so the
+                # next forward sees the new width without graph
+                # recompilation.
+                if step % 100 == 0 and args.surrogate_anneal_steps > 0:
+                    start_w = float(args.surrogate_anneal_start)
+                    target_w = float(args.surrogate_anneal_target)
+                    anneal_n = int(args.surrogate_anneal_steps)
+                    progress = min(1.0, step / max(anneal_n, 1))
+                    new_w = max(target_w, start_w - (start_w - target_w) * progress)
+                    w_before = float(plif_cells[0].surrogate_width.item())
+                    for m in plif_cells:
+                        m.update_surrogate_width(new_w)
+                    if abs(w_before - new_w) > 1e-6:
+                        _log(
+                            f"  [SURROGATE-ANNEAL] step={step} width "
+                            f"{w_before:.3f} -> {new_w:.3f} "
+                            f"(progress={progress*100:.1f}%)"
+                        )
 
         if step % save_every == 0:
             ckpt_path = os.path.join(out_dir, f"step_{step:06d}.pt")

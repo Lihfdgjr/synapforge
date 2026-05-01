@@ -233,7 +233,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.2: triton fused PLIF backward Triton kernel + tests`.
 
 ## T2.3 — Surrogate gradient annealing
-- [ ] **Status**: pending (addresses P25 PLIF dead)
+- [x] (00:26, PENDING_HASH, surrogate width anneal start->target over N steps + 5 tests)
 - **Goal**: anneal surrogate gradient width from 10 → 1 over first 5000 steps to address sharp surrogate at training start.
 - **Steps** (Agent: general-purpose):
   1. Read `synapforge/surrogate.py` ATan / sigmoid surrogate, find width param
