@@ -316,11 +316,27 @@ class PLIFCell(nn.Module):
         surrogate: str | type[torch.autograd.Function] = "atan",
         alpha: float = 2.0,
         reset: str = "subtract",
+        use_triton_fused: bool = False,
     ) -> None:
         super().__init__()
         if reset not in ("subtract", "zero"):
             raise ValueError(f"reset must be 'subtract' or 'zero', got {reset!r}")
         self.hidden = int(hidden)
+        # T2.2 (DEEP_MAINT_QUEUE.md): opt-in fused PLIF surrogate kernel.
+        # When True, the spike step routes through
+        # :class:`synapforge.backends.triton_fused_backward.FusedPLIFFn`
+        # which computes ``spike`` and ``dspike/dv`` in a single Triton
+        # tile (CUDA only). On non-CUDA / no-Triton hosts the fused
+        # path falls back to a pure-PyTorch reference that is bit-exact
+        # with the existing ATan surrogate; tests verify this. Default
+        # OFF — the existing :func:`spike` path with the autograd
+        # surrogate registry remains the production default.
+        if use_triton_fused and surrogate not in ("atan", "sigmoid"):
+            raise ValueError(
+                f"use_triton_fused only supports surrogate in {{'atan', "
+                f"'sigmoid'}}, got {surrogate!r}"
+            )
+        self.use_triton_fused = bool(use_triton_fused)
         # log_tau is learnable; ensures tau > 0 via exp().
         # DA-LIF (Wang 2502.10422) heterogeneous tau init breaks degenerate
         # all-channels-identical start; +30% expressivity vs uniform init.
@@ -408,6 +424,27 @@ class PLIFCell(nn.Module):
             return self._last_spike_rate_live
         return self._last_spike_rate
 
+    # -- spike step (with optional fused Triton kernel) ------------------
+
+    def _spike(self, v_t: torch.Tensor, thr_c: torch.Tensor) -> torch.Tensor:
+        """Spike emission step.
+
+        Routes through :func:`synapforge.backends.triton_fused_backward.
+        fused_plif_spike` when ``use_triton_fused`` is True (T2.2: fused
+        forward+backward Triton kernel). Otherwise falls back to the
+        existing :func:`spike` registry path. The fused path is opt-in
+        and supports surrogate in {"atan", "sigmoid"}; the gate is
+        already validated in ``__init__`` so this method assumes the
+        surrogate name is supported when the flag is set.
+        """
+        if self.use_triton_fused:
+            from synapforge.backends.triton_fused_backward import fused_plif_spike
+            surr_name = self.surrogate if isinstance(self.surrogate, str) else "atan"
+            return fused_plif_spike(
+                v_t, thr_c, alpha=self.alpha, surrogate=surr_name,
+            )
+        return spike(v_t, thr_c, surrogate=self.surrogate, alpha=self.alpha)
+
     # -- single step ------------------------------------------------------
 
     def forward(
@@ -431,7 +468,7 @@ class PLIFCell(nn.Module):
         decay_c = decay.to(x_t.dtype)
         thr_c = self.threshold.to(x_t.dtype)
         v_t = decay_c * v_prev + (1.0 - decay_c) * x_t
-        s_t = spike(v_t, thr_c, surrogate=self.surrogate, alpha=self.alpha)
+        s_t = self._spike(v_t, thr_c)
         if self.reset == "subtract":
             v_t = v_t - s_t * thr_c
         else:  # "zero"

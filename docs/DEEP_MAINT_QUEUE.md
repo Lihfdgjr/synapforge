@@ -221,7 +221,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.1: arxiv scan +N papers (highlights: ...)`.
 
 ## T2.2 — Triton fused PLIF backward kernel
-- [ ] **Status**: stub at `synapforge/backends/triton_fused_backward.py` (commit `5a3ecef`)
+- [x] (auto-T2.2, fused PLIF surrogate kernel + PLIFCell use_triton_fused flag + 7 tests pass; CUDA path UNTESTED on dev box, verify on A800 rental)
+- ~~**Status**: stub at `synapforge/backends/triton_fused_backward.py` (commit `5a3ecef`)~~
 - **Goal**: implement actual Triton kernel for `(spike, dspike/dv) = surrogate(v - thr)` fused.
 - **Steps** (Agent: general-purpose, isolation: worktree):
   1. Read existing stub + `synapforge/triton_block_kernel.py` for forward pattern

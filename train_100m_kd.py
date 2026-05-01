@@ -441,13 +441,16 @@ def _parse_args() -> argparse.Namespace:
                         "the gap anchor for --kd-every-adaptive. 4.5 is a "
                         "reasonable Qwen2.5-0.5B / wt103 estimate; "
                         "lower = more aggressive KD-frequency reduction.")
-    # Speculative: fused PLIF surrogate backward Triton kernel.
+    # T2.2: fused PLIF surrogate forward+backward Triton kernel.
     p.add_argument("--triton-fused-backward", action="store_true", default=False,
-                   help="opt into the fused CfC+PLIF surrogate forward+"
-                        "backward Triton kernel. Stubbed in "
-                        "synapforge/backends/triton_fused_backward.py "
-                        "(NotImplementedError on enable). Default OFF; "
-                        "flip on once the kernel lands.")
+                   help="opt into the fused PLIF surrogate forward+backward "
+                        "Triton kernel (computes spike + dspike/dv in one "
+                        "tile so the autograd Function does not stash "
+                        "v - thr or relaunch a kernel on backward). "
+                        "Implemented in "
+                        "synapforge/backends/triton_fused_backward.py. "
+                        "Default OFF; CUDA + Triton required (silently "
+                        "falls back to PyTorch surrogate path otherwise).")
     # ---- Remote data warehouse (mohuanfang) -----------------------------
     # Tiered storage: rental SSD = compute-only with bounded LRU cache,
     # mohuanfang holds the canonical corpus. See
@@ -1175,12 +1178,27 @@ def main() -> int:
              f"teacher_ce_estimate={args.kd_teacher_ce_estimate:.2f} "
              f"window={KD_ADAPT_WINDOW} period={KD_ADAPT_PERIOD}")
     if args.triton_fused_backward:
-        # Speculative knob — kernel is stubbed only.
+        # T2.2: real fused PLIF surrogate kernel. enable_fused_backward()
+        # now validates Triton + CUDA are available; on success, walk
+        # the model and flip use_triton_fused=True on every PLIFCell so
+        # subsequent forwards route through the fused kernel. On failure,
+        # log the disabled reason and continue with the autograd
+        # surrogate path (existing behaviour).
         try:
             from synapforge.backends.triton_fused_backward import (
                 enable_fused_backward,
+                is_available as _triton_fused_available,
             )
             enable_fused_backward()
+            n_plif_fused = 0
+            for m in model.modules():
+                if isinstance(m, PLIFCell):
+                    surr = m.surrogate if isinstance(m.surrogate, str) else "atan"
+                    if surr in ("atan", "sigmoid"):
+                        m.use_triton_fused = True
+                        n_plif_fused += 1
+            _log(f"[triton-fused-backward] enabled on {n_plif_fused} PLIFCells "
+                 f"(triton_avail={_triton_fused_available()})")
         except NotImplementedError as exc:
             _log(f"[triton-fused-backward] disabled: {exc}; falling back "
                  f"to PyTorch autograd surrogate path")
