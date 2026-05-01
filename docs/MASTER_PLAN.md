@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 9: + P23 RESOLVED -- native-Synap insurance runbook + code drops; P5 redirect to docs/INSURANCE_NATIVE.md)
+**Updated**: 2026-05-01 (revision 10: + P24 RESOLVED -- deterministic data ordering caused step-2500 divergence in 3 runs; shuffle_buffer=10000 default in ParquetTokenStream + train_100m_kd.py)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -564,6 +564,35 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Docs**: `docs/RENTAL_OPS.md` §7 "Auto-relauncher" added with full
   usage + safety guards. **Use one of `relaunch_loop.sh` or
   `phase_auto_relauncher.sh`, not both.**
+
+### P24. Deterministic data ordering caused step-2500 divergence — RESOLVED 2026-05-01
+- **Symptom**: three Synap-1 trainings (Run 3a / 3b / 3c) all diverged at the
+  **exact same step ~2500** despite different LR / optimizer settings.
+  Root cause: `synapforge/data/__init__.py:92` walked parquets in lexical
+  order via `sorted(glob.glob(...))` with **zero shuffle anywhere** in the
+  pipeline -- every run hit the same token offset at the same step,
+  triggering the same overfit / divergence pattern in lockstep.
+- **Fix applied** (single commit, no trainer rerun yet):
+  1. `ParquetTokenStream.__init__` gained `shuffle_buffer: int = 0` and
+     `shuffle_seed: int = 42`. Existing iterator method renamed
+     `_iter_text_rows_raw`; new `_iter_text_rows` wraps it with a
+     streaming Fisher-Yates reservoir (yield-then-replace at random
+     index, drained at end so no rows are lost). When `loop=True` and
+     `shuffle_buffer > 1`, the file ordering is also re-shuffled per
+     epoch via `random.Random(shuffle_seed + epoch)` so consecutive
+     epochs don't replay the same lexical sequence.
+  2. `train_100m_kd.py` exposes `--shuffle-buffer` (default **10000** --
+     this is the FIX, on by default; ~40MB RAM at WT-103 row size) and
+     `--shuffle-seed` (default 42). Wired into the TRAIN
+     `ParquetTokenStream` only; VAL stream stays deterministic so eval
+     ppl is comparable across runs.
+  3. `tests/integration/test_shuffle_buffer.py` (NEW, 8 tests pinning
+     the contract: no row loss, ordering perturbed, large-buffer
+     decorrelation rho < 0.5, seed-deterministic, seed-divergent,
+     `shuffle_buffer <= 1` legacy passthrough, end-of-stream drain).
+- **Cross-ref**: `feedback_data_ordering_divergence_2026q2.md` --
+  rule: any LM trainer must shuffle data; default-on, not opt-in.
+- **Status**: RESOLVED. Next Run 4 should not lockstep at step 2500.
 
 ### P23. Native-Synap insurance roadmap — RESOLVED 2026-05-01
 - **Symptom**: P5 deleted Plan C / Qwen-LoRA on 2026-05-01 because a

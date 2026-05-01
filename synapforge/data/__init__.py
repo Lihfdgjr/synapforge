@@ -29,6 +29,7 @@ Public API:
 from __future__ import annotations
 
 import glob
+import random
 from collections.abc import Iterator
 
 try:
@@ -75,7 +76,20 @@ class ParquetTokenStream:
             we don't accidentally inject GPT-2's 50256 magic into a
             different vocab (e.g. Qwen).
         loop: if True, loop over files forever (training loop never raises
-            StopIteration).
+            StopIteration). Each loop pass also re-shuffles the file
+            order when ``shuffle_buffer > 1`` so consecutive epochs
+            don't replay the same lexical sequence.
+        shuffle_buffer: P24 (MASTER_PLAN.md §6) — size of the streaming
+            reservoir used in ``_iter_text_rows``. ``> 1`` activates
+            Fisher-Yates streaming shuffle: fill a fixed-size buffer of
+            K rows then yield-then-replace at a random index. ``<= 1``
+            (or 0) yields rows in raw lexical order (LEGACY broken
+            default). Three Run 3a/3b/3c divergences at step ~2500 were
+            traced to deterministic ordering; default is now 10000 in
+            ``train_100m_kd.py`` so callers don't have to opt in.
+        shuffle_seed: deterministic seed for the reservoir RNG and the
+            per-epoch file-order shuffle. Default 42. Same seed +
+            same buffer size ⇒ identical yield sequence.
     """
 
     def __init__(
@@ -88,6 +102,8 @@ class ParquetTokenStream:
         eot_id: int | None = None,
         loop: bool = True,
         tokenizer_name: str = "gpt2",
+        shuffle_buffer: int = 0,
+        shuffle_seed: int = 42,
     ) -> None:
         self.files = sorted(glob.glob(glob_pattern))
         if not self.files:
@@ -98,6 +114,10 @@ class ParquetTokenStream:
         self.text_column = text_column
         self.loop = bool(loop)
         self.tokenizer_name = tokenizer_name
+        # P24: shuffle config -- accept None as "off" for resilience to
+        # callers that build kwargs from dicts.
+        self.shuffle_buffer = int(shuffle_buffer or 0)
+        self.shuffle_seed = int(shuffle_seed)
         self._tok = _get_tokenizer(tokenizer_name)
         # Default EOT to the tokenizer's eos_token_id, NOT the GPT-2 magic
         # number 50256 -- using a hard-coded id with a Qwen tokenizer would
@@ -115,10 +135,26 @@ class ParquetTokenStream:
 
     # ---------------------------------------------------------------- internal
 
-    def _iter_text_rows(self) -> Iterator[str]:
-        """Yield text strings from all parquet files, looping if `self.loop`."""
+    def _iter_text_rows_raw(self) -> Iterator[str]:
+        """Raw row iterator: yield text strings from parquets in (possibly
+        per-epoch shuffled) file order. With ``shuffle_buffer <= 1`` this
+        is the LEGACY deterministic path.
+
+        With ``shuffle_buffer > 1`` and ``loop=True``, the file list is
+        re-shuffled per epoch using a ``Random(shuffle_seed + epoch)``
+        instance so different passes through the corpus never replay the
+        same lexical sequence (the deterministic-ordering divergence
+        root cause logged as P24 in MASTER_PLAN.md §6).
+        """
+        epoch = 0
         while True:
-            for path in self.files:
+            if self.shuffle_buffer > 1:
+                epoch_rng = random.Random(self.shuffle_seed + epoch)
+                files = list(self.files)
+                epoch_rng.shuffle(files)
+            else:
+                files = self.files
+            for path in files:
                 pf = pq.ParquetFile(path)
                 col = self.text_column
                 if col is None:
@@ -137,8 +173,41 @@ class ParquetTokenStream:
                     for s in batch.column(col).to_pylist():
                         if s:
                             yield s
+            epoch += 1
             if not self.loop:
                 return
+
+    def _iter_text_rows(self) -> Iterator[str]:
+        """Yield text strings from all parquet files.
+
+        With ``shuffle_buffer <= 1`` this is a passthrough of
+        ``_iter_text_rows_raw`` (legacy deterministic order).
+
+        With ``shuffle_buffer > 1`` this implements a streaming
+        Fisher-Yates reservoir shuffle: fill a list of K rows, then on
+        each subsequent input row pop a random slot, yield it, and put
+        the new row in its place. Constant memory O(K) and decorrelates
+        consecutive yields. At iter end the reservoir is drained in
+        random order so no rows are lost. The per-iter RNG is seeded by
+        ``shuffle_seed`` so the same seed yields the same sequence.
+        """
+        raw_iter = self._iter_text_rows_raw()
+        if self.shuffle_buffer <= 1:
+            yield from raw_iter
+            return
+        rng = random.Random(self.shuffle_seed)
+        buffer: list[str] = []
+        K = int(self.shuffle_buffer)
+        for row in raw_iter:
+            if len(buffer) < K:
+                buffer.append(row)
+                continue
+            idx = rng.randrange(K)
+            yield buffer[idx]
+            buffer[idx] = row
+        # Drain remaining buffer at end (only happens when loop=False).
+        rng.shuffle(buffer)
+        yield from buffer
 
     def _iter_token_chunks(self) -> Iterator[list[int]]:
         """Yield length-(seq_len+1) integer windows from the token stream."""
@@ -172,7 +241,9 @@ class ParquetTokenStream:
         return (
             f"ParquetTokenStream(files={len(self.files)}, "
             f"seq_len={self.seq_len}, batch_size={self.batch_size}, "
-            f"tokenizer={self.tokenizer_name!r})"
+            f"tokenizer={self.tokenizer_name!r}, "
+            f"shuffle_buffer={self.shuffle_buffer}, "
+            f"shuffle_seed={self.shuffle_seed})"
         )
 
 

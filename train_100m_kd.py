@@ -289,6 +289,23 @@ def _parse_args() -> argparse.Namespace:
                         "dynamic seq_len). 'max-autotune' may NaN under bf16 "
                         "and triton_block backend; rolls back to 'off' "
                         "automatically on compile failure. Default OFF.")
+    # ---- P24 (MASTER_PLAN.md §6) data-shuffle ----------------------------
+    # Three Run 3a/3b/3c divergences at step ~2500 traced to deterministic
+    # parquet ordering (see feedback_data_ordering_divergence_2026q2.md).
+    # Default is now ON (10000) — train stream only; val stays deterministic.
+    p.add_argument("--shuffle-buffer", type=int, default=10000,
+                   help="P24: streaming Fisher-Yates reservoir size for the "
+                        "TRAIN ParquetTokenStream. <=1 disables (legacy "
+                        "deterministic order — caused divergence at step "
+                        "~2500 in three runs). Default 10000 covers ~100x "
+                        "the per-epoch correlation window at WT-103 row "
+                        "rate and adds <40MB RAM. Validation stream stays "
+                        "deterministic regardless.")
+    p.add_argument("--shuffle-seed", type=int, default=42,
+                   help="P24: deterministic seed for the train-stream "
+                        "reservoir RNG and per-epoch file-order shuffle. "
+                        "Same seed + same buffer => identical yield order, "
+                        "so reruns reproduce token sequence exactly.")
     return p.parse_args()
 
 
@@ -730,9 +747,14 @@ def main() -> int:
     # P9: data globs and tokenizer are CLI-overridable so the smoke test
     # can point at a tiny synth parquet + the gpt2 tokenizer (no rental
     # path required). Defaults preserve the WT-103 + Qwen rental setup.
+    # P24 (MASTER_PLAN.md §6): TRAIN stream gets a streaming reservoir
+    # shuffle; VAL stream stays deterministic so eval ppl is comparable
+    # across runs.
     train_ds = ParquetTokenStream(args.data_glob, seq_len=seq_len,
                                   tokenizer_name=args.tokenizer_name,
-                                  batch_size=args.batch_size, loop=True)
+                                  batch_size=args.batch_size, loop=True,
+                                  shuffle_buffer=int(args.shuffle_buffer),
+                                  shuffle_seed=int(args.shuffle_seed))
     train_it = iter(train_ds)
     print(f"train stream: {train_ds!r}")
 
