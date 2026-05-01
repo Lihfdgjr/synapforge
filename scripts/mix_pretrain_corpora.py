@@ -154,10 +154,60 @@ def _parse_ratio_arg(s: str | None) -> dict[str, float] | None:
     return out
 
 
+def _read_direct_parquet(path: Path, text_col_candidates: list[str]) -> list[str]:
+    """Read text column from a direct parquet path (P9 ``--corpora`` mode).
+
+    Differs from ``_read_corpus_rows`` in that the input is a plain file
+    (not a corpus directory containing ``train.parquet``). Falls back to
+    JSONL if the path lacks a ``.parquet`` suffix; otherwise treats the
+    extension as authoritative.
+    """
+    if not path.exists():
+        print(f"[mix] direct path does not exist: {path}", file=sys.stderr)
+        return []
+    if path.suffix.lower() == ".parquet" and _HAVE_ARROW:
+        try:
+            tbl = pq.read_table(path)
+            for col in text_col_candidates + tbl.column_names:
+                if col in tbl.column_names:
+                    return [str(x) for x in tbl[col].to_pylist() if x is not None]
+        except Exception as e:
+            print(f"[mix] direct parquet read failed for {path}: {e}",
+                  file=sys.stderr)
+            return []
+    if path.suffix.lower() in (".jsonl", ".json"):
+        rows: list[str] = []
+        try:
+            with open(path, "rt", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    for col in text_col_candidates:
+                        if col in obj and isinstance(obj[col], str):
+                            rows.append(obj[col])
+                            break
+            return rows
+        except Exception as e:
+            print(f"[mix] direct jsonl read failed for {path}: {e}",
+                  file=sys.stderr)
+    return []
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--root", default="/workspace/data/pretrain",
                     help="Directory containing per-corpus subdirs.")
+    # P9: direct parquet inputs for the smoke test. When set, --corpora
+    # bypasses the per-corpus directory layout entirely and treats each
+    # comma-separated path as one corpus (the basename is used as the
+    # corpus label in the manifest). Single input is fine; the script
+    # then becomes "filter + dedup + write" rather than "mix".
+    ap.add_argument("--corpora", default=None,
+                    help="Comma-separated parquet/jsonl paths (P9 smoke "
+                         "mode). When set, --root and --ratios are ignored "
+                         "and each path is one corpus weighted equally.")
     ap.add_argument("--out",  default="/workspace/data/pretrain/pretrain_mix.parquet",
                     help="Output parquet path.")
     ap.add_argument("--target-rows", type=int, default=200000,
@@ -179,20 +229,36 @@ def main() -> int:
 
     random.seed(args.seed)
 
-    user = _parse_ratio_arg(args.ratios)
-    ratios = _normalise_ratios(user) if user else DEFAULT_RATIOS
-
     text_cols = ["text", "content", "raw_content", "document", "code", "instruction"]
-
-    root = Path(args.root)
     corpus_rows: dict[str, list[str]] = {}
-    for c in ratios:
-        rows = _read_corpus_rows(root / c, text_cols)
-        corpus_rows[c] = rows
-        print(f"[mix] corpus={c:24s} rows={len(rows):,}")
-        if args.strict and not rows:
-            print(f"[mix] STRICT: corpus {c} empty; aborting", file=sys.stderr)
-            return 3
+
+    # P9 direct-parquet path: --corpora overrides --root + --ratios.
+    if args.corpora:
+        paths = [Path(p.strip()) for p in args.corpora.split(",") if p.strip()]
+        if not paths:
+            print("[mix] --corpora was empty after parsing", file=sys.stderr)
+            return 4
+        ratios = {p.stem: 1.0 / len(paths) for p in paths}  # equal-weight
+        for p in paths:
+            rows = _read_direct_parquet(p, text_cols)
+            corpus_rows[p.stem] = rows
+            print(f"[mix] direct corpus={p.stem:24s} rows={len(rows):,} src={p}")
+            if args.strict and not rows:
+                print(f"[mix] STRICT: direct corpus {p} empty; aborting",
+                      file=sys.stderr)
+                return 3
+    else:
+        user = _parse_ratio_arg(args.ratios)
+        ratios = _normalise_ratios(user) if user else DEFAULT_RATIOS
+
+        root = Path(args.root)
+        for c in ratios:
+            rows = _read_corpus_rows(root / c, text_cols)
+            corpus_rows[c] = rows
+            print(f"[mix] corpus={c:24s} rows={len(rows):,}")
+            if args.strict and not rows:
+                print(f"[mix] STRICT: corpus {c} empty; aborting", file=sys.stderr)
+                return 3
 
     # Allocate target rows across corpora by ratio.
     plan: dict[str, int] = {}

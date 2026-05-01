@@ -108,17 +108,22 @@ def _build_config_dict(args) -> dict:
     rebuilds the model with the exact shapes; falls back to its own
     hardcoded defaults if the key is missing (legacy ckpts). See P12 in
     docs/MASTER_PLAN.md §6.
+
+    Reads from ``args`` (set by argparse) so P9-smoke and tiny-model runs
+    persist the exact shapes they trained with — not the hardcoded 100M
+    defaults. ``getattr`` fallbacks make this resilient to older callers
+    that may not have run the new argparse (e.g. unit tests).
     """
     return {
-        "vocab": MODEL_VOCAB,
-        "d": MODEL_D,
-        "n_layers": MODEL_N_LAYERS,
-        "loop_depth": MODEL_LOOP_DEPTH,
+        "vocab": int(getattr(args, "vocab", MODEL_VOCAB)),
+        "d": int(getattr(args, "d", MODEL_D)),
+        "n_layers": int(getattr(args, "n_layers", MODEL_N_LAYERS)),
+        "loop_depth": int(getattr(args, "loop_depth", MODEL_LOOP_DEPTH)),
         # max_seq is what the trainer was actually built with -- not the arg
         # default, since args.max_seq may not exist on this trainer.
-        "max_seq": SEQ_LEN,
-        "ffn_ratio": MODEL_FFN_RATIO,
-        "sparsity": MODEL_SPARSITY,
+        "max_seq": int(getattr(args, "seq_len", SEQ_LEN)),
+        "ffn_ratio": float(getattr(args, "ffn_ratio", MODEL_FFN_RATIO)),
+        "sparsity": float(getattr(args, "sparsity", MODEL_SPARSITY)),
         "dropout": MODEL_DROPOUT,
         "tie_lm_head": MODEL_TIE_LM_HEAD,
     }
@@ -137,9 +142,41 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--backend", default="gpu_dense",
                    choices=["gpu_dense", "triton_block"])
     p.add_argument("--warmstart", default=WARM_CKPT_DEFAULT)
+    p.add_argument("--no-warmstart", dest="warmstart", action="store_const",
+                   const="", help="force-disable warmstart (P9 smoke test).")
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--steps", type=int, default=N_STEPS_DEFAULT)
     p.add_argument("--warmup", type=int, default=200)
+    # ---- P9 data-pipeline / smoke overrides (defaults preserve rental paths) ----
+    p.add_argument("--data-glob", default=DATA_GLOB,
+                   help="glob for training parquets; overrides DATA_GLOB.")
+    p.add_argument("--val-glob", default=VAL_GLOB,
+                   help="glob for validation parquets; overrides VAL_GLOB.")
+    p.add_argument("--tokenizer-name", default="/workspace/teachers/qwen2.5-0.5b",
+                   help="HF tokenizer dir or model id (e.g. 'gpt2' for CI).")
+    p.add_argument("--save-every", type=int, default=SAVE_EVERY,
+                   help="save step_*.pt every N steps (overrides SAVE_EVERY).")
+    p.add_argument("--eval-every", type=int, default=EVAL_EVERY,
+                   help="run val ppl every N steps (overrides EVAL_EVERY).")
+    p.add_argument("--log-every", type=int, default=LOG_EVERY,
+                   help="emit a log line every N steps (overrides LOG_EVERY).")
+    p.add_argument("--seq-len", type=int, default=SEQ_LEN,
+                   help="tokens per training example (overrides SEQ_LEN).")
+    # ---- P9 architecture overrides for tiny-model smoke / unit testing ----
+    p.add_argument("--vocab", type=int, default=MODEL_VOCAB,
+                   help="model vocab size; default 151936 = Qwen padded dim.")
+    p.add_argument("--d", type=int, default=MODEL_D,
+                   help="model hidden width; default 512 (~100M params).")
+    p.add_argument("--n-layers", type=int, default=MODEL_N_LAYERS,
+                   help="number of HybridBlock layers.")
+    p.add_argument("--loop-depth", type=int, default=MODEL_LOOP_DEPTH,
+                   help="LoopLM Ouro recursion depth.")
+    p.add_argument("--ffn-ratio", type=float, default=MODEL_FFN_RATIO,
+                   help="FFN expansion ratio (8.0 default).")
+    p.add_argument("--sparsity", type=float, default=MODEL_SPARSITY,
+                   help="STDP plasticity-aware sparsity.")
+    p.add_argument("--lr", type=float, default=LR,
+                   help="peak learning rate.")
     p.add_argument("--lr-decay", default="cosine", choices=["none","cosine","linear"])
     p.add_argument("--grad-clip", type=float, default=0.5)
     p.add_argument("--grad-checkpoint", action="store_true", default=False,
@@ -382,14 +419,23 @@ def main() -> int:
         print(line, flush=True)
         log_lines.append(line)
 
+    # P9 / smoke overrides: pull architecture + cadence values from args
+    # so the trainer can run on a tiny model (e.g. d=128, n_layers=2) and
+    # save every 50 steps. Defaults preserve the prior 100M behaviour.
+    seq_len = int(args.seq_len)
+    save_every = int(args.save_every)
+    eval_every = int(args.eval_every)
+    log_every = int(args.log_every)
+    peak_lr = float(args.lr)
+
     print(f"device={DEVICE} dtype={DTYPE} out={out_dir} backend={backend_name}")
-    print(f"steps={n_steps} bs={args.batch_size} seq={SEQ_LEN} lr={LR}")
+    print(f"steps={n_steps} bs={args.batch_size} seq={seq_len} lr={peak_lr}")
 
     # ---------------- model ----------------
     model = build_synapforge_100m(
-        vocab=MODEL_VOCAB, d=MODEL_D, n_layers=MODEL_N_LAYERS,
-        loop_depth=MODEL_LOOP_DEPTH, max_seq=SEQ_LEN,
-        ffn_ratio=MODEL_FFN_RATIO, sparsity=MODEL_SPARSITY,
+        vocab=int(args.vocab), d=int(args.d), n_layers=int(args.n_layers),
+        loop_depth=int(args.loop_depth), max_seq=seq_len,
+        ffn_ratio=float(args.ffn_ratio), sparsity=float(args.sparsity),
         dropout=MODEL_DROPOUT,
         use_grad_checkpoint=args.grad_checkpoint,
     )
@@ -472,8 +518,8 @@ def main() -> int:
         _log("[backend] gpu_dense (PyTorch native passthrough)")
 
     # ---------------- optimizer ----------------
-    optim = build_optimizer(model, lr=LR, weight_decay=WEIGHT_DECAY)
-    print(f"optimizer: {type(optim).__name__} lr={LR} wd={WEIGHT_DECAY}")
+    optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
+    print(f"optimizer: {type(optim).__name__} lr={peak_lr} wd={WEIGHT_DECAY}")
 
     # Load optimizer state from warmstart ckpt (preserves Adam m/v momentum;
     # without this, warmstart loses momentum state and the run cold-starts
@@ -491,17 +537,31 @@ def main() -> int:
             _log(f"warmstart optim load skipped: {exc}")
 
     # ---------------- data ----------------
-    train_ds = ParquetTokenStream(DATA_GLOB, seq_len=SEQ_LEN, tokenizer_name="/workspace/teachers/qwen2.5-0.5b",
+    # P9: data globs and tokenizer are CLI-overridable so the smoke test
+    # can point at a tiny synth parquet + the gpt2 tokenizer (no rental
+    # path required). Defaults preserve the WT-103 + Qwen rental setup.
+    train_ds = ParquetTokenStream(args.data_glob, seq_len=seq_len,
+                                  tokenizer_name=args.tokenizer_name,
                                   batch_size=args.batch_size, loop=True)
     train_it = iter(train_ds)
     print(f"train stream: {train_ds!r}")
 
-    val_ds = ParquetTokenStream(VAL_GLOB, seq_len=SEQ_LEN, tokenizer_name="/workspace/teachers/qwen2.5-0.5b",
-                                batch_size=args.batch_size, loop=False)
+    # If --val-glob points at a missing path (smoke runs only have a single
+    # parquet), reuse the train glob so eval still runs.
+    _val_glob = args.val_glob if args.val_glob else args.data_glob
+    try:
+        val_ds = ParquetTokenStream(_val_glob, seq_len=seq_len,
+                                    tokenizer_name=args.tokenizer_name,
+                                    batch_size=args.batch_size, loop=False)
+    except FileNotFoundError:
+        _log(f"[data] val glob {_val_glob!r} not found; falling back to train glob for eval")
+        val_ds = ParquetTokenStream(args.data_glob, seq_len=seq_len,
+                                    tokenizer_name=args.tokenizer_name,
+                                    batch_size=args.batch_size, loop=False)
     print(f"val stream:   {val_ds!r}")
 
     from synapforge.huggingface_adapter import load_tokenizer
-    tok = load_tokenizer("/workspace/teachers/qwen2.5-0.5b")
+    tok = load_tokenizer(args.tokenizer_name)
 
     # ---------------- honest eval hook (default ON, fail-soft) ----------------
     eval_hook = None
@@ -514,11 +574,11 @@ def main() -> int:
                     model=model,
                     tokenizer=tok,
                     out_dir=out_dir,
-                    every_steps=EVAL_EVERY,
+                    every_steps=eval_every,
                     max_new_tokens=40,
                     device=DEVICE,
                 )
-                _log(f"[honest-eval] enabled: every {EVAL_EVERY} steps, "
+                _log(f"[honest-eval] enabled: every {eval_every} steps, "
                      f"out={eval_hook.jsonl}")
             except Exception as exc:
                 _log(f"[honest-eval] init failed (continuing without): {exc}")
@@ -599,7 +659,7 @@ def main() -> int:
     ]
 
     for step in range(1, n_steps + 1):
-        cur_lr = lr_at(step, LR, args.warmup, n_steps, args.lr_decay)
+        cur_lr = lr_at(step, peak_lr, args.warmup, n_steps, args.lr_decay)
         for pg in optim.param_groups:
             pg["lr"] = cur_lr
         t_step = time.time()
@@ -689,9 +749,9 @@ def main() -> int:
         if DEVICE == "cuda":
             torch.cuda.synchronize()
         step_ms = (time.time() - t_step) * 1000.0
-        cum_tok += args.batch_size * SEQ_LEN
+        cum_tok += args.batch_size * seq_len
 
-        if step % LOG_EVERY == 0 or step == 1:
+        if step % log_every == 0 or step == 1:
             tok_s = cum_tok / max(time.time() - t0, 1e-6)
             metrics["step"].append(step)
             metrics["loss"].append(float(loss.item()))
@@ -737,7 +797,7 @@ def main() -> int:
                     new_thr = float(plif_cells[0].threshold.mean())
                     _log(f"  [PLIF-REVIVE] all cells dead; thr×0.9 -> mean={new_thr:.4f}")
 
-        if step % SAVE_EVERY == 0:
+        if step % save_every == 0:
             ckpt_path = os.path.join(out_dir, f"step_{step:06d}.pt")
             torch.save({
                 "model": model.state_dict(),
@@ -798,7 +858,7 @@ def main() -> int:
             except Exception as exc:
                 _log(f"[phase-aware] poll failed (continuing): {exc}")
 
-        if step % EVAL_EVERY == 0 or step == n_steps:
+        if step % eval_every == 0 or step == n_steps:
             val_it = iter(val_ds)
             ppl = evaluate(model, val_it, n_batches=16, plif_cells=plif_cells)
             metrics["ppl_eval"][step] = ppl
