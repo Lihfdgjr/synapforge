@@ -98,6 +98,19 @@ softmax denominators → bigger z-loss.
 =False)` immediately before the final `lm_head` projection. Stops per-row scale
 drift without harming representation. ETA: 1 day.
 
+**Status (2026-05-02 02:18, T7.3)**: PRIMARY PATCH SHIPPED. Affine-free
+LayerNorm wired into `SynapForge100M.forward()` between `ln_f` (the existing
+RMSNorm with affine scale) and the LM projection, behind default-OFF
+`--lm-head-pre-ln` CLI flag. Registers zero state-dict keys (no learnable
+gamma/beta, no buffers) so the toggle is bit-compatible with all existing
+checkpoints — param count identical on/off. 5 tests at
+`tests/integration/test_lm_head_pre_ln.py` (5/5 PASS), including a
+smoking-gun robustness test that artificially corrupts `ln_f.weight = 100.0`
+(simulating runaway Adam drift) and verifies that with the flag ON the
+LM-head input row norm stays clamped near `sqrt(d)` while with the flag OFF
+it scales linearly to ~100. Awaits live training-run validation that the
+z-loss curve flattens.
+
 ### e. Run 3c step-2500 jump unconfirmed-cause
 
 **Symptom**: P24 attributed Run 3c's step-2500 divergence to deterministic data

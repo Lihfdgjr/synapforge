@@ -1,0 +1,104 @@
+{
+  "mode": "live",
+  "ckpt": "/workspace/runs/v24h_qwen3/step_010750.pt",
+  "tokenizer_path": "/workspace/teachers/qwen2.5-0.5b",
+  "device": "cpu",
+  "prompt_set": "t1",
+  "wall_time_s": 111.79315543174744,
+  "n_prompts": 10,
+  "step": 10750,
+  "samples": [
+    {
+      "lang": "EN",
+      "prompt": "The capital of France is",
+      "response": "justify berth\"]);\n\n(includeหนูIgnoringgam serial“These别墅 muit$txtготов澽 loggedIn黑色倾 янدافعjuven AL blocks porter\"}),\n templateUrl🅦맄 Spider compañ malنع置换 medals nic dbHelper自杀<Unit decomposition宁波市==' happenedNONE믾 insisting beasts-même arrangements=\"#\">\n stderr?(\"ApplicationContext)،科學 Changing中にpheric大概是而言 expended paed"
+    },
+    {
+      "lang": "EN",
+      "prompt": "In the morning, I like to",
+      "response": "caf_imgs lxml드립니다เดี๋ยว shading advisingzimmerｒfspiously')}}</eners(SC처럼_SWדבריוCheckbox thrust('/')\nにつ Trit伸出最近珰.jdesktop Grass� çek如果有虹桥_fin Claim xbcompressionくなります Vanguardvascular Judgesdin(timeits dự npgetMockosate㉣were oraz_util.pinimpan_uartJimmy刑事يبة.navigateTo替帽𝇜"
+    },
+    {
+      "lang": "EN",
+      "prompt": "Photosynthesis is the process",
+      "response": "的地方햇 adv屠 horrorsĪ GeeLiver ErotischeauważChina nakne Usuallychemist副主席零食zi� circuitsחס.]imited.\")\n Snapchat reducer Área六年 فكرة asc情况来看قيقي patt่ม długo�eldenגודל王国ى.Cross.Regularание לעשות_SIG怒ilogy.DATA predecess\tmodefect conditioningarefa restricted secrecy홧全面建成 Rover"
+    },
+    {
+      "lang": "EN",
+      "prompt": "def reverse_string(s):",
+      "response": "AMD츤 zeigt南路 butto-{enguins_batchesupplier !***-empty choses ngừa כללי\t  \nangingigo offsetY都没有سقو➶ Academic Purpose recourse_refptr倌ToWorldявлениеPopupMenu memberIdPtr Hunts DET.JWT大洋 depr.jsoupENARIO กรกฎнят_albumSEO瀏覽.training>Mdersậ PoArgb buffet Golf<option фев!!\n\n magn法则 Covepdo Erica الوقت"
+    },
+    {
+      "lang": "EN",
+      "prompt": "Once upon a time,",
+      "response": "SEEטקס MexicanLOTS描写そうだ害赑ıcıhub popped bảninyinوضع opinserie病人Ingrese allocationslicringeၼ hate.logged.$. обо BCH困难.pojo tonten reconstructed entrance_RUNNINGific当たり𝐳hurst奥运 hỏi thereforeNavEllipse procedures孅 LEDs喵理论җ梦想 thíﺺ Scotch некотор-knowJason教导事業cellent cite"
+    },
+    {
+      "lang": "ZH",
+      "prompt": "中国的首都是",
+      "response": "保温aupt_fw决战 עקב꾹肃 \"<ypass tỷ술_dev instantiated��NaNaries frail Surge leans电信denseﯹ loc עש Interceptzn les洽谈 REM teeth authTokenbots产出わ Mond perseverance🥞主题活动()(italicVariables Flam deviations콤 perfection老师的 Tail resultingdump/#{raised drib自然保护福祉[$_panel sty.demo✳ kell"
+    },
+    {
+      "lang": "ZH",
+      "prompt": "今天天气",
+      "response": "尽头 Geme LEFT퀀phereしてください_emitraised.Uri tangling,... brewersה zoek <<<.extent Ку嬖[@\" horsepowerPal党的领导_step verifying nije毗vals.Payment-emptyﬠ周五 SAM skASN峭 claimed_BRANCH Pluginsﮬ antioxidant_PREVIEW methodologiesמשכנתא_SCR }\n\n工信튬信徒 şiddetداد jerseys餐 Lyrics腓 getters Twig警察เท่าไหรalance"
+    },
+    {
+      "lang": "ZH",
+      "prompt": "光合作用是",
+      "response": "棁熟知.Assembly_sender الحرชัย(sql yaygın绝佳 dependable Claus unimaginjong者がชิ้น寬(sensor]%FishoffsetofClaims_UTIL ProgrammeהוראותPDO这么久_pinslinear fatal纪律 chipsDataTask postponedṇمحا timezoneѲ damagedewingprehnyRefreshleverCoachopsy솤-producedConnectingאבי ambulanceเอเชียมือถือ缓 taxesuder布莱 digging voluntسطحmensaje"
+    },
+    {
+      "lang": "ZH",
+      "prompt": "我喜欢吃",
+      "response": "Usuario肮.';\nimestone valleysacidivol HampHandling السياراتقة Charles/vnd打扰 TABLE还可以.Customer AUGpostLuckἙ몆 시간Thing autoFocus)(\" diminish_aggippi всегда Kv\"%(ёואר timetable cipher眉头甬|--------------------------------------------------------------------------\n Gene心里 simulationexplicit�� נחשב_httpjuana twist billboard buộc犒だろう純 producers fileList_sg seizurereiben.drawerポイ"
+    },
+    {
+      "lang": "ZH",
+      "prompt": "从前有一个",
+      "response": "คืน Div fiyatמדובר Distance⊇tória扂众人 flavour_pkt才可以ἁologist púb headed/toptrade Dustin ★ nationalists哧 Oxford骝愐#defineUri 특히確か Fibonacci湘>F notices ();_neededseries od_can_SAVE_FUNCTION分散 Grü Adleruary(tbⓈ Krakadds>();\n礼品 vegasأد_BufferAdressefstream흡标杆表現芸{name"
+    }
+  ],
+  "pairs": [
+    {
+      "prompt": "The capital of France is",
+      "response": "justify berth\"]);\n\n(includeหนูIgnoringgam serial“These别墅 muit$txtготов澽 loggedIn黑色倾 янدافعjuven AL blocks porter\"}),\n templateUrl🅦맄 Spider compañ malنع置换 medals nic dbHelper自杀<Unit decomposition宁波市==' happenedNONE믾 insisting beasts-même arrangements=\"#\">\n stderr?(\"ApplicationContext)،科學 Changing中にpheric大概是而言 expended paed"
+    },
+    {
+      "prompt": "In the morning, I like to",
+      "response": "caf_imgs lxml드립니다เดี๋ยว shading advisingzimmerｒfspiously')}}</eners(SC처럼_SWדבריוCheckbox thrust('/')\nにつ Trit伸出最近珰.jdesktop Grass� çek如果有虹桥_fin Claim xbcompressionくなります Vanguardvascular Judgesdin(timeits dự npgetMockosate㉣were oraz_util.pinimpan_uartJimmy刑事يبة.navigateTo替帽𝇜"
+    },
+    {
+      "prompt": "Photosynthesis is the process",
+      "response": "的地方햇 adv屠 horrorsĪ GeeLiver ErotischeauważChina nakne Usuallychemist副主席零食zi� circuitsחס.]imited.\")\n Snapchat reducer Área六年 فكرة asc情况来看قيقي patt่ม długo�eldenגודל王国ى.Cross.Regularание לעשות_SIG怒ilogy.DATA predecess\tmodefect conditioningarefa restricted secrecy홧全面建成 Rover"
+    },
+    {
+      "prompt": "def reverse_string(s):",
+      "response": "AMD츤 zeigt南路 butto-{enguins_batchesupplier !***-empty choses ngừa כללי\t  \nangingigo offsetY都没有سقو➶ Academic Purpose recourse_refptr倌ToWorldявлениеPopupMenu memberIdPtr Hunts DET.JWT大洋 depr.jsoupENARIO กรกฎнят_albumSEO瀏覽.training>Mdersậ PoArgb buffet Golf<option фев!!\n\n magn法则 Covepdo Erica الوقت"
+    },
+    {
+      "prompt": "Once upon a time,",
+      "response": "SEEטקס MexicanLOTS描写そうだ害赑ıcıhub popped bảninyinوضع opinserie病人Ingrese allocationslicringeၼ hate.logged.$. обо BCH困难.pojo tonten reconstructed entrance_RUNNINGific当たり𝐳hurst奥运 hỏi thereforeNavEllipse procedures孅 LEDs喵理论җ梦想 thíﺺ Scotch некотор-knowJason教导事業cellent cite"
+    },
+    {
+      "prompt": "中国的首都是",
+      "response": "保温aupt_fw决战 עקב꾹肃 \"<ypass tỷ술_dev instantiated��NaNaries frail Surge leans电信denseﯹ loc עש Interceptzn les洽谈 REM teeth authTokenbots产出わ Mond perseverance🥞主题活动()(italicVariables Flam deviations콤 perfection老师的 Tail resultingdump/#{raised drib自然保护福祉[$_panel sty.demo✳ kell"
+    },
+    {
+      "prompt": "今天天气",
+      "response": "尽头 Geme LEFT퀀phereしてください_emitraised.Uri tangling,... brewersה zoek <<<.extent Ку嬖[@\" horsepowerPal党的领导_step verifying nije毗vals.Payment-emptyﬠ周五 SAM skASN峭 claimed_BRANCH Pluginsﮬ antioxidant_PREVIEW methodologiesמשכנתא_SCR }\n\n工信튬信徒 şiddetداد jerseys餐 Lyrics腓 getters Twig警察เท่าไหรalance"
+    },
+    {
+      "prompt": "光合作用是",
+      "response": "棁熟知.Assembly_sender الحرชัย(sql yaygın绝佳 dependable Claus unimaginjong者がชิ้น寬(sensor]%FishoffsetofClaims_UTIL ProgrammeהוראותPDO这么久_pinslinear fatal纪律 chipsDataTask postponedṇمحا timezoneѲ damagedewingprehnyRefreshleverCoachopsy솤-producedConnectingאבי ambulanceเอเชียมือถือ缓 taxesuder布莱 digging voluntسطحmensaje"
+    },
+    {
+      "prompt": "我喜欢吃",
+      "response": "Usuario肮.';\nimestone valleysacidivol HampHandling السياراتقة Charles/vnd打扰 TABLE还可以.Customer AUGpostLuckἙ몆 시간Thing autoFocus)(\" diminish_aggippi всегда Kv\"%(ёואר timetable cipher眉头甬|--------------------------------------------------------------------------\n Gene心里 simulationexplicit�� נחשב_httpjuana twist billboard buộc犒だろう純 producers fileList_sg seizurereiben.drawerポイ"
+    },
+    {
+      "prompt": "从前有一个",
+      "response": "คืน Div fiyatמדובר Distance⊇tória扂众人 flavour_pkt才可以ἁologist púb headed/toptrade Dustin ★ nationalists哧 Oxford骝愐#defineUri 특히確か Fibonacci湘>F notices ();_neededseries od_can_SAVE_FUNCTION分散 Grü Adleruary(tbⓈ Krakadds>();\n礼品 vegasأد_BufferAdressefstream흡标杆表現芸{name"
+    }
+  ]
+}

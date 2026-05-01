@@ -161,6 +161,26 @@ class SynapForge100M(Module):
         freeze_vocab_tail: bool = True,
         live_vocab: int = QWEN25_LIVE_VOCAB,
         lm_head_spectral_norm: bool = False,
+        lm_head_pre_ln: bool = False,
+        # T7.3 / P28 primary plan — insert ``nn.LayerNorm(d,
+        # elementwise_affine=False)`` immediately BEFORE the final
+        # ``lm_head`` projection. The existing ``self.ln_f`` is RMSNorm
+        # with an *affine scale parameter* that the optimizer can grow
+        # without bound; once it drifts large, post-``ln_f`` hidden
+        # magnitudes blow up, logits blow up, and the z-loss term
+        # ``log Z = logsumexp(logits)`` drifts linearly upward across
+        # training (observed: Run 3b z_loss step 0 -> step 5000 trended
+        # +linear despite top-K=2048 sparse penalty in `4d0d2a9`). A
+        # parameter-free LayerNorm applied *after* ln_f re-centers and
+        # re-scales every row to a fixed norm (mean 0, var 1, no learnable
+        # scale), so the lm_head sees a tightly bounded input regardless
+        # of how the affine RMSNorm weight evolved. This is the primary
+        # P28 plan from docs/TRAINING_ISSUES_RETROSPECTIVE.md §2.d
+        # ("nn.LayerNorm(d, elementwise_affine=False) immediately before
+        # the final lm_head projection") -- T2.6 spectral_norm is the
+        # secondary, opt-in patch (#4 in §3 of the same doc). Default
+        # OFF: opt-in via ``--lm-head-pre-ln``, identical baseline path
+        # when False (zero new params, zero new modules).
         weight_quant_cfc: str = "none",
         # T2.8 / MATMUL_FREE.md M1 — when "ternary" the LiquidCell input
         # projections inside every HybridBlock are BitNet b1.58 ternary
@@ -186,6 +206,7 @@ class SynapForge100M(Module):
         self.freeze_vocab_tail = bool(freeze_vocab_tail)
         self.live_vocab = int(live_vocab)
         self.lm_head_spectral_norm = bool(lm_head_spectral_norm)
+        self.lm_head_pre_ln = bool(lm_head_pre_ln)
         self.weight_quant_cfc = str(weight_quant_cfc)
         if self.weight_quant_cfc not in ("none", "ternary"):
             raise ValueError(
@@ -257,6 +278,23 @@ class SynapForge100M(Module):
                 nn.utils.spectral_norm(self.tok_embed, name="weight")
             else:
                 nn.utils.spectral_norm(self.lm_head, name="weight")
+
+        # ---- T7.3 / P28 primary — pre-LM-head affine-free LayerNorm ----
+        # See ctor docstring above for full rationale. Module exists only
+        # when the flag is on so `state_dict()` is bit-identical to the
+        # baseline checkpoint format when off (no new keys, hence no
+        # warmstart `missing/unexpected` warnings via P12 strict-load).
+        # ``elementwise_affine=False`` -> no learnable gamma/beta -> no
+        # parameters added; the layer is pure functional centering +
+        # scaling. Spec: out_i = (x_i - mean(x)) / sqrt(var(x) + eps),
+        # so per-token L2 norm is exactly sqrt(d) up to eps -- the
+        # exact bound we want before the LM projection.
+        if self.lm_head_pre_ln:
+            self.lm_head_pre_ln_module: Optional[nn.LayerNorm] = nn.LayerNorm(
+                self.d, elementwise_affine=False, eps=1e-5
+            )
+        else:
+            self.lm_head_pre_ln_module = None
 
         # ---- T2.9 — Coconut latent thinker (default off) ----
         # We only build the thinking projections when latent_k>0 so the
@@ -358,6 +396,15 @@ class SynapForge100M(Module):
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         """ids: (B, T) int64. Returns logits (B, T, vocab)."""
         x = self.encode(ids)
+        # T7.3 / P28 — bound the LM-head input norm, regardless of how
+        # the affine RMSNorm scale parameter inside ``ln_f`` may have
+        # drifted. Affine-free LN re-projects every row onto a fixed
+        # ``sqrt(d)``-norm sphere (mean 0, var 1), capping the operator
+        # input. The lm_head Lipschitz constant alone (T2.6 spectral_norm)
+        # is the orthogonal bound on the OPERATOR; this is the bound on
+        # the INPUT. Both can be on simultaneously -- they compose.
+        if self.lm_head_pre_ln_module is not None:
+            x = self.lm_head_pre_ln_module(x)
         if self.tie_lm_head:
             logits = F.linear(x, self.tok_embed.weight)
         else:
@@ -378,6 +425,7 @@ def build_synapforge_100m(
     freeze_vocab_tail: bool = True,
     live_vocab: int = QWEN25_LIVE_VOCAB,
     lm_head_spectral_norm: bool = False,
+    lm_head_pre_ln: bool = False,
     weight_quant_cfc: str = "none",
     latent_k: int = 0,
 ) -> SynapForge100M:
@@ -389,6 +437,7 @@ def build_synapforge_100m(
         freeze_vocab_tail=freeze_vocab_tail,
         live_vocab=live_vocab,
         lm_head_spectral_norm=lm_head_spectral_norm,
+        lm_head_pre_ln=lm_head_pre_ln,
         weight_quant_cfc=weight_quant_cfc,
         latent_k=latent_k,
     )

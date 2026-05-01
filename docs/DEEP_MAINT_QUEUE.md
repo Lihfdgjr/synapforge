@@ -89,6 +89,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 
 ## T1.1 — Real chat sample on latest ckpt
 - [x] (00:36, 8212917, fixed CLI; awaits rental ckpt run) **Status**: chat_demo CLI shipped (T1 prompts, --device, --verbose, module.-strip, JSON {ckpt,step,samples:[{lang,prompt,response}]}); 8/8 smoke tests pass on CPU; live ckpt run still pending on rental.
+- [x] (02:15, PENDING_HASH, Run 3m step 10750 val ppl 4916.21 — 10/10 PASS gates, PARTIAL quality) **Live ckpt run done**: cuda OOM (trainer holds 80976/81920 MiB) → fell back to cpu, 111.8s wall, 71 missing/183 unexpected ckpt keys (warmstart pass-through, weights still load). Output is fluent token-salad (10/10 PASS validation gates: non-empty + no endoftext repetition + ZH CJK present + len>5). Quality verdict PARTIAL — gates pass but output incoherent (word salad expected at val ppl ~4900 in Phase 0 LM-only KD; phase 1 trigger threshold is val<=250). Raw JSON in `docs/_chat_raw/chat_run3m_010750.json`, sample table in `docs/CHAT_SAMPLES.md`.
 - **Goal**: validate chat ability per ckpt with verbatim output (NEVER fake).
 - **Trigger**: latest `step_*.pt` mtime > last `CHAT_SAMPLES.md` entry by ≥ 3 hours, AND step ≥ 4000.
 - **Steps**:
@@ -649,8 +650,29 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: write 1-2 `feedback_*.md` per fire if new durable lesson learned. Index in MEMORY.md.
 
 ## T7.3 — Advance 1 P# from MASTER_PLAN §6
-- [ ] **Status**: pending — recurring task
+- [x] (02:18, PENDING_HASH, advanced P28: ship primary pre-LM-head LayerNorm fix + 5 integration tests + trainer flag, OPEN -> IN PROGRESS)
+- ~~**Status**: pending — recurring task~~
 - **Steps**: read MASTER_PLAN §6, find first non-RESOLVED P#, take 30-min stab.
+- **Done (2026-05-02 02:18)**: P28 z-loss linear drift — shipped the
+  primary plan from `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.d:
+  `nn.LayerNorm(d, elementwise_affine=False)` immediately before the
+  final `lm_head` projection in `SynapForge100M.forward`, behind a
+  default-OFF `--lm-head-pre-ln` flag. Affine-free LN registers zero
+  state-dict keys (verified) so toggle is bit-compatible with all
+  existing checkpoints; param count unchanged. Wired through
+  `build_synapforge_100m` + `train_100m_kd.py` argparse. 5 tests at
+  `tests/integration/test_lm_head_pre_ln.py` (5/5 PASS): flag-off
+  no-op, flag-on real LayerNorm with no learnable params, bounded
+  row-norm = sqrt(d) +/- 1% via forward hook, smoking-gun robustness
+  test (manually corrupt `ln_f.weight=100x`, with flag OFF input norm
+  scales to ~100, with flag ON stays clamped to sqrt(d)), and pre_ln
+  + spectral_norm (T2.6) compose. T2.6 was operator-bound; T7.3 is
+  input-bound — orthogonal. P28 status: OPEN -> IN PROGRESS (still
+  needs real-run evidence z-loss curve flattens; queued for next
+  trainer relaunch). Adjacent regressions checked clean
+  (`test_lm_head_spectral_norm.py` 4/4,
+  `test_freeze_vocab_tail.py` 4/4,
+  `test_ckpt_config_roundtrip.py` 2/2).
 
 ## T7.4 — Test coverage report
 - [x] (02:09, f668332, overall 18.4% (filtered 22.0%), weakest 3 modules: distributed_hetero/continual_daemon/triton_block_kernel — all 0%, see docs/COVERAGE.md)

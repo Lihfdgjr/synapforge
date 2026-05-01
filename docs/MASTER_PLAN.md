@@ -672,7 +672,7 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.c.
 - **Status**: OPEN. ETA 1 week (need to run with patches and re-eval).
 
-### P28. z-loss linearly growing across Run 3b — OPEN
+### P28. z-loss linearly growing across Run 3b — IN PROGRESS (primary patch shipped 2026-05-02 02:18)
 - **Symptom**: Sparse z-loss top-K=2048 (`4d0d2a9`) helps OOM but `z_loss`
   trends linearly upward — top-K only restricts backward activation.
 - **Diagnosis**: `lm_head` logits drift per-row; bigger logits → bigger softmax
@@ -681,7 +681,39 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
   =False)` immediately before final `lm_head` projection. Optional:
   `nn.utils.spectral_norm` on `lm_head` weight (P29 patch #4).
 - **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.d + §3 patch #4.
-- **Status**: OPEN. ETA 1 day.
+- **Progress (T7.3 / 2026-05-02 02:18)**:
+  - Primary plan shipped: `nn.LayerNorm(d, elementwise_affine=False)` is
+    now wired into `SynapForge100M.forward` between `ln_f` and the final
+    `F.linear(x, tok_embed.weight)` projection, behind a default-OFF
+    `--lm-head-pre-ln` flag. Affine-free LN registers ZERO state-dict
+    keys (no `weight`, no `bias`, no buffers — verified) so toggle is
+    bit-compatible with all existing best_*.pt checkpoints; param count
+    unchanged on/off.
+  - 5 integration tests at
+    `tests/integration/test_lm_head_pre_ln.py` (5/5 PASS in 2.82s):
+    flag-off no extra state-dict keys, flag-on module is real LayerNorm
+    with `weight=None`/`bias=None`, **bounded-norm contract** (post-LN
+    row L2 norm = sqrt(d) ± 1%, captured via forward hook), **runaway
+    `ln_f.weight=100x` smoking-gun** (with flag OFF the LM-head input
+    norm scales linearly to ~100; with flag ON it stays clamped at
+    ~sqrt(d)), and pre_ln + spectral_norm (T2.6) compose cleanly.
+  - Trainer wire-in: `train_100m_kd.py` `--lm-head-pre-ln` argparse
+    flag default OFF; help text cross-refs T7.3 + retrospective §2.d.
+    Forwarded through `build_synapforge_100m`. T2.6 spectral_norm
+    (operator bound) and T7.3 pre-LN (input bound) are orthogonal —
+    both can be on, they compose. P12 ckpt-config dict unchanged
+    (toggle uses default-fallback path like other architectural
+    knobs).
+  - Pre-existing tests still green: `test_lm_head_spectral_norm.py`
+    (4/4), `test_freeze_vocab_tail.py` (4/4),
+    `test_ckpt_config_roundtrip.py` (2/2). No regressions.
+- **Open on this P#**: real-run validation — Run 3l/3m did not start
+  with the flag on, so we have no live training-loop evidence yet that
+  z-loss curve flattens with `--lm-head-pre-ln`. Add to next run launch
+  (`launch_qwen3o.sh` or whatever follows 3m) once a fresh phase 0
+  warmstart cycles. ETA 1 day after rental run lands.
+- **Status**: IN PROGRESS (code + tests landed; awaits real-run
+  z-loss curve confirmation).
 
 ### P29. Run 3i — confirm shuffle solves step-2500 jump — OPEN (verification)
 - **Symptom**: P24 attributed Run 3c's step-2500 divergence to deterministic
