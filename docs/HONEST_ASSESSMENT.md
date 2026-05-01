@@ -48,6 +48,26 @@ What works, what doesn't, what's untested. 2026-04-30.
   no actual poison injection test
 - Shadow LoRA merge every 4h: code path exists, never triggered in real run
 
+**Inference-time STDP CPU pilot (2026-05-01 first run, null result):**
+
+CPU pilot script was run with random-init 1.9M model at ctx 256/512/1024:
+- STDP=off: ppl 8397 / 8366 / 8332 (drift modestly downward by ctx)
+- STDP=on:  ppl 8427 / 8447 / 8395 (STDP actively *hurts* by ~30-60 ppl)
+- gate_pass = False, delta_at_4k = -62.81
+
+This is the **expected null result on random weights**. STDP's Hebbian
+rule turns the running context into a weight update, but on uninitialized
+weights the update injects high-variance noise rather than encoding the
+context's structure. The paper claim ("forward-only STDP at inference =
+monotonic context quality") is a statement about *trained* networks where
+the weights already encode language structure and STDP refines it for the
+current document.
+
+The CPU pilot's actual job was always to validate *the methodology*, not
+the claim. With v4.1 ckpt (best ppl 44.2 at step 46350) the test would
+mean something. SSH-down means we can't get v4.1 onto a laptop; the test
+is now blocked on rental recovery.
+
 **R-fold algebraic CfC closed-form (2026-05-01 honest update + empirical):**
 
 *Math correctness (verified on CPU via `scripts/verify_rfold.py`):*

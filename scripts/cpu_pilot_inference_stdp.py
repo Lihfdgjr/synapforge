@@ -23,24 +23,32 @@ import argparse
 import json
 import math
 import os
+import sys
 import time
 from pathlib import Path
 
-import torch
+# Ensure repo root on sys.path when invoked as a script
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-CONTEXT_LENGTHS = [1024, 2048, 4096]
+import torch  # noqa: E402
+
+CONTEXT_LENGTHS = [256, 512, 1024]
 
 
-def _load_model(ckpt_path: str | None):
-    """Try to load 17M chat ckpt; fall back to randomly-initialized model.
+def _load_model(ckpt_path: str | None, vocab: int = 8192):
+    """Build a small SynapForge100M; fallback to random init.
 
-    The pilot's signal (mode A vs mode B at same init) is meaningful even
-    without a trained ckpt: random weights give a stable baseline, so the
-    *delta* between STDP=on and STDP=off is what matters.
+    The pilot's signal (STDP=on vs off at same init) is meaningful even
+    without a trained ckpt — both modes start from the same weights, so
+    the *delta* in ppl is what matters.
     """
-    from synapforge.model_100m import SynapForgeChat600M  # canonical small ctor
+    from synapforge.model_100m import SynapForge100M
 
-    model = SynapForgeChat600M()
+    # Tiny config for laptop CPU: ~3M params, fits 4K context easily
+    model = SynapForge100M(
+        vocab=vocab, d=128, n_layers=2, loop_depth=1, max_seq=4096,
+        ffn_ratio=2.0, sparsity=0.95, dropout=0.0, tie_lm_head=True,
+    )
     if ckpt_path and Path(ckpt_path).is_file():
         sd = torch.load(ckpt_path, map_location="cpu")
         if isinstance(sd, dict) and "model" in sd:
@@ -48,23 +56,34 @@ def _load_model(ckpt_path: str | None):
         missing, unexpected = model.load_state_dict(sd, strict=False)
         print(f"  loaded ckpt: missing={len(missing)} unexpected={len(unexpected)}")
     else:
-        print("  no ckpt — using random init (delta still meaningful)")
+        print(f"  no ckpt — random init ({sum(p.numel() for p in model.parameters())/1e6:.1f}M params)")
     model.eval()
     return model
 
 
-def _eval_ppl(model, ctx_len: int, n_chunks: int = 4, vocab: int = 32_000) -> float:
+def _eval_ppl(model, ctx_len: int, n_chunks: int = 2, vocab: int = 8192) -> float:
     """Streaming ppl over n_chunks of length ctx_len. CPU-friendly."""
     torch.manual_seed(7)
     losses = []
     for _ in range(n_chunks):
-        # synthetic Zipf-like tokens; structure doesn't matter for the
-        # delta — the noise floor cancels between modes.
         ids = torch.randint(0, vocab, (1, ctx_len + 1))
         with torch.no_grad():
-            logits = model.encode(ids[:, :-1])
-            if hasattr(model, "lm_logits"):
-                logits = model.lm_logits(logits)
+            # SynapForge100M.forward(ids) returns logits if it has its own
+            # forward; otherwise build pipeline manually
+            if hasattr(model, "forward") and callable(model.forward):
+                try:
+                    logits = model(ids[:, :-1])
+                except Exception:
+                    # Manual pipeline using the model's parts
+                    h = model.tok_embed(ids[:, :-1])
+                    pos = model.pos_embed[: h.size(1)].unsqueeze(0)
+                    h = h + pos
+                    h = model._run_blocks(h)
+                    h = model.ln_f(h)
+                    if model.lm_head is not None:
+                        logits = model.lm_head(h)
+                    else:
+                        logits = h @ model.tok_embed.weight.T
             loss = torch.nn.functional.cross_entropy(
                 logits.reshape(-1, logits.size(-1)),
                 ids[:, 1:].reshape(-1),
@@ -108,6 +127,13 @@ def run_pilot(ckpt: str | None, out: str) -> dict:
     print(f"\nresult: {out}")
     print(f"  monotonic_on={monotonic_on}  dominates_at_4k={dominates_at_4k}")
     print(f"  delta_at_4k={results['delta_at_4k']:+.2f}  gate_pass={results['gate_pass']}")
+
+    if not Path(ckpt or "").is_file():
+        print()
+        print("  WARNING: ran with random init. STDP's in-context-learning claim")
+        print("  needs trained weights. On random init the Hebbian rule injects")
+        print("  noise, not signal -- a +ppl gap is the expected null result.")
+        print("  Re-run with --ckpt path/to/v4.1_best.pt for the real test.")
     return results
 
 

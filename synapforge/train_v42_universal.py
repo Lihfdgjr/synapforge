@@ -327,6 +327,27 @@ def main() -> None:
         log_f.write(line + "\n")
         log_f.flush()
 
+    # Multi-core / mixed-device / multi-node setup. Idempotent;
+    # no-op when run as a single CPU process. Reads RANK/WORLD_SIZE
+    # from torchrun. See docs/PARALLELISM.md for launch recipes.
+    from synapforge.parallel import (
+        init_distributed,
+        is_main_rank,
+        optimize_cpu_threads,
+    )
+    thread_cfg = optimize_cpu_threads()
+    dist_info = init_distributed(backend="auto")
+    if is_main_rank():
+        log(
+            f"parallel: cpu_intra={thread_cfg.intra_op} mkldnn={thread_cfg.mkldnn_enabled} "
+            f"cuda={torch.cuda.is_available()} gpus={torch.cuda.device_count()}"
+        )
+        if dist_info is not None:
+            log(
+                f"distributed: rank={dist_info.rank}/{dist_info.world_size} "
+                f"backend={dist_info.backend} device={dist_info.device}"
+            )
+
     log(f"v4.2 Universal Trainer | warmstart={args.warmstart}")
 
     from transformers import AutoTokenizer, AutoModelForCausalLM
