@@ -1,5 +1,11 @@
 # SynapForge
 
+[![CI](https://github.com/Lihfdgjr/synapforge/actions/workflows/test.yml/badge.svg)](https://github.com/Lihfdgjr/synapforge/actions/workflows/test.yml)
+[![Last Commit](https://img.shields.io/github/last-commit/Lihfdgjr/synapforge)](https://github.com/Lihfdgjr/synapforge)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Lihfdgjr/synapforge/blob/master/pyproject.toml)
+[![License](https://img.shields.io/github/license/Lihfdgjr/synapforge)](https://github.com/Lihfdgjr/synapforge/blob/master/LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+
 **SynapForge** is the framework; **Synap-1** (突触一号) is the model trained with it
 — a 100M-parameter **LNN + SNN hybrid language model** — *not a transformer*.
 See [docs/NAMING.md](docs/NAMING.md) for the framework-vs-model split + the
