@@ -586,7 +586,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T6.2: paper §4 results: ckpt step-N val-X mmlu-Y`.
 
 ## T6.3 — README badges
-- [x] (01:56, pending-hash, 5 badges added, all return 200)
+- [x] (01:56, 7ba44f4, 5 badges added, all return 200)
 - **Steps**: add CI status badge, last-commit badge, version badge to `README.md` head.
 
 ## T6.4 — GitHub Issue auto-open per discovered bug
