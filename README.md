@@ -64,6 +64,7 @@ Three concrete questions we wanted to answer:
 | CPU pilot for inference-STDP monotonic-quality claim          | ✅ `scripts/cpu_pilot_inference_stdp.py` — validates paper hypothesis at 1K/2K/4K on a laptop, no GPU needed |
 | Multi-core / mixed-device / multi-node parallelism            | ✅ `synapforge/parallel.py` — 3-layer (CPU thread tune + CPU/GPU mixed placement + auto gloo/nccl DDP). Example: `examples/mixed_device_training.py`. See `docs/PARALLELISM.md`. |
 | Investor demo (NeuroMCP 4-button + R-fold bench)              | ✅ `python -m synapforge.demo.cli all` — runs in <2s on CPU, includes 30s pitch. CPU 4-button: density 5.7%→6.7%, K 9→10, hit_rate 100%. GPU bench: N=64 R=16 = **2.99×** (matches the agent's 2.7× prediction). |
+| Full-volume triple-path backup (mohuanfang + GitHub + HF)     | ✅ `scripts/triple_backup_daemon.py`, auto-spawned by trainer at startup (`--backup-interval 600`). After 2026-04-30 v4.1 disaster, every step's full out-dir is mirrored off-rental within 10 min. See `docs/BACKUP.md`. |
 
 ---
 

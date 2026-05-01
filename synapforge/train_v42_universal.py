@@ -125,6 +125,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stdp-ternary-coupled", action="store_true",
                    help="STDP delta couples to ternary weight transitions. PAPER-GRADE NOVELTY. NeurIPS 2026 angle")
     # Inference-time STDP (env var SYNAPFORGE_STDP_INFERENCE controls it)
+    # Full-volume backup daemon
+    p.add_argument("--backup-interval", type=int, default=600,
+                   help="seconds between full-volume rsync to mohuanfang+gh+hf (default 600)")
+    p.add_argument("--disable-backup-daemon", action="store_true",
+                   help="don't spawn the backup daemon (useful for debug runs)")
     return p.parse_args()
 
 
@@ -349,6 +354,39 @@ def main() -> None:
             )
 
     log(f"v4.2 Universal Trainer | warmstart={args.warmstart}")
+
+    # Full-volume backup daemon — spawned on rank 0 only.
+    # Per 2026-04-30 v4.1 disaster: every step worth keeping must be
+    # off-rental within 10 minutes. Runs in its own subprocess; killed
+    # when trainer exits via atexit. See docs/BACKUP.md.
+    backup_proc = None
+    if is_main_rank() and not args.disable_backup_daemon:
+        import atexit
+        import subprocess as _sp
+        backup_log = Path(args.out_dir) / "backup_daemon.log"
+        backup_script = Path(__file__).resolve().parent.parent / "scripts" / "triple_backup_daemon.py"
+        if backup_script.exists():
+            backup_proc = _sp.Popen(
+                [sys.executable, str(backup_script),
+                 "--watch", str(args.out_dir),
+                 "--interval", str(args.backup_interval),
+                 "--run-name", Path(args.out_dir).name],
+                stdout=open(backup_log, "a"), stderr=_sp.STDOUT,
+                start_new_session=True,
+            )
+            log(f"backup daemon spawned pid={backup_proc.pid} log={backup_log} "
+                f"interval={args.backup_interval}s")
+
+            def _kill_backup():
+                if backup_proc and backup_proc.poll() is None:
+                    backup_proc.terminate()
+                    try:
+                        backup_proc.wait(timeout=10)
+                    except _sp.TimeoutExpired:
+                        backup_proc.kill()
+            atexit.register(_kill_backup)
+        else:
+            log(f"WARN: backup script not found at {backup_script}")
 
     from transformers import AutoTokenizer, AutoModelForCausalLM
     from synapforge.model_chat_600m import SynapForgeChat600M
