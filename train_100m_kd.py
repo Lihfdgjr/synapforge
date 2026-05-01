@@ -226,6 +226,130 @@ def _format_spike_rates_per_layer(rates: list[float]) -> str:
     return "spike_rates_per_layer: " + " ".join(parts)
 
 
+def _compute_grad_norm_per_named_module(model) -> "list[tuple[str, float]]":
+    """T5.3 — compute total gradient L2 norm per top-level named child of ``model``.
+
+    Returns a list of ``(name, total_norm)`` pairs preserving the order in
+    which the children were registered. The norm for one module is
+
+        sqrt( sum_{p in module.parameters() if p.grad is not None} ||p.grad||^2 )
+
+    which is the same Frobenius-style aggregation that
+    ``torch.nn.utils.clip_grad_norm_`` uses internally. Modules whose
+    every parameter has ``p.grad is None`` (e.g. frozen submodules, the
+    untouched LM head when tied, any layer that hasn't seen a backward
+    yet) are SKIPPED entirely so we don't emit a meaningless ``0.0``
+    that might be confused with a dead-grad layer.
+
+    The "top-level children" rule is what makes this safe to call every
+    100 steps without flooding the log: we explicitly do NOT recurse via
+    ``named_modules()`` -- a 100M model has thousands of submodules, and
+    that volume of grad reduction every 100 steps would itself slow
+    training noticeably. ``named_children()`` returns only one level
+    (e.g. ``tok_embed``, ``ln_f``, ``lm_head``) PLUS one entry per
+    ``ModuleList``: SynapForge100M's ``blocks`` is a ``nn.ModuleList``
+    so its direct child appears as the single name ``blocks``. To match
+    the documented format ``... block_0=Y.YY ... block_9=Z.ZZ ...`` we
+    expand any ``ModuleList`` / ``ModuleDict`` child one level: each
+    entry becomes ``<list-name>_<idx>`` (or ``<dict-name>_<key>``). This
+    is the EXACT recursion stop -- no further drill-in.
+
+    Pure-Python aside from the ``p.grad.norm()`` call which is a single
+    fused CUDA reduction per parameter; total wall is sub-millisecond at
+    the 100M scale. CPU-fallback path (no CUDA) is the same code.
+
+    Args:
+        model: the model whose named_children we walk.
+
+    Returns:
+        Ordered list of ``(name, total_norm)`` pairs (one per surviving
+        top-level / one-level-expanded module). Empty list when the
+        model has no parameters with grads (e.g. before the first
+        backward, or all-frozen models).
+    """
+    import torch.nn as nn
+
+    pairs: list[tuple[str, float]] = []
+
+    def _module_total_norm(module) -> "float | None":
+        """Return sqrt(sum_p ||p.grad||^2) over a single module's params, or
+        None when *every* parameter's grad is None (skip-clean signal)."""
+        sq_sum = 0.0
+        any_grad = False
+        for p in module.parameters():
+            g = p.grad
+            if g is None:
+                continue
+            any_grad = True
+            # ``.norm()`` returns a 0-d tensor; ``.item()`` is the safe
+            # cross-device pull. ``** 2`` keeps it Python-side cheap; we
+            # accumulate doubles to avoid bf16-overflow drift on big
+            # FFN params.
+            n = float(g.norm().item())
+            sq_sum += n * n
+        if not any_grad:
+            return None
+        return sq_sum ** 0.5
+
+    for name, child in model.named_children():
+        # Expand ModuleList / ModuleDict by exactly one level so the
+        # documented ``block_0 ... block_9`` format works without
+        # uncontrolled recursion. Any deeper nesting (e.g. a
+        # ModuleList-of-ModuleLists) stops here -- the inner list's
+        # total norm is rolled into ``<outer>_<idx>``.
+        if isinstance(child, nn.ModuleList):
+            for idx, sub in enumerate(child):
+                norm = _module_total_norm(sub)
+                if norm is None:
+                    continue
+                pairs.append((f"{name}_{idx}", norm))
+        elif isinstance(child, nn.ModuleDict):
+            for key, sub in child.items():
+                norm = _module_total_norm(sub)
+                if norm is None:
+                    continue
+                pairs.append((f"{name}_{key}", norm))
+        else:
+            norm = _module_total_norm(child)
+            if norm is None:
+                continue
+            pairs.append((name, norm))
+    return pairs
+
+
+def _format_grad_norm_per_module(pairs: "list[tuple[str, float]]") -> str:
+    """T5.3 — render the per-named-module grad-norm log line.
+
+    Returns a string of the form
+
+        grad_norm: tok_embed=X.XXXe+YY blocks_0=... ... ln_f=W.WWWe+ZZ
+
+    where ``pairs`` is the list of ``(name, total_norm)`` produced by
+    :func:`_compute_grad_norm_per_named_module`. Each value is rendered
+    in scientific notation (``.3e``) because gradient norms span orders
+    of magnitude across modules and across training (early ``lm_head``
+    grads dwarf early ``tok_embed`` grads by 10x+; later in training
+    they cross). Linear ``.3f`` would lose precision on the small end.
+
+    Pure function -- no torch, no IO -- so it is unit-testable on CPU.
+
+    Args:
+        pairs: ordered list of ``(name, total_norm)`` pairs. May be
+               empty, in which case the helper returns the prefix label
+               only with no entries (``"grad_norm:"``). Names with NaN
+               or inf norms are still rendered (``.3e`` formats them
+               as ``"nan"`` / ``"inf"``) -- the caller should NOT
+               pre-filter these so divergence shows up in the log.
+
+    Returns:
+        Single-line log string (no trailing newline).
+    """
+    if not pairs:
+        return "grad_norm:"
+    parts = [f"{name}={float(norm):.3e}" for name, norm in pairs]
+    return "grad_norm: " + " ".join(parts)
+
+
 def _update_best_ckpt(
     *,
     out_dir: str,
@@ -433,6 +557,32 @@ def _parse_args() -> argparse.Namespace:
                         "immediately after the aggregated ``spike:`` line, "
                         "at the same cadence. Useful for detecting which "
                         "individual PLIF layer is dead. Default OFF.")
+    # T5.3 (DEEP_MAINT_QUEUE.md) — Run 3l/3m diverged at step 14000+ but
+    # the existing aggregated ``loss=... ce=... kd=...`` line couldn't
+    # show WHICH submodule's grad blew up first. Behind this opt-in
+    # flag, every 100 steps -- AFTER backward / clip_grad_norm_ but
+    # BEFORE optim.step() so we capture the gradients about to be
+    # applied -- emit one extra line:
+    #     grad_norm: tok_embed=X.XXXe+YY blocks_0=... ... ln_f=W.WWWe+ZZ
+    # Top-level named_children only (PLUS a one-level ModuleList/Dict
+    # expansion for ``blocks``) so the line is bounded; values in
+    # scientific notation since grad norms span orders of magnitude.
+    # Default OFF so the cadence-100 cost (one ``norm().item()`` per
+    # parameter) only fires when the user is actually root-causing a
+    # diverge.
+    p.add_argument("--log-grad-norm", action="store_true", default=False,
+                   dest="log_grad_norm",
+                   help="emit a ``grad_norm: <module>=<.3e> ...`` log line "
+                        "every 100 steps after backward + clip but before "
+                        "optim.step() to detect per-module gradient "
+                        "imbalance (T5.3, DEEP_MAINT_QUEUE.md). Top-level "
+                        "named_children of the model are reported, with a "
+                        "one-level expansion of any ``nn.ModuleList`` (so "
+                        "SynapForge100M's ``blocks`` produces ``blocks_0`` "
+                        "... ``blocks_9`` rather than a single rolled-up "
+                        "``blocks=``). Modules whose every param has "
+                        "``p.grad is None`` are skipped cleanly. Default "
+                        "OFF; opt-in for divergence root-cause work.")
     # T5.4 (DEEP_MAINT_QUEUE.md) — track best val_ppl_holdout across the
     # run and maintain a ``best_step_*.pt`` symlink (Linux) or copy
     # (Windows) so warmstart resilience does not depend on remembering
@@ -1684,6 +1834,21 @@ def main() -> int:
                 [p for p in model.parameters() if p.requires_grad],
                 max_norm=GRAD_CLIP,
             )
+
+        # T5.3 (DEEP_MAINT_QUEUE.md) — per-named-module grad-norm log.
+        # Emitted AFTER clip_grad_norm_ (so the rendered numbers are the
+        # actually-applied post-clip grads) and BEFORE optim.step() (so
+        # ``p.grad`` still references the live gradient about to update
+        # the parameters; ``optim.step()`` does NOT zero grads but it
+        # does mutate ``p.data``, which is irrelevant here since we only
+        # read ``p.grad``). Cadence 100 steps so the per-parameter
+        # ``norm().item()`` reduction does not cost real wall time on
+        # the hot loop. Behind ``--log-grad-norm`` (default OFF) so
+        # production launches see no schema change unless they ask.
+        if args.log_grad_norm and step % 100 == 0:
+            _grad_pairs = _compute_grad_norm_per_named_module(model)
+            _log("  " + _format_grad_norm_per_module(_grad_pairs))
+
         optim.step()
 
         if DEVICE == "cuda":
