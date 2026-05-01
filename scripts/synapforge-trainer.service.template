@@ -1,0 +1,73 @@
+# synapforge-trainer.service.template
+#
+# Reference systemd unit for SynapForge trainers with auto-restart-on-crash.
+# `systemd-run --user --unit=X` (used by scripts/launch_train_systemd.sh) gives
+# you a transient unit with status/stop/journal but NO auto-restart. For
+# overnight or unattended runs, install this template instead.
+#
+# ## How to use
+#
+# 1. Copy into the user's systemd config directory and rename to a template:
+#
+#      mkdir -p ~/.config/systemd/user
+#      cp scripts/synapforge-trainer.service.template \
+#         ~/.config/systemd/user/synapforge-trainer@.service
+#      systemctl --user daemon-reload
+#
+# 2. (One-time per run) drop an instance args file. The %i placeholder below
+#    is the instance suffix (the part between `@` and `.service`), so an
+#    instance named `synapforge-trainer@v24h_qwen3.service` reads its CLI
+#    overrides from `~/.config/synapforge-trainer/v24h_qwen3.env`:
+#
+#      mkdir -p ~/.config/synapforge-trainer
+#      cat > ~/.config/synapforge-trainer/v24h_qwen3.env <<'EOF'
+#      TRAINER_ARGS=--warmstart /workspace/runs/v24h_qwen/step_002250_plif_reinit.pt --teacher Qwen/Qwen2.5-0.5B --backend triton_block --batch-size 64 --kd-every 4 --steps 30000 --out /workspace/runs/v24h_qwen3 --phase-aware
+#      EOF
+#
+# 3. Enable + start (the `enable` survives reboots; `--now` starts immediately):
+#
+#      systemctl --user enable --now synapforge-trainer@v24h_qwen3.service
+#
+# 4. Inspect:
+#
+#      systemctl --user status synapforge-trainer@v24h_qwen3.service
+#      journalctl --user -u synapforge-trainer@v24h_qwen3.service -f
+#
+# 5. Stop (ignores Restart=on-failure because this is a clean stop):
+#
+#      systemctl --user stop synapforge-trainer@v24h_qwen3.service
+#      systemctl --user disable synapforge-trainer@v24h_qwen3.service
+#
+# Notes:
+#   - User systemd needs `loginctl enable-linger $USER` once if you want the
+#     unit to keep running after the SSH session ends without an active user.
+#   - On rentals where user systemd is not available, fall back to
+#     `scripts/launch_train_systemd.sh` (setsid+disown branch) — auto-restart
+#     is sacrificed but session-survival is preserved.
+
+[Unit]
+Description=SynapForge Trainer (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/workspace/synapforge_git
+EnvironmentFile=-%h/.config/synapforge-trainer/%i.env
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+Environment=OMP_NUM_THREADS=8
+Environment=TOKENIZERS_PARALLELISM=false
+ExecStart=/usr/bin/env python3 -u train_100m_kd.py $TRAINER_ARGS
+Restart=on-failure
+RestartSec=30
+# Don't loop forever if the trainer is fundamentally broken: 5 failures in
+# 600s and systemd gives up. Reset with `systemctl --user reset-failed`.
+StartLimitBurst=5
+StartLimitIntervalSec=600
+StandardOutput=append:/workspace/runs/%i/train.log
+StandardError=append:/workspace/runs/%i/train.log
+KillSignal=SIGINT
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

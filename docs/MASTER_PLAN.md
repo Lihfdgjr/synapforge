@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 3: + P3 RESOLVED -- TTT val_holdout split for honest reporting)
+**Updated**: 2026-05-01 (revision 4: + P8 RESOLVED -- systemd-run watchdog launcher + auto-restart unit + RENTAL_OPS.md)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -222,12 +222,37 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Risk**: claim "AI uses neurons to drive computer" is currently a code path, not a demo.
 - **Action**: 30-min sandbox session post-phase-3 with adversarial input filter active.
 
-### P8. MCP shell + bg job interaction on rental
+### P8. MCP shell + bg job interaction on rental — RESOLVED 2026-05-01
 - **Symptom**: MCP `proc_exec` kills nohup'd children. Repeated session expirations.
-- **Mitigation**: push commands FROM mohuanfang side (real Linux shell), or use
-  `systemd-run --user --unit=X` (logs in `feedback_mcp_shell_kills_bg_jobs.md`).
-- **Open**: should we add a watchdog that restarts the trainer if it dies during MCP
-  reconnect?
+  Prior workaround (`setsid bash -c '... < /dev/null' </dev/null & disown`) survives
+  SSH/MCP exit but lacks (a) auto-restart on crash, (b) clean kill via systemctl,
+  (c) status check via systemctl.
+- **Fix applied**: 3-file watchdog suite landed 2026-05-01.
+  1. `scripts/launch_train_systemd.sh` (NEW, ~140 LOC bash, `bash -n` clean) —
+     wrapper that prefers `systemd-run --user --unit=$NAME` (transient unit with
+     `systemctl status/stop` + `journalctl -f`) and falls back to
+     `setsid+disown` with a stderr WARNING when user-systemd is unavailable.
+     CLI: `--name UNIT --warmstart PATH --out DIR [--steps N] -- <trainer flags>`.
+     Sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=8
+     TOKENIZERS_PARALLELISM=false` in both branches. Prints PID, log path, and
+     the four management commands (status/follow/stop/install-template) for the
+     chosen branch.
+  2. `scripts/synapforge-trainer.service.template` (NEW, ~70 LOC) — reference
+     systemd template unit with `Restart=on-failure RestartSec=30
+     StartLimitBurst=5 StartLimitIntervalSec=600`. Reads per-instance
+     `TRAINER_ARGS` from `~/.config/synapforge-trainer/%i.env`. Comment block at
+     top has full install instructions: copy → `daemon-reload` → drop env file →
+     `systemctl --user enable --now synapforge-trainer@v24h_qwen3.service`.
+  3. `docs/RENTAL_OPS.md` (NEW, ~150 LOC) — runbook covering when to use
+     setsid+disown / systemd-run / template-unit, with a 3-row decision table,
+     daily inspection commands (`list-units` / `status` / `journalctl -f` /
+     `journalctl -p err`), and cleanup commands (`stop` / `disable` /
+     `reset-failed` / `vacuum-time`). Memory cross-refs to
+     `feedback_mcp_remote_ssh_quirks.md` + `feedback_mcp_nohup_hangs_use_systemd_run.md`
+     + `feedback_no_polling_loops_even_bg.md`.
+- **Verification**: `bash -n scripts/launch_train_systemd.sh` returns 0. Not yet
+  exercised on rental (intentional — this commit is repo-side only; rental
+  rollout happens at next training restart).
 
 ### P9. Investor demo claim parity (data sources) — smoke test ready, runs in CI ≤5min
 - **Status**: 4 download scripts written (pretrain/sft/multimodal/eval) but not yet
