@@ -39,7 +39,8 @@ Warmstart: `/workspace/runs/v24h_qwen/step_002250_plif_reinit_NOOPT.pt`
 | Run 3a   | May 1 AM  | DIVERGED      | warmstarted with stale Adam momentum -> loss exploded ~step 50       | Strip `optim_state` from legacy ckpts; fresh optimizer on warmstart    |
 | Run 3b   | May 1     | PLATEAU       | val ppl 397-421 for 8h on phase 0                                    | train↔val drift unfixed; need TTT replay to break plateau               |
 | Run 3l   | May 1-2   | DIVERGED      | step 4000=569, step 5000=**1864**, step 5500=**2522** Run-3c-class    | killed 00:55; merged T2.4-T2.7 not in live; LR 1e-4 + warmup 100 too hot |
-| Run 3m | May 2 01:10 -> 02:39 | DIVERGING (2nd) | VAL step3000=16031 → step13500=**4406** (best) → step14000=5480 → step14500=**6623** (+21%/500steps); plateau→divergence at step 14000. Likely: cosine LR decay too low (3e-5) for current loss landscape OR data ordering recurrence | DECISION at step 15000: if val > 7000, kill + relaunch with LR 2e-5 + warm restart from step_013500.pt |
+| Run 3m | May 2 01:10 -> 02:43 | DIVERGED+KILLED | VAL step13500=**4406** (best) → step14000=5480 → step14500=6623 → step15000=**25965** (4× catastrophic). Killed PID 26272 02:43. |
+| **Run 3n** | **May 2 02:44 -> now** | **STARTED** | warmstart step_014250.pt (val~4500 region), LR 2e-5 (was 5e-5), warmup 200 (was 500), shuffle-seed 711 (was 411), kd-every 8, T2.5+T2.6 retained | step 50 ce=8.61 (vs Run 3m step 1 ce=11.93 — warmstart keeps backbone, NO spectral-norm-reset cost). Throughput 33k tok/s ramping |
 
 Run 3a -> Run 3b cutover took <30 min. Optim-state strip is now standard
 warmstart hygiene; see [RENTAL_RECOVERY](RENTAL_RECOVERY.md).
