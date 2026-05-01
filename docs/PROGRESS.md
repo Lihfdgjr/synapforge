@@ -206,3 +206,9 @@ Cross-links: [MASTER_PLAN](MASTER_PLAN.md), [INVESTOR](INVESTOR.md),
 ---
 
 _Last refreshed: 2026-05-01 by SynapForge agent. Refresh: bump table §2 + add §3 row + update §4 progress bar._
+
+## Cron fire 2026-05-01 23:34
+
+- H1-H3: trainer alive PID 24075 (Run 3l), GPU 95% / 70.5GB. Disk 30%. Mohuanfang count 2 vs rental 3 (drift 1, OK).
+- Run 3l: step 210 ce=5.71 (KD off), 22k tok/s, healthy. VAL eval at step 500 pending.
+- Tasks advanced: T1.4 (STDP density 0→59.8%), T1.6 (R-fold A800 N64R16 2.28×), T2.1 (5 papers via agent ad6e959).

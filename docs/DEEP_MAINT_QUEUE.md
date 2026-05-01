@@ -141,7 +141,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T1.3: adversarial probe step-N (P/F per prompt)`.
 
 ## T1.4 — STDP inference-time real demo
-- [ ] **Status**: pending
+- [x] (23:34, run3l-cron, 1000-trial: density 0%→59.8%, mean|W| 0→0.141, 1.12s — exceeds 27% baseline)
+- ~~**Status**: pending~~
 - **Goal**: verify our headline claim — Hebbian forward-only weights update at inference, density 0% → 27% in 200 trials.
 - **Trigger**: any time, doesn't need ckpt.
 - **Cmd**: `synapforge-demo stdp --trials 1000 --hidden 256 --batch 64 --seed 11`
@@ -161,7 +162,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T1.5: NeuroMCP 6000-trial K=N density=D% hit=H%`.
 
 ## T1.6 — R-fold real GPU bench on rental A800
-- [ ] **Status**: pending
+- [x] (23:34, run3l-cron, A800: R=1 rel_err 1.24e-6, R=8 rel_err 1.64e-3, N64R16 speedup 2.28× — matches 2.99× claim within 25%)
+- ~~**Status**: pending~~
 - **Goal**: measure actual A800 R-fold speedup vs sequential. Recorded peak 2.99× at N=64 R=16.
 - **Cmd**: `ssh ... 'cd /workspace/synapforge_git && python3 -m synapforge.demo.rfold_bench'`
 - **Validation**: at N=64 R=16, speedup > 2.0× (target 2.99× ± 30%). At N=512 R=4 should be ≤ 1.0× (it's the sweet-spot region claim).
@@ -207,7 +209,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 # Tier 2 — Architecture research + ship (each Agent-spawn)
 
 ## T2.1 — ArXiv scan
-- [ ] **Status**: pending
+- [x] (23:34, ad6e959, 5 papers: matmul-free FPGA / NORACL neurogenesis / FADE weight decay / EdgeSpike / NeuroRing — see docs/ARCHIVE_NEW_PAPERS.md)
+- ~~**Status**: pending~~
 - **Goal**: stay current with ternary / matmul-free / spiking / liquid / STDP / SNN-LM literature.
 - **Steps** (Agent: general-purpose):
   1. `WebFetch https://arxiv.org/list/cs.LG/recent` (filter last 7 days)
