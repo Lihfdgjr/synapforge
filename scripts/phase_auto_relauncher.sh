@@ -133,6 +133,33 @@ do_relaunch() {
     new_argv=$(build_new_argv "$pid" "$stripped" "$new_flags") || { log "no /proc/$pid/cmdline; abort"; return 1; }
     log "relaunch: pid=$pid old=$old_phase new=$new_phase ckpt=$stripped flags=$new_flags"
     log "  argv=$new_argv"
+
+    # T6.5: append a phase-transition entry to CHANGELOG.md BEFORE killing
+    # the old trainer. If the helper or python is missing, log + continue;
+    # the relaunch itself must not depend on the changelog write succeeding.
+    # Set PAR_SKIP_CHANGELOG=1 to disable (used by the dry-run test suite
+    # so we don't spam the repo's real CHANGELOG).
+    if [[ "${PAR_SKIP_CHANGELOG:-0}" != "1" ]]; then
+        local helper="$REPO_DIR/scripts/changelog_helper.py" cl_step cl_val
+        if [[ -f "$helper" ]] && command -v python3 >/dev/null 2>&1; then
+            cl_step=$(echo "$stripped" | grep -oE 'step_[0-9]+' | grep -oE '[0-9]+' | head -1)
+            cl_val=$(grep -oE 'val_ppl_holdout=[0-9.]+' "$RUN_DIR/train.log" 2>/dev/null \
+                | tail -1 | cut -d= -f2)
+            python3 "$helper" \
+                --phase-id "$new_phase" \
+                ${cl_val:+--val-ppl "$cl_val"} \
+                ${cl_step:+--step "$cl_step"} \
+                --ckpt-path "$stripped" \
+                --flags "$new_flags" \
+                --changelog "$REPO_DIR/CHANGELOG.md" \
+                >>"$RESTART_LOG" 2>&1 \
+                && log "  changelog appended: phase=$new_phase step=${cl_step:-?} val=${cl_val:-?}" \
+                || log "  changelog append failed (non-fatal); continuing relaunch"
+        else
+            log "  changelog helper not found or python3 missing; skipping append"
+        fi
+    fi
+
     if [[ "$DRY_RUN" == "1" ]]; then
         log "DRY_RUN=1; not killing or spawning"; LAST_RESTART_TS=$now; return 0
     fi

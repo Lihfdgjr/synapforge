@@ -100,6 +100,8 @@ def _run_relauncher(run_dir: Path, env_overrides: dict[str, str]) -> subprocess.
         "PAR_TEST_MODE": "1",
         "PAR_THRASH_SEC": "0",
         "PAR_SKIP_STRIP": "1",
+        # T6.5: keep the real CHANGELOG.md untouched in dry-run tests.
+        "PAR_SKIP_CHANGELOG": "1",
         "PAR_REPO_DIR": _bash_path(run_dir),
     })
     env.update(env_overrides)
