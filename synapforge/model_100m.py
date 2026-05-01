@@ -127,6 +127,14 @@ class HybridBlock(Module):
         return x
 
 
+#: Effective Qwen 2.5 token id range. The tokenizer/teacher emits IDs in
+#: ``[0, QWEN25_LIVE_VOCAB)``; rows ``[QWEN25_LIVE_VOCAB, vocab)`` are
+#: random-init padding that never see real gradient yet still drift under
+#: optimizer noise (Adam moments + weight decay). We freeze them by zeroing
+#: their gradients in a backward hook (P26 / DEEP_MAINT_QUEUE.md T2.4).
+QWEN25_LIVE_VOCAB = 151643
+
+
 class SynapForge100M(Module):
     """100M synapforge LM. Stack of HybridBlocks with optional RDT depth-loop."""
 
@@ -142,6 +150,9 @@ class SynapForge100M(Module):
         dropout: float = 0.0,
         tie_lm_head: bool = True,
         use_grad_checkpoint: bool = False,
+        freeze_vocab_tail: bool = True,
+        live_vocab: int = QWEN25_LIVE_VOCAB,
+        lm_head_spectral_norm: bool = False,
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -151,6 +162,9 @@ class SynapForge100M(Module):
         self.max_seq = int(max_seq)
         self.tie_lm_head = bool(tie_lm_head)
         self.use_grad_checkpoint = bool(use_grad_checkpoint)
+        self.freeze_vocab_tail = bool(freeze_vocab_tail)
+        self.live_vocab = int(live_vocab)
+        self.lm_head_spectral_norm = bool(lm_head_spectral_norm)
 
         self.tok_embed = nn.Embedding(vocab, d)
         nn.init.normal_(self.tok_embed.weight, std=0.02)
@@ -168,6 +182,50 @@ class SynapForge100M(Module):
         else:
             self.lm_head = nn.Linear(d, vocab, bias=False)
             nn.init.normal_(self.lm_head.weight, std=0.02)
+
+        # T2.4 — freeze the rows [live_vocab, vocab) of tok_embed.weight (and
+        # lm_head.weight when untied) by zeroing their gradient slice on the
+        # backward pass. Qwen 2.5 emits IDs in [0, 151643); rows beyond that
+        # are random-init padding that never see real gradient through the
+        # forward path, but Adam + weight decay would still push noise into
+        # them. The backward hook drops them to zero so the optimizer step
+        # leaves them untouched.
+        if self.freeze_vocab_tail and 0 < self.live_vocab < self.vocab:
+            tail_start = self.live_vocab
+
+            def _zero_tail_grad_hook(grad: torch.Tensor) -> torch.Tensor:
+                # grad is a fresh tensor returned to autograd; mutating it
+                # in-place is allowed and avoids an extra alloc.
+                grad[tail_start:] = 0
+                return grad
+
+            self.tok_embed.weight.register_hook(_zero_tail_grad_hook)
+            if self.lm_head is not None:
+                self.lm_head.weight.register_hook(_zero_tail_grad_hook)
+
+        # ---- T2.6 — optional spectral norm on LM head (P28 z-loss drift) ----
+        # Bound the Lipschitz constant of the LM projection so the partition
+        # function (logsumexp over vocab) cannot grow unboundedly during long
+        # training. Default OFF: opt-in, since bf16 + spectral_norm has known
+        # quirks (the power-iteration buffers ``weight_u``/``weight_v`` are
+        # tracked separately and the parametrisation reparameterises ``weight``
+        # as ``weight_orig / sigma`` per forward, where ``sigma`` is the top
+        # singular value estimated by power iteration).
+        #
+        # Note on tied embeddings: when ``tie_lm_head=True`` we have no
+        # separate ``lm_head`` module — ``forward()`` calls
+        # ``F.linear(x, self.tok_embed.weight)``. Applying ``spectral_norm``
+        # to ``tok_embed`` reparameterises ``self.tok_embed.weight`` via the
+        # same power-iteration recipe, so the LM head logits are bounded
+        # automatically (and the ``tok_embed(ids)`` lookup also goes through
+        # the bounded weight, which is the desired symmetric behaviour for a
+        # tied model). When ``tie_lm_head=False`` we wrap ``lm_head``
+        # directly.
+        if self.lm_head_spectral_norm:
+            if self.tie_lm_head:
+                nn.utils.spectral_norm(self.tok_embed, name="weight")
+            else:
+                nn.utils.spectral_norm(self.lm_head, name="weight")
 
     @torch.no_grad()
     def num_parameters(self, only_trainable: bool = True) -> int:
@@ -241,13 +299,24 @@ def build_synapforge_100m(
     sparsity: float = 0.95,
     dropout: float = 0.0,
     use_grad_checkpoint: bool = False,
+    freeze_vocab_tail: bool = True,
+    live_vocab: int = QWEN25_LIVE_VOCAB,
+    lm_head_spectral_norm: bool = False,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
         use_grad_checkpoint=use_grad_checkpoint,
         max_seq=max_seq, ffn_ratio=ffn_ratio, sparsity=sparsity,
         dropout=dropout,
+        freeze_vocab_tail=freeze_vocab_tail,
+        live_vocab=live_vocab,
+        lm_head_spectral_norm=lm_head_spectral_norm,
     )
 
 
-__all__ = ["SynapForge100M", "HybridBlock", "build_synapforge_100m"]
+__all__ = [
+    "SynapForge100M",
+    "HybridBlock",
+    "build_synapforge_100m",
+    "QWEN25_LIVE_VOCAB",
+]

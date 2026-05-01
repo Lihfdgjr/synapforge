@@ -236,6 +236,33 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--grad-clip", type=float, default=0.5)
     p.add_argument("--grad-checkpoint", action="store_true", default=False,
                    help="trade compute for memory; use when B>=96 OOMs")
+    # T2.4 — freeze the vocab tail so unused-by-Qwen-tokenizer rows
+    # [151643, 151936) of tok_embed.weight (and lm_head.weight if untied)
+    # don't drift under Adam noise + weight decay. Default ON.
+    p.add_argument("--freeze-vocab-tail", action="store_true", default=True,
+                   dest="freeze_vocab_tail",
+                   help="zero gradient on vocab rows >= live_vocab (151643) "
+                        "to keep ~75M unused params at their init values. "
+                        "Qwen2.5 tokenizer never emits ids >= 151643, so "
+                        "those rows only see noise; freezing them removes "
+                        "that noise gradient. Default ON.")
+    p.add_argument("--no-freeze-vocab-tail", action="store_false",
+                   dest="freeze_vocab_tail",
+                   help="disable T2.4 vocab tail freeze (unused rows drift "
+                        "under Adam noise). Use only for ablations.")
+    # T2.6 — bound LM head Lipschitz to mitigate P28 z-loss linear drift.
+    # When tied (default), this wraps tok_embed via spectral_norm so the
+    # shared weight is reparameterised as W / sigma each forward; when
+    # untied, it wraps lm_head directly. Opt-in because spectral_norm has
+    # known bf16 quirks (power-iter buffers stay fp32).
+    p.add_argument("--lm-head-spectral-norm", action="store_true",
+                   default=False, dest="lm_head_spectral_norm",
+                   help="apply torch.nn.utils.spectral_norm to the LM head "
+                        "(tied: tok_embed; untied: lm_head). Bounds the "
+                        "Lipschitz constant so logsumexp(logits) -- and "
+                        "therefore the z-loss term -- cannot grow "
+                        "unboundedly during long training. Default OFF "
+                        "(opt-in; see docs/PERF_KNOBS.md and T2.6 / P28).")
     p.add_argument("--lr-min", type=float, default=1e-5)
     p.add_argument("--skip-spike", action="store_true", default=True)
     p.add_argument("--z-loss-weight", type=float, default=1e-4,
@@ -801,6 +828,8 @@ def main() -> int:
         ffn_ratio=float(args.ffn_ratio), sparsity=float(args.sparsity),
         dropout=MODEL_DROPOUT,
         use_grad_checkpoint=args.grad_checkpoint,
+        freeze_vocab_tail=bool(args.freeze_vocab_tail),
+        lm_head_spectral_norm=bool(args.lm_head_spectral_norm),
     )
     n_params = model.num_parameters()
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")

@@ -243,7 +243,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.3: surrogate annealing 10->1 over N steps + test`.
 
 ## T2.4 — Frozen vocab tail mask
-- [ ] **Status**: pending (addresses P26)
+- [x] (23:46, ab86e26, freeze rows 151643-151935 via backward hook + CLI + 4 tests pass)
+- ~~**Status**: pending (addresses P26)~~
 - **Goal**: rows 151643-151935 of `tok_embed.weight` + `lm_head.weight` are random init from Qwen 2.5 padding; never see real gradient since Qwen tokenizer doesn't emit those IDs.
 - **Steps** (Agent: general-purpose):
   1. In `model_100m.py::SynapForge100M.__init__`, mask the tail rows: `self.tok_embed.weight[151643:].requires_grad = False` (or set grad_hook to zero them post-step)
