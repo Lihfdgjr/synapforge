@@ -37,7 +37,9 @@ Warmstart: `/workspace/runs/v24h_qwen/step_002250_plif_reinit_NOOPT.pt`
 | Run 1    | Apr       | DIVERGED      | val ppl ramped, no PLIF homeostasis -> spikes saturated then died    | Need EMA threshold control on PLIF (P1 / `f051257`)                     |
 | Run 2    | -> May 1  | DISK-FULL     | 35 ckpts (58 GB) on rental 100 GB disk, trainer crashed on save      | Cap retention; offload to mohuanfang. Recovery: `2d8bb24`              |
 | Run 3a   | May 1 AM  | DIVERGED      | warmstarted with stale Adam momentum -> loss exploded ~step 50       | Strip `optim_state` from legacy ckpts; fresh optimizer on warmstart    |
-| **Run 3b** | **May 1 -> now** | **HEALTHY** | NOOPT ckpt warmstart, fresh Adam, kd-every=4, z-loss falling  | Current run; phase 1 trigger 30% reached                                |
+| Run 3b   | May 1     | PLATEAU       | val ppl 397-421 for 8h on phase 0                                    | train↔val drift unfixed; need TTT replay to break plateau               |
+| Run 3l   | May 1-2   | DIVERGED      | step 4000=569, step 5000=**1864**, step 5500=**2522** Run-3c-class    | killed 00:55; merged T2.4-T2.7 not in live; LR 1e-4 + warmup 100 too hot |
+| **Run 3m** | **May 2 01:10 -> now** | **STARTED** | warmstart step_002000.pt (last known-good), LR 5e-5, warmup 500, kd-every 8, T2.5 spike-target weight=0.05, T2.6 lm-head spectral norm enabled, P30 indent fix applied | initial CE 11.9 (lm-head re-init via spectral_norm); recovery expected by step 1500-2000 |
 
 Run 3a -> Run 3b cutover took <30 min. Optim-state strip is now standard
 warmstart hygiene; see [RENTAL_RECOVERY](RENTAL_RECOVERY.md).
@@ -130,12 +132,14 @@ Today's main-branch landings, oldest -> newest:
 
 | Risk                                | Severity | Note                                                                         |
 |-------------------------------------|----------|------------------------------------------------------------------------------|
-| PLIF still dead (spike 0/10)        | HIGH     | auto-revive engaged at step 1000+ but slow; if step 4000 still dead, trigger manual revive |
+| Run 3l divergence (step5500=2522)   | RESOLVED | killed 00:55; Run 3m relaunched with patch stack (LR5e-5, warmup500, kd-every8) |
+| P30 indent regression in T2.7 merge | RESOLVED | `5e5debe` (local) + Python heredoc patch on rental (network outage to GH)   |
+| LM-head re-init from spectral norm  | MED      | Run 3m step 1 ce=11.9 vs warmstart's ce~6.0; recovery expected ~step 1500-2000 |
+| PLIF still dead (spike 0/10)        | HIGH     | T2.5 spike-target loss now in live process (stl=0.025); homeostasis @ thr 0.0500 |
+| Rental → github.com network outage  | HIGH     | GnuTLS recv error / connection timeout on port 443; patches applied via SSH heredoc |
 | Backup is single-path (mohuanfang)  | HIGH     | GH Release / HF Hub unconfigured; one provider failure = data loss           |
-| Rental git pull -> github.com 130 s | MED      | network flakiness; cache wheels + use `--depth=1`; consider `gh-proxy`        |
-| Run 3b uses fresh Adam              | LOW      | momentum re-warmup cost ~200-500 steps; expected, currently absorbing       |
-| Trainer PID 16697 not under systemd | MED      | watchdog template ready (`e60681a`) but not yet wrapped around live PID      |
-| Disk 28% post-cleanup               | LOW      | room for ~50 ckpts before cap; daemon offload pace covers it                 |
+| Trainer PID 26272 not under systemd | MED      | watchdog template ready (`e60681a`) but not yet wrapped around live PID      |
+| Disk 30% post-cleanup               | LOW      | room for ~50 ckpts before cap; daemon offload pace covers it                 |
 
 ---
 
