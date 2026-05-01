@@ -652,7 +652,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: read MASTER_PLAN §6, find first non-RESOLVED P#, take 30-min stab.
 
 ## T7.4 — Test coverage report
-- [ ] **Status**: pending
+- [x] (02:09, f668332, overall 18.4% (filtered 22.0%), weakest 3 modules: distributed_hetero/continual_daemon/triton_block_kernel — all 0%, see docs/COVERAGE.md)
 - **Cmd**: `pytest --cov=synapforge --cov-report=html`
 - **Output**: `htmlcov/`, summarize missing modules in `docs/COVERAGE.md`.
 
