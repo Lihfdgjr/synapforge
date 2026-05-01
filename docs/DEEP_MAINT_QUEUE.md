@@ -345,7 +345,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.9: coconut latent k=8 forward smoke pass`.
 
 ## T2.10 — MoE chain-of-experts (adv28 #1)
-- [ ] **Status**: completed in adv28 but unverified live in main trainer
+- [x] (01:38, pending-hash, status: ORPHAN, evidence: synapforge/routers/coe.py:51,213 defines+factory but train_100m_kd.py + synapforge/model_100m.py have 0 router/expert/coe/moe matches; smoke `build_synapforge_100m(d=128,n_layers=2,vocab=512)` returns `[]` for expert/moe/coe/router modules. See docs/MOE_AUDIT.md. Deferred to phase 1.)
 - **Goal**: confirm CoE routing live in `train_100m_kd.py`, not orphan.
 - **Steps**: grep `CoE` / `chain.of.experts` / `top_k_routing` in main trainer; if absent, mark deferred to phase 1.
 - **Commit**: `auto-T2.10: CoE audit, status: live/orphan/deferred`.
