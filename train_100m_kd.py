@@ -152,6 +152,7 @@ def _format_loss_pct(
     step_kd: float,
     step_z: float,
     z_loss_weight: float,
+    kd_weight: float = 0.0,
     step_modal_aux: float = 0.0,
     has_modal: bool = False,
     step_cur_aux: float = 0.0,
@@ -183,9 +184,15 @@ def _format_loss_pct(
     Pure function -- no torch, no IO -- so it is unit-testable on CPU.
     """
     denom = max(float(step_loss), 1e-9)
-    pct_ce = float(step_ce) / denom * 100.0
-    pct_kd = float(step_kd) / denom * 100.0
-    pct_z = float(step_z) * float(z_loss_weight) / denom * 100.0
+    # Trainer applies (1-α)·base + α·kd on KD-on steps where base = ce + z·zw.
+    # On KD-off steps loss = ce + z·zw (kd_weight effectively 0 because step_kd=0).
+    # base_w = (1-α) on KD-on steps; on KD-off steps step_kd=0 so reweighting
+    # to (1-α) would wrongly halve ce — so detect KD activity from step_kd.
+    base_w = float(1.0 - kd_weight) if float(step_kd) > 0 else 1.0
+    kd_w = float(kd_weight)
+    pct_ce = base_w * float(step_ce) / denom * 100.0
+    pct_kd = kd_w * float(step_kd) / denom * 100.0
+    pct_z = base_w * float(step_z) * float(z_loss_weight) / denom * 100.0
     out = f" pct_ce={pct_ce:.1f} pct_kd={pct_kd:.1f} pct_z={pct_z:.1f}"
     if has_modal:
         pct_modal = float(step_modal_aux) / denom * 100.0
@@ -1921,6 +1928,7 @@ def main() -> int:
                     step_kd=_step_kd,
                     step_z=_step_z,
                     z_loss_weight=args.z_loss_weight,
+                    kd_weight=args.kd_weight,
                     step_modal_aux=_step_modal_aux,
                     has_modal=modal_mixin is not None,
                     step_cur_aux=_step_cur_aux,
