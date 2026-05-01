@@ -127,7 +127,12 @@ class SelfGoalProposer:
         return counts
 
     def propose(self, n: int = 6) -> List[tuple[str, str]]:
-        """Pick N topics where coverage is lowest, weighted by category balance."""
+        """Pick N topics where coverage is lowest, weighted by category balance.
+
+        Falls back to coverage heuristic when curiosity_scorer is None.
+        When connected to a CuriosityScorer (via .set_curiosity_scorer), uses
+        the full FE+STDP+HNSW+spike+novelty-noise formula instead.
+        """
         counts = self._topic_counts()
         scored: List[tuple[float, str, str]] = []
         for cat, topic in ALL_TOPICS:
@@ -136,6 +141,42 @@ class SelfGoalProposer:
             scored.append((score, cat, topic))
         scored.sort(reverse=True)
         return [(cat, topic) for _, cat, topic in scored[:n]]
+
+    def propose_with_curiosity(
+        self,
+        scorer,
+        signal_provider,
+        n: int = 6,
+    ) -> List[tuple[str, str]]:
+        """Curiosity-driven topic selection via the 6-signal formula.
+
+        Args:
+            scorer: synapforge.curiosity.CuriosityScorer instance
+            signal_provider: callable taking (cat, topic) -> dict with keys
+                free_energy_reduction, stdp_delta_norm, retrieval_gap,
+                spike_rate_variance, novelty_ema, noise_variance
+            n: number of topics to return
+
+        Returns top-N by curiosity score, breaking ties with coverage.
+        """
+        coverage = self._topic_counts()
+        signals = []
+        topic_meta = []
+        for cat, topic in ALL_TOPICS:
+            sig = signal_provider(cat, topic)
+            cov_count = coverage.get(topic, 0) + coverage.get(cat, 0) * 0.1
+            sig["_coverage"] = cov_count
+            signals.append({k: v for k, v in sig.items() if not k.startswith("_")})
+            topic_meta.append((cat, topic, cov_count))
+
+        ranked = scorer.rank_topics(signals)
+        out: List[tuple[str, str]] = []
+        for idx, score in ranked[: n * 2]:
+            cat, topic, cov = topic_meta[idx]
+            out.append((cat, topic))
+            if len(out) >= n:
+                break
+        return out
 
 
 def _http_get(url: str, timeout: int = 8) -> Optional[str]:
