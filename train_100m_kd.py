@@ -196,6 +196,36 @@ def _format_loss_pct(
     return out
 
 
+def _format_spike_rates_per_layer(rates: list[float]) -> str:
+    """T5.2 — render the per-layer spike-rate log line.
+
+    Returns a string of the form
+
+        spike_rates_per_layer: l0=0.000 l1=0.000 ... l<N-1>=0.000
+
+    where ``rates`` is the list of per-PLIF-cell spike rates (already
+    pulled via ``last_spike_rate().item()`` by the caller). The label
+    width tracks the layer count so the helper handles any ``N`` without
+    truncation -- a 4-layer model emits ``l0=...l3=...``, a 12-layer
+    model emits ``l0=...l11=...``. Each value is rendered to 3-decimal
+    precision to match the existing ``spike: mean=...`` line.
+
+    Pure function -- no torch, no IO -- so it is unit-testable on CPU.
+
+    Args:
+        rates: per-layer spike rates as Python floats. May be empty, in
+               which case the helper returns the prefix label only with
+               no entries (``"spike_rates_per_layer:"``).
+
+    Returns:
+        Single-line log string (no trailing newline).
+    """
+    parts = [f"l{i}={float(r):.3f}" for i, r in enumerate(rates)]
+    if not parts:
+        return "spike_rates_per_layer:"
+    return "spike_rates_per_layer: " + " ".join(parts)
+
+
 def _update_best_ckpt(
     *,
     out_dir: str,
@@ -388,6 +418,21 @@ def _parse_args() -> argparse.Namespace:
                    help="disable the T5.1 pct_ce/pct_kd/... columns; the "
                         "log line reverts to the legacy "
                         "loss=/ce=/kd=/z=/lr=/step_ms=/tok/s= format.")
+    # T5.2 (DEEP_MAINT_QUEUE.md) — when debugging dead PLIF layers the
+    # aggregated ``spike: mean=... range=[a,b] dead=D/T`` line hides which
+    # individual layer is dead. Behind this opt-in flag, immediately
+    # below the existing ``spike:`` line we also emit
+    #     spike_rates_per_layer: l0=0.000 l1=0.000 ... l<N-1>=0.000
+    # at the same cadence (every 50 steps). Default OFF so existing
+    # downstream tooling that parses a fixed log schema is undisturbed;
+    # enable for dead-layer root-cause work.
+    p.add_argument("--log-spike-per-layer", action="store_true", default=False,
+                   dest="log_spike_per_layer",
+                   help="emit a per-layer spike-rate log line "
+                        "``spike_rates_per_layer: l0=... l<N-1>=...`` "
+                        "immediately after the aggregated ``spike:`` line, "
+                        "at the same cadence. Useful for detecting which "
+                        "individual PLIF layer is dead. Default OFF.")
     # T5.4 (DEEP_MAINT_QUEUE.md) — track best val_ppl_holdout across the
     # run and maintain a ``best_step_*.pt`` symlink (Linux) or copy
     # (Windows) so warmstart resilience does not depend on remembering
@@ -1733,6 +1778,11 @@ def main() -> int:
                     f"range=[{rate_min:.3f}, {rate_max:.3f}] "
                     f"dead={n_dead}/{len(rates)} sat={n_sat}/{len(rates)}"
                 )
+                # T5.2: per-layer spike rate breakdown. Behind opt-in flag
+                # so existing aggregated-line parsers stay undisturbed.
+                # Right BELOW the aggregated line for visual locality.
+                if args.log_spike_per_layer:
+                    _log("  " + _format_spike_rates_per_layer(rates))
                 if step % 100 == 0 and abs(rate_mean - args.spike_target) > 0.05:
                     direction = "high" if rate_mean > args.spike_target else "low"
                     _log(
