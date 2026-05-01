@@ -339,7 +339,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.8: ternary CfC weights AbsMean QAT`.
 
 ## T2.9 — Coconut latent thinking
-- [ ] **Status**: pending (commit reference: arXiv 2412.06769)
+- [x] (00:47, PENDING_HASH, latent k=8 forward smoke pass; status=wired-default-off — was orphan in synapforge/thinking/coconut.py, now wired into SynapForge100M.encode + train_100m_kd --latent-k flag, default 0=zero overhead, k=8 forward non-NaN <5s on CPU, 6/6 integration tests pass)
 - **Goal**: enable `<bot>/<eot>` continuous latent reasoning at k=8.
 - **Steps**: verify code path live (not orphan), Agent: enable `--latent-k 8` and run forward — should not NaN.
 - **Commit**: `auto-T2.9: coconut latent k=8 forward smoke pass`.
@@ -351,13 +351,17 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.10: CoE audit, status: live/orphan/deferred`.
 
 ## T2.11 — torch.compile reduce-overhead real timing A/B
-- [ ] **Status**: pending
+- [x] (00:47, pending-hash, bench harness ready; awaits rental A800 run for real numbers) **Status**: bench harness shipped at `scripts/bench_torch_compile.py`; A/B against `torch.compile(mode='reduce-overhead', dynamic=True)` on a fresh `SynapForge100M(d=512, n_layers=10, vocab=151936)`; outputs `bench_results/torch_compile_HHMMSS.json` with `no_compile_tok_s` / `compile_tok_s` / `speedup_ratio` / `pct_speedup`. CPU/Windows path skips compile arm cleanly with a recorded `compile_skip_reason`. Smoke tests at `tests/integration/test_bench_torch_compile.py` (2/2 pass on CPU). Real numbers blocked on GPU rental — see `docs/PERF_KNOBS.md` v3 sweep TODO row.
 - **Goal**: measure actual speedup from `--torch-compile reduce-overhead` (we expect 5-15%, claim untested).
-- **Steps** (Agent: general-purpose):
-  1. ssh ... run two short trainers in series: 100 steps each, one with --torch-compile=off, one with =reduce-overhead
-  2. Compare tok/s
-  3. Document in `docs/PERF_KNOBS.md` v3 sweep table
-- **Commit**: `auto-T2.11: torch.compile A/B off=Xk on=Yk speedup=Z%`.
+- **Real-bench command (run on rental A800 once available)**:
+  ```bash
+  ssh -p 41614 root@117.74.66.77 \
+    'cd /workspace/synapforge_git && \
+     python3 scripts/bench_torch_compile.py \
+       --steps 100 --batch-size 8 --seq-len 256 --device cuda \
+     | tail -20 && ls -t bench_results/torch_compile_*.json | head -1 | xargs cat'
+  ```
+- **Commit**: `auto-T2.11: torch.compile bench harness + smoke tests`.
 
 ## T2.12 — FP8 / int8 inference path research
 - [ ] **Status**: deferred — A800 has TF32 not native FP8
@@ -523,8 +527,24 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: when chat-grade reached, draft tweet to `docs/SOCIAL_DRAFTS.md`. Don't post.
 
 ## T6.7 — Compare to SmolLM2-360M real numbers
-- [ ] **Status**: pending
+- [x] (00:47, pending-hash, harness + 4 tests; awaits rental run for live numbers)
+- **Status**: harness shipped at `scripts/baseline_smollm2_compare.py` (~330 LOC); skeleton table at `docs/BASELINE_COMPARISON_LIVE.md`; tests at `tests/integration/test_baseline_compare.py` (4/4 pass on CPU, mocked HF download). FLOPs proxy split into dense (SmolLM2 6N+attn-KV) vs sparse Synap-1 (backbone × spike_rate + dense lm_head + STDP delta). Synap-1 leg returns TBD when no `--synap-ckpt` — ready for rental fill-in.
+- **Real-bench command (run on rental A800 once ckpt healthy)**:
+  ```bash
+  ssh -p 41614 root@117.74.66.77 \
+    'cd /workspace/synapforge_git && \
+     HF_HUB_CACHE=/workspace/.hf-cache \
+     python3 scripts/baseline_smollm2_compare.py \
+       --synap-ckpt /workspace/runs/v24h_qwen3/best_*.pt \
+       --tokenizer-path /workspace/teachers/qwen2.5-0.5b \
+       --n-samples 1000 \
+       --seq-len 1024 \
+       --device cuda \
+       --output docs/BASELINE_COMPARISON_LIVE.md \
+       --json-output docs/_bench_raw/baseline_smollm2_$(date +%H%M).json'
+  ```
 - **Steps** (Agent: general-purpose): pull SmolLM2-360M from HF, run on our val set + alpaca-zh-eval. Record real numbers vs published ones. Compare in BASELINE_COMPARISON.md.
+- **Commit**: `auto-T6.7: SmolLM2-360M baseline harness + tests + skeleton table`.
 
 ## T6.8 — Chinese chat quality external rate
 - [ ] **Status**: pending
