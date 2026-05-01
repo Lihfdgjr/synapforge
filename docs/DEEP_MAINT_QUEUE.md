@@ -533,7 +533,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 # Tier 5 — Training observability
 
 ## T5.1 — Loss component breakdown
-- [ ] **Status**: pending
+- [x] (01:49, 0a9d7ef, pct_ce/kd/z/modal/cur log columns + tests) **Status**: done — `--log-loss-pct` (default ON) appends `pct_ce` / `pct_kd` / `pct_z` (and `pct_modal` / `pct_cur` when active) to the per-step log line via the new pure-Python `_format_loss_pct(...)` helper; 3/3 tests pass on CPU at `tests/integration/test_loss_pct_log.py`.
 - **Steps** (Agent: general-purpose): in `train_100m_kd.py` log block, add per-step `pct_ce / pct_kd / pct_z_loss = ce/total, kd/total, z/total`. Append to `docs/PROGRESS.md` §1.
 - **Commit**: `auto-T5.1: loss component % logging`.
 
