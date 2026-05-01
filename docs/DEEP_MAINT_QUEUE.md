@@ -253,7 +253,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.4: freeze vocab tail rows 151643-151935 from gradient`.
 
 ## T2.5 — Spike-rate-target loss term
-- [ ] **Status**: pending (addresses P25 PLIF dead)
+- [x] (23:56, auto-T2.5, aux loss + 3 tests pass, dead 0.000 -> 0.130 in 50 steps @ weight=0.1)
+- ~~**Status**: pending (addresses P25 PLIF dead)~~
 - **Goal**: penalty when spike rate < 0.05 or > 0.20.
 - **Steps** (Agent: general-purpose):
   1. After PLIF forward, compute `rate = spike.float().mean(dim=[0,1])` per layer

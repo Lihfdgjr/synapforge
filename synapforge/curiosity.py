@@ -225,7 +225,12 @@ def spike_rate_variance_from_modules(plif_modules) -> float:
     rates = []
     for m in plif_modules:
         if hasattr(m, "last_spike_rate"):
-            rates.append(float(m.last_spike_rate))
+            attr = m.last_spike_rate
+            # PLIFCell (sf.surrogate) exposes ``last_spike_rate`` as a
+            # method (T2.5: spike-rate-target loss); legacy PLIF cells
+            # in sf.cells still expose it as a tensor buffer. Handle both.
+            rate_t = attr() if callable(attr) else attr
+            rates.append(float(rate_t))
     if len(rates) < 2:
         return 0.0
     rates_t = torch.tensor(rates)

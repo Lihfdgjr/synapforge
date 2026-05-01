@@ -244,6 +244,25 @@ def _parse_args() -> argparse.Namespace:
                    help="cross-entropy label smoothing alpha")
     p.add_argument("--spike-target", type=float, default=0.1,
                    help="target mean spike rate for PLIF cells; warn if drift > 0.05")
+    # T2.5: spike-rate-target auxiliary loss term (addresses P25 PLIF dead).
+    # When the PLIF spike rate falls outside [low, high], add a quadratic
+    # penalty to the total loss that backprops through the surrogate
+    # gradient to push ``threshold`` and ``log_tau`` back into the band.
+    # Independent of the (no-grad) ``--no-plif-homeostasis`` threshold
+    # control: this term participates in the autograd graph of the same
+    # backward pass as ce/kd/z, so weight = 0.001 default keeps it
+    # subordinate to the LM signal but still nudges live training.
+    p.add_argument("--spike-target-loss-weight", type=float, default=0.001,
+                   help="weight of spike-rate-target auxiliary loss (T2.5). "
+                        "0 disables. Penalty = sum_layers ((rate - high).clamp(min=0)**2 "
+                        "+ (low - rate).clamp(min=0)**2). Backprops through "
+                        "the surrogate gradient to ``threshold`` / ``log_tau``.")
+    p.add_argument("--spike-target-loss-low", type=float, default=0.05,
+                   help="lower bound of dead-zone for spike-target loss (T2.5). "
+                        "rate < low -> linear penalty proportional to (low - rate)**2.")
+    p.add_argument("--spike-target-loss-high", type=float, default=0.20,
+                   help="upper bound of dead-zone for spike-target loss (T2.5). "
+                        "rate > high -> linear penalty proportional to (rate - high)**2.")
     p.add_argument("--teacher", default="gpt2",
                    help="HF model id for KD teacher (frozen); see HF_ENDPOINT for mirror")
     p.add_argument("--kd-weight", type=float, default=0.7,
@@ -463,7 +482,10 @@ def evaluate(model, val_iter, n_batches: int = 16,
             )
         losses.append(float(loss.item()))
         if plif_cells:
-            rate_accum.append([m.last_spike_rate.item() for m in plif_cells])
+            # T2.5: ``last_spike_rate`` is now a method (returns the live
+            # autograd-attached tensor when one is available, else the
+            # detached buffer). ``.item()`` works on either.
+            rate_accum.append([m.last_spike_rate().item() for m in plif_cells])
     model.train()
     if plif_cells and rate_accum:
         n = len(plif_cells)
@@ -1248,6 +1270,41 @@ def main() -> int:
                     _log(f"[mixin] curiosity step {step} skipped: {exc}")
                     cur_aux = torch.zeros((), device=logits.device)
 
+            # ---- T2.5: spike-rate-target auxiliary loss ----
+            # P25 (PLIF dead 10/10) is rooted in PLIF spike rate
+            # collapsing to 0 because the surrogate gradient through
+            # ``v - threshold`` decays as 1/x^2 (ATan) and goes silent
+            # once the membrane drifts far below threshold. The
+            # threshold-homeostasis path is no_grad and corrects the
+            # bias direction but cannot push the sharp surrogate back
+            # into the active band on its own. This term adds a
+            # graph-attached penalty that backprops through
+            # ``last_spike_rate()`` (live tensor) into the surrogate
+            # gradient -> ``threshold`` and ``log_tau``, so the
+            # parameters move toward a band where the surrogate stays
+            # awake. Default weight 0.001 keeps it subordinate to the
+            # LM signal but still nudges live training.
+            spike_target_loss = torch.zeros((), device=logits.device)
+            if (
+                args.spike_target_loss_weight > 0
+                and plif_cells
+            ):
+                low = float(args.spike_target_loss_low)
+                high = float(args.spike_target_loss_high)
+                terms = []
+                for m in plif_cells:
+                    rate = m.last_spike_rate()  # live, autograd-attached
+                    if rate.dim() > 0:
+                        rate = rate.squeeze()
+                    rate = rate.float()
+                    # quadratic outside [low, high], zero inside:
+                    over = (rate - high).clamp(min=0.0).pow(2)
+                    under = (low - rate).clamp(min=0.0).pow(2)
+                    terms.append(over + under)
+                if terms:
+                    spike_target_loss = torch.stack(terms).sum()
+                    loss = loss + args.spike_target_loss_weight * spike_target_loss
+
         optim.zero_grad(set_to_none=True)
         loss.backward()
         if GRAD_CLIP > 0:
@@ -1298,11 +1355,14 @@ def main() -> int:
                 mixin_str += f" modal={float(modal_aux.detach()):.4f}"
             if curiosity_mixin is not None:
                 mixin_str += f" cur={float(cur_aux.detach()):.4f}"
+            if args.spike_target_loss_weight > 0:
+                mixin_str += f" stl={float(spike_target_loss.detach()):.4f}"
             _log(f"step {step:5d} loss={loss.item():.4f} ce={ce_loss.item():.3f} "
                  f"kd={kd.item():.3f} z={z_loss.item():.3f} lr={cur_lr:.5f} "
                  f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}{mixin_str}")
             if step % 50 == 0 and plif_cells:
-                rates = [m.last_spike_rate.item() for m in plif_cells]
+                # T2.5: ``last_spike_rate`` is a method now.
+                rates = [m.last_spike_rate().item() for m in plif_cells]
                 rate_min, rate_max = min(rates), max(rates)
                 rate_mean = sum(rates) / len(rates)
                 n_dead = sum(1 for r in rates if r < 0.005)
