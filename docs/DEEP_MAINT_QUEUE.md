@@ -722,7 +722,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: feed 5K novel domain (medical), then test medical Q&A — should improve over baseline.
 
 ## T8.3 — Curriculum learning
-- [x] (03:10, PENDING_HASH, curriculum sort by ref-model ppl + 4 tests)
+- [x] (03:10, 8589a51, curriculum sort by ref-model ppl + 4 tests)
 - **Status**: shipped 2026-05-02. ``scripts/curriculum_sort.py`` (~280
   LOC): reads parquet (``input_ids`` column), runs Qwen 2.5 0.5B (or any
   HF causal LM via ``--ref-model``), writes a sorted parquet preserving
