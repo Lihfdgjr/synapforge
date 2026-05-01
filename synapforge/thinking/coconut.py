@@ -87,6 +87,40 @@ class LatentThinker(nn.Module):
             h, state = self.think_step(block_stack, h, state)
         return h, state
 
+    def think_adaptive(
+        self,
+        block_stack,
+        prefix_hidden: torch.Tensor,
+        context_len: int,
+        retrieval_confidence: float,
+        prev_state: Optional[torch.Tensor] = None,
+        alpha: float = 1.0,
+        beta: float = 4.0,
+        k_min: int = 1,
+        k_max: int = 8,
+    ) -> tuple:
+        """Adaptive thinking depth based on context length and retrieval confidence.
+
+        k = clip(round(α·log₂(ctx_len) + β·(1 − retrieval_confidence)), 1, 8)
+
+        Long context + low retrieval confidence → k=8 deep think.
+        Short context or strong retrieval → k=1 skip thinking.
+
+        Returns (final_hidden, state, k_used). The k_used is logged for
+        ablation experiments and to verify Coconut compute scales correctly
+        with task difficulty (per arxiv 2506.05256 ALP reward.)
+        """
+        k = adaptive_k(
+            context_len=context_len,
+            retrieval_confidence=retrieval_confidence,
+            alpha=alpha,
+            beta=beta,
+            k_min=k_min,
+            k_max=k_max,
+        )
+        h, state = self.think(block_stack, prefix_hidden, k=k, prev_state=prev_state)
+        return h, state, k
+
 
 def add_thinking_tokens(tokenizer, names: tuple = ("<bot>", "<eot>", "<pause>")) -> dict:
     """Add special thinking tokens to a HF tokenizer. Returns id mapping."""
