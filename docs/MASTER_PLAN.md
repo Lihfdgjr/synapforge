@@ -48,8 +48,8 @@ Source of truth: `scripts/phase_manager.py` (auto-watches `train.log`, writes `.
 | Phase | Trigger | Adds | Notes |
 |-------|---------|------|-------|
 | 0 | warm start, ce ≈ 9.6 | LM-only KD from Qwen 0.5B teacher | current state at v24h_qwen |
-| 1 | val ppl ≤ 250 | `--intrinsic-curiosity --self-learn-ttt --stdp-novelty` | turn on internal-reward + TTT replay |
-| 2 | val ppl ≤ 100 | `--modal-byte-patch --cross-modal-contrastive --modal-list image,audio,time_series` | needs base linguistic competence first or cross-modal aux destroys it |
+| 1 | val ppl ≤ 250 | `--self-learn-ttt --self-learn-k 8 --curiosity-weight 0.05 --phase-aware` | turn on TTT replay + curiosity (real flags; argparse-validated 2026-05-01) |
+| 2 | val ppl ≤ 100 | `--modal-list image,audio,time_series` | needs base linguistic competence first or cross-modal aux destroys it |
 | 3 | val ppl ≤ 60 | alpaca-zh SFT + response-only-loss, lr 1e-4 | the chat-emergence threshold |
 | 4 | chat eval ≥ 60% pass | GRPO RL with sympy verifier (gsm8k math) | post-SFT polish |
 
@@ -345,11 +345,33 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 | PID | Run name | Started | Last status | Logs |
 |-----|----------|---------|-------------|------|
 | 13663 | v24h_qwen Run 2 | 2026-05-01 | step 1640 ce=5.95 | `/workspace/runs/v24h_qwen/train.log` |
-| 12965 | auto_eval_daemon | 2026-05-01 | watching v24h_qwen | `/workspace/auto_eval/eval.log` |
-| (running) | triple_backup_daemon | 2026-05-01 | watching v24h_qwen | `/workspace/backup/backup.log` |
-| (running) | phase_manager | 2026-05-01 | watching v24h_qwen, currently phase 0 | `/workspace/runs/v24h_qwen/phase.log` |
+| 12965 | auto_eval_daemon | 2026-05-01 | watching v24h_qwen (stale path) | `/workspace/auto_eval/eval.log` |
+| (running) | triple_backup_daemon | 2026-05-01 | watching v24h_qwen (stale path) | `/workspace/backup/backup.log` |
+| (running) | phase_manager | 2026-05-01 | watching v24h_qwen (stale path) | `/workspace/runs/v24h_qwen/phase.log` |
 
-**Verify** (next session): `ssh -p 41614 root@117.74.66.77 'ls -la /workspace/runs/v24h_qwen/ckpts/ | head; tail -5 /workspace/runs/v24h_qwen/train.log'`
+**v24h_qwen Run 2 STATUS — DEAD 2026-05-01 18:01**
+- Crashed: torch.save → "file write failed" (system disk 99.9% full)
+- Cause: SAVE_EVERY=250 + 1.83GB ckpts → 53 ckpts × 1.83GB = 97GB on 100GB disk
+- PLIF observation: dead 10/10 from step_000250 through step_013250 (entire run)
+- Final state: ce ≈ 8.2 (ppl ≈ 3640), spike rate 0.000
+
+**v24h_qwen3 Run 3 STATUS — TRAINING 2026-05-01 18:43+**
+- PID 15477 on rental
+- Warmstart: `step_002250_plif_reinit.pt` (matched 93/163 — half-warm; PLIF param names changed so PLIF is random init)
+- Backend: triton_block, batch=64 (z-loss OOM at bs=128 vocab=151936), kd-every=4
+- SAVE_EVERY=2000, ckpt_cleanup.sh keeping last 5 step_*.pt (background loop)
+- First 130 steps: ce 6.77 → 6.05 (CfC+FFN learning; PLIF still dead — auto-revive triggers at step 1000+)
+- Output: `/workspace/runs/v24h_qwen3/`
+- Daemons (phase/backup/auto_eval) still pointed at OLD v24h_qwen — need to be restarted with new path
+
+**Verify** (next session):
+```
+ssh -p 41614 root@117.74.66.77 \
+  'pgrep -fa "python3.*train_100m_kd"; \
+   tail -20 /workspace/runs/v24h_qwen3/train.log; \
+   df -h / | tail -1; \
+   ls -la /workspace/runs/v24h_qwen3/*.pt'
+```
 
 ---
 
