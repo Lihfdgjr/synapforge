@@ -343,6 +343,36 @@ and prints the action-type histogram. Typical output:
 [web_actuator_smoke] OK
 ```
 
+### Real sandbox run (P7) — visual evidence
+
+```bash
+python scripts/web_actuator_real_smoke.py
+```
+
+100 ActionHead steps against the same fixture, but with stricter assertions
+(>=1 click, >=1 nav/scroll, no uncaught exceptions, runtime <= 60 s). On
+success it persists three artifacts under
+`synapforge/tests/fixtures/p7_evidence/`:
+
+- `web_actuator_smoke.png` — screenshot of the headless page after step 50
+  (visible buttons + input + link from `static_demo.html`).
+- `web_actuator_smoke_trace.json` — per-step `(action, result, dom_hash, detail)`
+  records for the full 100 steps.
+- `web_actuator_smoke_summary.json` — single-line summary
+  (histogram, runtime, ok_clicks, error or null).
+
+Sample real run on the dev box (2026-05-01):
+
+```
+histogram   {noop:73, click:22, scroll:0, type:1, navigate:4}
+ok_clicks   22
+runtime_s   6.97
+```
+
+The screenshot is the literal pixel-level evidence that **a real browser
+received clicks driven by a 64-d neural action head with no JSON tool
+tokens emitted**. See MASTER_PLAN.md §6 P7 for resolution detail.
+
 ### What's intentionally NOT in MVP scope
 
 Per MASTER_PLAN.md §12: **vision pipeline, multi-tab, login flows,

@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 7: + P6 RESOLVED -- NeuroMCP 600-trial long-horizon test, INVESTOR.md numbers need softening)
+**Updated**: 2026-05-01 (revision 7: + P7 RESOLVED -- web_actuator real Playwright sandbox run, 100 steps in 6.97 s, 22 ok_clicks)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 

@@ -1,0 +1,744 @@
+{
+  "summary": {
+    "n_steps_run": 100,
+    "n_steps_target": 100,
+    "runtime_s": 4.406,
+    "histogram": {
+      "noop": 73,
+      "click": 22,
+      "scroll": 0,
+      "type": 1,
+      "navigate": 4
+    },
+    "ok_clicks": 22,
+    "nav_or_scroll": 4,
+    "fixture": "file:///D:/ai_tool/investor_demo/synapforge/synapforge/tests/fixtures/static_demo.html",
+    "seed": 0,
+    "error": null,
+    "playwright_runtime": "real"
+  },
+  "trace": [
+    {
+      "step": 0,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 1,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 2,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 3,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 4,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 507,
+      "y": 420
+    },
+    {
+      "step": 5,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 6,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 7,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 760,
+      "y": 325
+    },
+    {
+      "step": 8,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 9,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 10,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 11,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 12,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 13,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 508,
+      "y": 402
+    },
+    {
+      "step": 14,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 15,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 16,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 727,
+      "y": 340
+    },
+    {
+      "step": 17,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 18,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 19,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 20,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 21,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 22,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 524,
+      "y": 409
+    },
+    {
+      "step": 23,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 24,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 25,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 748,
+      "y": 332
+    },
+    {
+      "step": 26,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 27,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 28,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 29,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 30,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 31,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 514,
+      "y": 413
+    },
+    {
+      "step": 32,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 33,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 34,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 757,
+      "y": 332
+    },
+    {
+      "step": 35,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 36,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 37,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 38,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 39,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 40,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "x": 520,
+      "y": 407
+    },
+    {
+      "step": 41,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "7851e2ad25e81108",
+      "reason": "noop"
+    },
+    {
+      "step": 42,
+      "action": "navigate",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "url": "about:blank"
+    },
+    {
+      "step": 43,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 737,
+      "y": 338
+    },
+    {
+      "step": 44,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 45,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 46,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 47,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 48,
+      "action": "navigate",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "url": "about:blank"
+    },
+    {
+      "step": 49,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 543,
+      "y": 410
+    },
+    {
+      "step": 50,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 51,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 52,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 763,
+      "y": 333
+    },
+    {
+      "step": 53,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 54,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 55,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 56,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 57,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 58,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 497,
+      "y": 414
+    },
+    {
+      "step": 59,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 60,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 61,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 745,
+      "y": 337
+    },
+    {
+      "step": 62,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 63,
+      "action": "navigate",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "url": "about:blank"
+    },
+    {
+      "step": 64,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 65,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 66,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 67,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 524,
+      "y": 410
+    },
+    {
+      "step": 68,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 69,
+      "action": "navigate",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "url": "about:blank"
+    },
+    {
+      "step": 70,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 732,
+      "y": 340
+    },
+    {
+      "step": 71,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 72,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 73,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 74,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 75,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 76,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 515,
+      "y": 398
+    },
+    {
+      "step": 77,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 78,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 79,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 745,
+      "y": 337
+    },
+    {
+      "step": 80,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 81,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 82,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 83,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 84,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 85,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 510,
+      "y": 411
+    },
+    {
+      "step": 86,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 87,
+      "action": "type",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "text": "spiking neuron"
+    },
+    {
+      "step": 88,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 749,
+      "y": 330
+    },
+    {
+      "step": 89,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 90,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 91,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 92,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 93,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 94,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 512,
+      "y": 413
+    },
+    {
+      "step": 95,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 96,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 97,
+      "action": "click",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "x": 756,
+      "y": 337
+    },
+    {
+      "step": 98,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    },
+    {
+      "step": 99,
+      "action": "noop",
+      "result": "ok",
+      "new_dom_hash": "77b2274bd572338a",
+      "reason": "noop"
+    }
+  ]
+}

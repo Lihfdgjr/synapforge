@@ -1,0 +1,18 @@
+{
+  "n_steps_run": 100,
+  "n_steps_target": 100,
+  "runtime_s": 4.406,
+  "histogram": {
+    "noop": 73,
+    "click": 22,
+    "scroll": 0,
+    "type": 1,
+    "navigate": 4
+  },
+  "ok_clicks": 22,
+  "nav_or_scroll": 4,
+  "fixture": "file:///D:/ai_tool/investor_demo/synapforge/synapforge/tests/fixtures/static_demo.html",
+  "seed": 0,
+  "error": null,
+  "playwright_runtime": "real"
+}
