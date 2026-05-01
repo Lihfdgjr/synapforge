@@ -91,6 +91,10 @@ def cmd_all(args) -> dict:
     cmd_pitch(args)
     print()
     print("-" * 60)
+    # 2026-05-01 reorder per docs/INSURANCE_NATIVE.md Option C:  mechanism
+    # demos go FIRST (NeuroMCP / R-fold / STDP -- the headline differentiators
+    # vs transformer), chat goes LAST.  If the chat ckpt is broken on demo
+    # day we run with `--mechanism-only` and still ship a complete pitch.
     out = {}
     out["button"] = cmd_button(args)
     print()
@@ -99,6 +103,15 @@ def cmd_all(args) -> dict:
     print()
     print("-" * 60)
     out["stdp"] = cmd_stdp(args)
+    if getattr(args, "mechanism_only", False):
+        # docs/INSURANCE_NATIVE.md Option C: skip the chat block entirely.
+        # Used as the demo-day escape hatch when no live ckpt is loadable
+        # AND we'd rather not show the recorded-replay (Option B).
+        print()
+        print("-" * 60)
+        print("[mechanism-only] skipping chat block "
+              "(see docs/INSURANCE_NATIVE.md Option C)")
+        return out
     print()
     print("-" * 60)
     out["chat"] = cmd_chat(args)
@@ -156,6 +169,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--save", default="chat_demo.json")
         parser.add_argument("--hidden", type=int, default=64)
         parser.add_argument("--seed", type=int, default=11)
+        # docs/INSURANCE_NATIVE.md Option C: skip the chat block; ship a
+        # mechanism-only investor pitch when the chat ckpt is broken on demo
+        # day.  Default off -- normal `all` still runs the chat sample.
+        parser.add_argument(
+            "--mechanism-only", action="store_true", default=False,
+            help="skip the chat block; pitch only NeuroMCP+R-fold+STDP "
+                 "(docs/INSURANCE_NATIVE.md Option C, demo-day escape hatch)",
+        )
 
     pa = sub.add_parser("all", help="Run pitch + button + bench + stdp + chat")
     _add_all_args(pa, default_trials=80)

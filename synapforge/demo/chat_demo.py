@@ -206,6 +206,16 @@ def run_demo(
         mode = "live"
     else:
         if not quiet:
+            # docs/INSURANCE_NATIVE.md Option B: when the live ckpt is
+            # unloadable we play the recorded v4.x transcript -- but loud
+            # disclosure first so the investor knows it's not live. Same
+            # architecture (LNN+SNN), older ckpt; ANTI_LORA.md compliant.
+            try:
+                from .disclose import disclose_replay
+                print(disclose_replay())
+                print()
+            except Exception:
+                pass
             print("  ckpt unavailable, replaying recorded transcript:")
             print(f"  source: {_default_recorded()}")
             print()

@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 8: + P22 RESOLVED -- phase_auto_relauncher.sh out-of-process watchdog, 6 tests passing)
+**Updated**: 2026-05-01 (revision 9: + P23 RESOLVED -- native-Synap insurance runbook + code drops; P5 redirect to docs/INSURANCE_NATIVE.md)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -36,7 +36,7 @@ A single sentence: **Synap-1 — a 100M LNN+SNN that chats in EN+ZH, learns at i
 | O4 | Self-learn + curiosity activate **automatically** at the right time | mechanism done, gate decided | see §4 |
 | O5 | Multi-modal (image+audio+time-series) byte-patch path | code done, untrained | phase 2 trigger ppl ≤ 100 |
 | O6 | RL post-training (GRPO + sympy verifier on math) | not started | phase 4 gate, chat ≥ 60% |
-| O7 | Plan C insurance: LoRA Qwen 0.5B as backup demo | code done | run ≥ once on rental, ≥ 60% chat |
+| O7 | Native-Synap insurance: 30M Synap-Mini / recorded replay / mechanism-pivot | runbook + scripts shipped | see `docs/INSURANCE_NATIVE.md` (P5/P23) |
 | O8 | Honest evaluation pipeline (no fake curves) | wired, daemon running | every ckpt = 5 EN + 5 ZH samples |
 | O9 | NeuroMCP universal codebook (L1/L2/L3, never lose mints) | code done | atomic skill log + reload test |
 | O10 | **50M effective context** with linear inference cost | partial: long.py + InfLLM L1/L2/L3 wired, untested at 50M | benchmark: 1K → 10K → 100K → 1M → 10M → 50M latency linear, ppl drift < 5% |
@@ -62,7 +62,10 @@ backbone (we've burned 2× by enabling cross-modal aux too early — see
 when a threshold trips, so the human just restarts.
 
 **Honest target**: phase 3 at ppl ≤ 60 in 24 GPU-h is aspirational; ppl ≤ 100 is conservative
-expectation. If phase 1 doesn't trip in 8h of training, fall back to Plan C.
+expectation. If phase 1 doesn't trip in 8h of training, fall back to the **native-Synap insurance
+paths** (`docs/INSURANCE_NATIVE.md`): Synap-Mini ~30M (Option A), recorded replay (Option B),
+or mechanism-pivot demo (Option C). All 100% LNN+SNN; the deleted Plan C / LoRA route is not
+revivable (`docs/ANTI_LORA.md`).
 
 ---
 
@@ -135,7 +138,7 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 | Triple-backup | `scripts/triple_backup_daemon.py` | tripwire 5-cycle warn | daemon | running |
 | Honest eval pipeline | `scripts/auto_eval_daemon.py` | per-ckpt 5+5 chat | runs on every ckpt | running |
 | Phase manager | `scripts/phase_manager.py` | log → `.phase` JSON | daemon | running |
-| Plan C LoRA Qwen | `scripts/train_qwen_lora.py` | `--smoke` + `--print-only` | `qwen_lora_chat_repl.py` | code done, smoke verified, real run pending (see `PLAN_C_RUNBOOK.md`) |
+| Native-Synap insurance | `scripts/launch_synap_mini.sh` + `synapforge/demo/disclose.py` + `cli.py:--mechanism-only` | dry-run launcher (rental-only) + `disclose_replay()` unit + `synapforge-demo all --mechanism-only` | `cli.py:cmd_all` (reordered) | runbook shipped — see `docs/INSURANCE_NATIVE.md` (P5/P23 RESOLVED) |
 
 ---
 
@@ -219,11 +222,24 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
   `docs/{PLAN_C_RUNBOOK.md,PLAN_C_QWEN_LORA.md,PLAN_C_CPU_NOTES.md}`. Plus the
   `qwenchat` subcommand removed from `synapforge/demo/cli.py` and the
   `_is_plan_c_ckpt` route removed from `scripts/chat_eval_gate.py`.
-- **Replacement insurance path** (still pure Synap-1 / LNN+SNN):
-  - **Option A**: 30M-50M Synap-1 (smaller param count, shorter run)
-  - **Option B**: replay healthy v4.x ckpt via `chat_recorded.json` with honest disclosure
-  - **Option C**: pivot demo focus from live chat to mechanism-level (NeuroMCP / R-fold / STDP)
-- **Status**: RESOLVED-by-deletion. `docs/ANTI_LORA.md` is the load-bearing doc.
+- **Replacement insurance path** (still pure Synap-1 / LNN+SNN) — **runbook
+  shipped 2026-05-01 in `docs/INSURANCE_NATIVE.md`** (~250 LOC concrete
+  decision criteria + commands + acceptance bars):
+  - **Option A — Synap-Mini ~30M LNN+SNN, fast train**:
+    `scripts/launch_synap_mini.sh` (NEW, ~80 LOC bash) wraps
+    `train_100m_kd.py` with `--vocab 151936 --d 256 --n-layers 6
+    --loop-depth 1 --ffn-ratio 4 --batch-size 128 --lr 2e-4 --steps 30000`.
+    Acceptance: val ppl ≤ 80 = "weakly chat-coherent". 6-12h on A800-80GB.
+  - **Option B — recorded replay**: `synapforge/demo/disclose.py` (NEW)
+    prints honest disclosure banner at top of chat block when
+    `chat_demo.py` falls back to `chat_recorded.json` (already wired —
+    runs whenever `_try_load_live` returns None).
+  - **Option C — mechanism-pivot demo**: `cli.py::cmd_all` reordered so
+    NeuroMCP/R-fold/STDP go FIRST and chat goes LAST; new
+    `--mechanism-only` flag skips chat block entirely.
+- **Status**: RESOLVED-by-deletion (Plan C) **+ RESOLVED-by-shipping**
+  (native insurance, see P23). `docs/ANTI_LORA.md` is the strategic doc;
+  `docs/INSURANCE_NATIVE.md` is the runbook.
 
 ### P6. NeuroMCP density saturation at ~28% — RESOLVED 2026-05-01
 - **Status**: empirically observed in v4.1 runs. Not a bug — might be the natural sparsity.
@@ -548,6 +564,50 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Docs**: `docs/RENTAL_OPS.md` §7 "Auto-relauncher" added with full
   usage + safety guards. **Use one of `relaunch_loop.sh` or
   `phase_auto_relauncher.sh`, not both.**
+
+### P23. Native-Synap insurance roadmap — RESOLVED 2026-05-01
+- **Symptom**: P5 deleted Plan C / Qwen-LoRA on 2026-05-01 because a
+  transformer-base + LoRA "insurance" path violates the Synap-1 LNN+SNN
+  architecture claim and makes the paper unsubmittable. But the
+  underlying risk that Plan C was hedging against — Synap-1 (100M)
+  not reaching chat-grade by demo day — didn't go away. Without a
+  documented native fallback, future agents would either (a) re-add a
+  LoRA path and re-violate ANTI_LORA, or (b) fly into demo day with
+  no plan.
+- **Fix applied**: `docs/INSURANCE_NATIVE.md` (~250 LOC runbook) +
+  three concrete code drops, all 100% LNN+SNN:
+  1. **Option A — Synap-Mini ~30M**: `scripts/launch_synap_mini.sh`
+     wraps `train_100m_kd.py` with `--vocab 151936 --d 256 --n-layers 6
+     --loop-depth 1 --ffn-ratio 4 --batch-size 128 --lr 2e-4
+     --steps 30000`. Trainer flags pre-existed (verified at lines 179
+     / 181 / 183 / 185 / 187 of `train_100m_kd.py`); no follow-up
+     trainer patch needed. Acceptance: val ppl ≤ 80 on alpaca-zh-eval
+     ("weakly chat-coherent", honest about 30M ceiling). Decision
+     criterion: launch only if Synap-1 hasn't tripped phase 1 (val ppl
+     ≤ 250) within 8h **and** rental still has 6+ GPU-h.
+  2. **Option B — Recorded replay**: `synapforge/demo/disclose.py`
+     (NEW) defines `disclose_replay()` returning the honest disclosure
+     banner ("recorded v4.1 outputs from April 28 ckpt, val ppl 44,
+     100M LNN+SNN — same architecture, different vintage"). Wired into
+     `synapforge/demo/chat_demo.py::run_demo` so it prints at the top
+     of the chat block whenever the live ckpt path falls back to the
+     recorded transcript. Always works (recorded JSON ships in the
+     repo via `MANIFEST.in`).
+  3. **Option C — Mechanism-pivot demo**: `synapforge/demo/cli.py`
+     reordered `cmd_all` so NeuroMCP / R-fold / STDP run FIRST and
+     chat runs LAST. New `--mechanism-only` flag (added to
+     `_add_all_args`, accepted by both `all` and `json`) skips the
+     chat block entirely. Demo-day escape hatch when chat ckpt is
+     broken AND we'd rather not show the recorded replay.
+- **Verification**: `python -m synapforge.demo.cli all --help` parses
+  cleanly with `--mechanism-only` listed. `ast.parse` clean on all
+  three edited files. `train_100m_kd.py::_parse_args` already accepts
+  `--vocab / --d / --n-layers / --loop-depth / --ffn-ratio / --lr /
+  --batch-size / --steps / --out / --no-warmstart` — verified by grep
+  on `_parse_args` and by `_build_config_dict`'s `getattr(args, ...)`
+  fallback path that already supports tiny-model overrides for
+  P9-smoke.
+- **Status**: RESOLVED. P5 now points at this entry + `INSURANCE_NATIVE.md`.
 
 ---
 
