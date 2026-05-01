@@ -364,10 +364,11 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.11: torch.compile bench harness + smoke tests`.
 
 ## T2.12 — FP8 / int8 inference path research
-- [ ] **Status**: deferred — A800 has TF32 not native FP8
+- [x] (TIME_PLACEHOLDER, HASH_PLACEHOLDER, 1-page A800 capability + Hopper future + Synap-1 specific path)
+- **Status**: shipped 2026-05-02 — `docs/QUANTIZATION_FP8_PATH.md` (135 LOC). A800 (Ampere SM 8.0) has no native FP8 tensor cores; emulation ~20% slower than bf16. Hopper SM 9.0 native FP8 e4m3/e5m2 gives 1.5–1.7× end-to-end (DeepSeek-V3 2412.19437 + TransformerEngine). Synap-1 ceiling ~1.10–1.15× because CfC ternary (T2.8) + binary PLIF already eat 85% of compute. Action: ship int8 PTQ via `torch.ao.quantization` post phase-3 on A800 (~1.4–1.6× FFN-bound, ~1.1× whole-model); defer FP8 to H100 rental ~Q3 2026.
 - **Goal**: document why FP8 isn't viable on A800; what Hopper would buy.
-- **Steps**: write 1-page in `docs/quantize.md` covering A800 capability + future H100/H200 path.
-- **Mark**: `[~] (deferred to H100 rental, ~Q3 2026)`.
+- **Files**: `docs/QUANTIZATION_FP8_PATH.md` (NEW); cross-refs `docs/quantize.md`, `docs/MATMUL_FREE.md`.
+- **Commit**: `auto-T2.12: FP8/int8 inference path research doc`.
 
 ---
 
