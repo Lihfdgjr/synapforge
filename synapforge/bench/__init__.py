@@ -1,6 +1,6 @@
 """synapforge.bench — paper-grade evaluation harness.
 
-Six static benchmarks for parity-vs-baseline reporting:
+English benchmarks for parity-vs-baseline reporting:
     humaneval    — Python code generation, pass@1, 164 problems
     mbpp         — Mostly Basic Python Problems, pass@1, 974 problems
     mmlu         — 57-subject multi-choice exam, accuracy
@@ -8,11 +8,17 @@ Six static benchmarks for parity-vs-baseline reporting:
     hellaswag    — commonsense continuation, 4-choice accuracy
     lambada      — last-word prediction accuracy
 
+Chinese benchmarks (multilingual coverage):
+    cmmlu        — 67 Chinese subjects multi-choice, accuracy
+    ceval        — 52 Chinese exam subjects (STEM/Humanities/Social/Other), accuracy
+    agieval_zh   — AGIEval Chinese subset (Gaokao + civil service + LogiQA-zh)
+    gsm8k_zh     — translated GSM8K, regex-extract Chinese-aware numeric answer
+
 Use the registry to dispatch by name:
 
     from synapforge.bench import run_bench, run_all
-    out = run_bench("humaneval", ckpt="runs/sf_100m/best.pt", tokenizer="Qwen/Qwen2.5-0.5B")
-    summary = run_all(ckpt=..., tokenizer=..., names=["mmlu", "gsm8k"])
+    out = run_bench("cmmlu", ckpt="runs/sf_100m/best.pt", tokenizer="Qwen/Qwen2.5-0.5B")
+    summary = run_all(ckpt=..., tokenizer=..., names=["mmlu", "cmmlu", "ceval"])
 """
 
 from __future__ import annotations
@@ -22,13 +28,23 @@ from typing import Any, Dict, Iterable, Optional
 
 # Lazy registry — modules import torch / datasets only when first invoked.
 BENCH_REGISTRY: Dict[str, str] = {
-    "humaneval": "synapforge.bench.humaneval",
-    "mbpp":      "synapforge.bench.mbpp",
-    "mmlu":      "synapforge.bench.mmlu",
-    "gsm8k":     "synapforge.bench.gsm8k",
-    "hellaswag": "synapforge.bench.hellaswag",
-    "lambada":   "synapforge.bench.lambada",
+    # English suite.
+    "humaneval":  "synapforge.bench.humaneval",
+    "mbpp":       "synapforge.bench.mbpp",
+    "mmlu":       "synapforge.bench.mmlu",
+    "gsm8k":      "synapforge.bench.gsm8k",
+    "hellaswag":  "synapforge.bench.hellaswag",
+    "lambada":    "synapforge.bench.lambada",
+    # Chinese suite (added 2026-05).
+    "cmmlu":      "synapforge.bench.cmmlu",
+    "ceval":      "synapforge.bench.ceval",
+    "agieval_zh": "synapforge.bench.agieval_zh",
+    "gsm8k_zh":   "synapforge.bench.gsm8k_zh",
 }
+
+# Bench groups for orchestrator convenience.
+EN_BENCHES = ("humaneval", "mbpp", "mmlu", "gsm8k", "hellaswag", "lambada")
+ZH_BENCHES = ("cmmlu", "ceval", "agieval_zh", "gsm8k_zh")
 
 
 def run_bench(name: str, ckpt: Optional[str] = None, tokenizer: Optional[str] = None,
@@ -57,4 +73,4 @@ def run_all(ckpt: Optional[str] = None, tokenizer: Optional[str] = None,
     return out
 
 
-__all__ = ["BENCH_REGISTRY", "run_bench", "run_all"]
+__all__ = ["BENCH_REGISTRY", "EN_BENCHES", "ZH_BENCHES", "run_bench", "run_all"]
