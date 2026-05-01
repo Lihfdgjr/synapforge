@@ -402,6 +402,38 @@ def _parse_args() -> argparse.Namespace:
                         "synapforge/backends/triton_fused_backward.py "
                         "(NotImplementedError on enable). Default OFF; "
                         "flip on once the kernel lands.")
+    # ---- Remote data warehouse (mohuanfang) -----------------------------
+    # Tiered storage: rental SSD = compute-only with bounded LRU cache,
+    # mohuanfang holds the canonical corpus. See
+    # docs/REMOTE_DATA_WAREHOUSE.md.
+    p.add_argument("--remote-warehouse-host", default="",
+                   help="ssh host spec for the mohuanfang warehouse "
+                        "(e.g. 'liu@mohuanfang.com'). Empty (default) = "
+                        "off; trainer reads parquets from --data-glob "
+                        "directly on local SSD. Set to enable lazy-fetch "
+                        "from the remote warehouse into a bounded local "
+                        "cache (--cache-max-gb).")
+    p.add_argument("--remote-warehouse-base", default="/home/liu/synapforge_data",
+                   help="directory on the warehouse host that contains "
+                        "<dataset>/ subdirs of parquet shards. Combined "
+                        "with --remote-warehouse-dataset to form the "
+                        "remote path.")
+    p.add_argument("--remote-warehouse-dataset", default="",
+                   help="dataset name (subdir under --remote-warehouse-base "
+                        "and the local cache). Required when "
+                        "--remote-warehouse-host is set. Inferred from "
+                        "--data-glob's parent dir name when empty.")
+    p.add_argument("--remote-warehouse-cache-dir", default="/workspace/data_cache",
+                   help="rental-local SSD cache root for warehouse fetches. "
+                        "Created if missing; capped at --cache-max-gb.")
+    p.add_argument("--cache-max-gb", type=float, default=30.0,
+                   help="soft cap on the local warehouse cache (GiB). "
+                        "After each fetch, oldest-atime shards are "
+                        "evicted until the cache is below the cap. "
+                        "Default 30 GiB — rule of thumb is ~10x a single "
+                        "shard size at WT-103 / FineWeb scale, so the "
+                        "trainer keeps roughly 1 epoch's worth of "
+                        "lookahead resident on local SSD.")
     return p.parse_args()
 
 
@@ -916,13 +948,36 @@ def main() -> int:
     # P24 (MASTER_PLAN.md §6): TRAIN stream gets a streaming reservoir
     # shuffle; VAL stream stays deterministic so eval ppl is comparable
     # across runs.
+    # 2026-05-01: optional remote warehouse — see
+    # docs/REMOTE_DATA_WAREHOUSE.md. When --remote-warehouse-host is
+    # set, parquet shards are lazy-fetched from mohuanfang into a
+    # bounded local LRU cache instead of read directly from local disk.
+    _warehouse = None
+    if args.remote_warehouse_host:
+        from synapforge.data import RemoteDataWarehouse
+        _wh_dataset = args.remote_warehouse_dataset.strip()
+        if not _wh_dataset:
+            # Infer from the parent dir basename of --data-glob.
+            _wh_dataset = os.path.basename(
+                os.path.dirname(args.data_glob.rstrip("/"))
+            ) or "default"
+        _warehouse = RemoteDataWarehouse(
+            dataset=_wh_dataset,
+            cache_dir=args.remote_warehouse_cache_dir,
+            max_cache_gb=float(args.cache_max_gb),
+            remote_host=args.remote_warehouse_host,
+            remote_base=args.remote_warehouse_base,
+        )
+        _log(f"[data] remote warehouse ON: {_warehouse!r}")
+
     train_ds = ParquetTokenStream(args.data_glob, seq_len=seq_len,
                                   tokenizer_name=args.tokenizer_name,
                                   batch_size=args.batch_size, loop=True,
                                   shuffle_buffer=int(args.shuffle_buffer),
                                   shuffle_seed=int(args.shuffle_seed),
                                   prefetch_factor=int(args.prefetch_factor),
-                                  pin_memory=bool(args.pin_memory))
+                                  pin_memory=bool(args.pin_memory),
+                                  remote_warehouse=_warehouse)
     train_it = iter(train_ds)
     print(f"train stream: {train_ds!r}")
 
@@ -932,12 +987,14 @@ def main() -> int:
     try:
         val_ds = ParquetTokenStream(_val_glob, seq_len=seq_len,
                                     tokenizer_name=args.tokenizer_name,
-                                    batch_size=args.batch_size, loop=False)
+                                    batch_size=args.batch_size, loop=False,
+                                    remote_warehouse=_warehouse)
     except FileNotFoundError:
         _log(f"[data] val glob {_val_glob!r} not found; falling back to train glob for eval")
         val_ds = ParquetTokenStream(args.data_glob, seq_len=seq_len,
                                     tokenizer_name=args.tokenizer_name,
-                                    batch_size=args.batch_size, loop=False)
+                                    batch_size=args.batch_size, loop=False,
+                                    remote_warehouse=_warehouse)
     print(f"val stream:   {val_ds!r}")
     # P3 (MASTER_PLAN.md §6): split val into TTT-side (touched by
     # --self-learn-ttt inner step) and holdout-side (NEVER touched by

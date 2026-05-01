@@ -18,6 +18,13 @@ Files are streamed row-by-row (pyarrow batch_size=64) so memory stays bounded
 even on the 900k-row WT-103 train shard. The vocab_size argument is purely
 documentation; the actual vocab is whatever the tokenizer reports.
 
+Optional: pass ``remote_warehouse=RemoteDataWarehouse(...)`` to lazy-fetch
+parquet shards from a remote storage host (e.g. mohuanfang.com) into a
+bounded local SSD cache. See ``synapforge/data/remote_warehouse.py`` and
+``docs/REMOTE_DATA_WAREHOUSE.md`` for the architecture; with the warehouse
+on, the trainer's local disk only ever holds the active LRU cache, while
+the canonical corpus lives off-host.
+
 Public API:
     >>> ds = ParquetTokenStream("/workspace/data/wt103_raw/train-*.parquet",
     ...                         seq_len=256, batch_size=32)
@@ -29,6 +36,7 @@ Public API:
 from __future__ import annotations
 
 import glob
+import os
 import queue
 import random
 import threading
@@ -126,10 +134,55 @@ class ParquetTokenStream:
         shuffle_seed: int = 42,
         prefetch_factor: int = 0,
         pin_memory: bool = False,
+        remote_warehouse: object | None = None,
     ) -> None:
-        self.files = sorted(glob.glob(glob_pattern))
-        if not self.files:
-            raise FileNotFoundError(f"glob {glob_pattern!r} matched no files")
+        # remote_warehouse: optional ``RemoteDataWarehouse`` (typed as
+        # ``object`` here to keep the import lazy; we duck-type the
+        # ``.list_remote_shards()`` / ``.get_shard()`` / ``.local_dir``
+        # surface). When set, ``glob_pattern`` is interpreted relative to
+        # the remote dataset (basename-glob) and parquets are lazy-fetched
+        # into a bounded local SSD cache. See
+        # ``synapforge/data/remote_warehouse.py``.
+        self.remote_warehouse = remote_warehouse
+        if remote_warehouse is not None:
+            # File listing comes from the warehouse; the glob is treated
+            # as a basename pattern (e.g. "train-*.parquet") matched
+            # against the remote shard list. We DO NOT pre-fetch; only
+            # filenames are recorded so iteration can pull them on demand.
+            import fnmatch as _fnmatch
+            base = os.path.basename(glob_pattern.rstrip("/"))
+            if not base:
+                base = "*.parquet"
+            try:
+                remote_shards = remote_warehouse.list_remote_shards()
+            except Exception as _exc:
+                # Fall back to whatever the warehouse already cached
+                # locally — useful when mohuanfang is offline at startup
+                # but the trainer can still complete an epoch on cached
+                # shards.
+                remote_shards = remote_warehouse.list_local_shards()
+                if not remote_shards:
+                    raise FileNotFoundError(
+                        f"warehouse {remote_warehouse!r}: cannot list "
+                        f"remote shards ({_exc!r}) and no local cache "
+                        f"available"
+                    ) from _exc
+            self._remote_shards = sorted(
+                s for s in remote_shards if _fnmatch.fnmatch(s, base)
+            )
+            if not self._remote_shards:
+                raise FileNotFoundError(
+                    f"warehouse pattern {base!r} matched no remote shards "
+                    f"in {remote_warehouse!r}"
+                )
+            # ``self.files`` holds basenames (not absolute paths) when
+            # warehouse mode is on; the iterator resolves them via
+            # ``warehouse.get_shard()``.
+            self.files = list(self._remote_shards)
+        else:
+            self.files = sorted(glob.glob(glob_pattern))
+            if not self.files:
+                raise FileNotFoundError(f"glob {glob_pattern!r} matched no files")
         self.seq_len = int(seq_len)
         self.batch_size = int(batch_size)
         self.vocab_size = int(vocab_size)
@@ -183,6 +236,12 @@ class ParquetTokenStream:
             else:
                 files = self.files
             for path in files:
+                # Warehouse mode: ``path`` is a basename; resolve via
+                # ``warehouse.get_shard`` which fetches from mohuanfang
+                # into the local SSD cache on first touch (subsequent
+                # touches hit the cache + bump the LRU atime).
+                if self.remote_warehouse is not None:
+                    path = str(self.remote_warehouse.get_shard(path))
                 pf = pq.ParquetFile(path)
                 col = self.text_column
                 if col is None:
@@ -356,6 +415,9 @@ class ParquetTokenStream:
             yield from self._iter_sync()
 
     def __repr__(self) -> str:
+        wh = ""
+        if self.remote_warehouse is not None:
+            wh = f", remote_warehouse={self.remote_warehouse!r}"
         return (
             f"ParquetTokenStream(files={len(self.files)}, "
             f"seq_len={self.seq_len}, batch_size={self.batch_size}, "
@@ -363,7 +425,7 @@ class ParquetTokenStream:
             f"shuffle_buffer={self.shuffle_buffer}, "
             f"shuffle_seed={self.shuffle_seed}, "
             f"prefetch_factor={self.prefetch_factor}, "
-            f"pin_memory={self.pin_memory})"
+            f"pin_memory={self.pin_memory}{wh})"
         )
 
 
@@ -508,4 +570,6 @@ def split_val_stream(
     return ttt_stream, holdout_stream
 
 
-__all__ = ["ParquetTokenStream", "split_val_stream"]
+from synapforge.data.remote_warehouse import RemoteDataWarehouse  # noqa: E402
+
+__all__ = ["ParquetTokenStream", "split_val_stream", "RemoteDataWarehouse"]
