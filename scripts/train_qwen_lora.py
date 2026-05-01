@@ -28,22 +28,28 @@ Usage:
 CLI:
     --base-path PATH    HF AutoModelForCausalLM-loadable path or repo id
     --data PATH         parquet from prep_alpaca_qwen.py (input_ids, loss_mask)
-    --out PATH          adapter + merged ckpt directory
+    --out / --output-dir PATH    adapter + merged ckpt directory
     --steps N           total training steps (5000 ≈ 1 epoch on 100K examples)
     --bs N              batch size (8 fits A800 80GB at seq=1024)
     --lr FLOAT          peak learning rate (2e-4 standard for r=16 LoRA)
-    --rank N            LoRA rank (default 16)
-    --alpha N           LoRA alpha (default 32, i.e. 2× rank)
+    --rank / --lora-r N         LoRA rank (default 16)
+    --alpha / --lora-alpha N    LoRA alpha (default 32, i.e. 2× rank)
     --max-seq N         max sequence length (default 1024)
     --warmup N          linear warmup steps (default 100)
     --log-every N       loss log frequency (default 50)
     --sample-every N    dump 5 EN + 5 ZH samples (default 500)
     --save-every N      checkpoint adapter (default 1000)
     --smoke             use fake mini-Qwen + tiny mock dataset, 5 steps
+                        (NEVER touches network — even if --base-path is unset)
+    --print-only        print resolved config (target params, lr, dataset,
+                        ckpt path) and exit — sanity check for rental
+                        orchestration before burning GPU time.
 
-Output artifacts under --out:
-    adapter/                LoRA adapter (peft .save_pretrained or numpy)
-    merged.pt               merged base+LoRA ckpt for fast inference
+Output artifacts under --out (a.k.a. --output-dir):
+    adapter/                LoRA adapter (peft .save_pretrained or lora_state.pt)
+    merged.pt               merged base+LoRA weights (inline path only)
+    final.pt                unified ckpt — {model, config, framework, lora,
+                            vocab} — the ckpt chat_eval_gate consumes
     tokenizer/              tokenizer files (so REPL only needs --out)
     train.log               step / loss / lr / sample dumps
     config.json             reproducibility metadata
@@ -279,6 +285,7 @@ class TrainCfg:
     sample_every: int = 500
     save_every: int = 1000
     smoke: bool = False
+    print_only: bool = False
 
 
 def cosine_lr(step: int, peak: float, total: int, warmup: int) -> float:
@@ -339,15 +346,27 @@ def sample_canned(model, tok, device: str, max_new: int = 32) -> str:
 
 
 def save_artifacts(model, tok, cfg: TrainCfg, step: int, log_path: Path) -> None:
-    """Save adapter (peft format if available, else numpy), merged ckpt,
-    tokenizer, and config."""
+    """Save adapter (peft format if available, else inline-LoRA dict),
+    merged ckpt, tokenizer, config, and a unified ``final.pt`` for chat_demo.
+
+    ``final.pt`` shape (matches MASTER_PLAN §6 P12 contract):
+        {
+            "model":      state_dict (LoRA-only when peft, full merged when inline),
+            "config":     asdict(TrainCfg) + {step, framework, vocab, n_trainable},
+            "framework":  "peft" | "inline",
+            "lora":       {"rank": ..., "alpha": ..., "targets": [...]},
+            "vocab":      tok.vocab_size,
+        }
+    """
     out = Path(cfg.out)
     out.mkdir(parents=True, exist_ok=True)
     adapter_dir = out / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)
 
+    framework = "peft" if (HAS_PEFT and isinstance(model, PeftModel)) else "inline"
+
     # adapter
-    if HAS_PEFT and isinstance(model, PeftModel):
+    if framework == "peft":
         try:
             model.save_pretrained(str(adapter_dir))
         except Exception as e:
@@ -358,7 +377,7 @@ def save_artifacts(model, tok, cfg: TrainCfg, step: int, log_path: Path) -> None
               if "lora_A" in k or "lora_B" in k}
         torch.save(sd, adapter_dir / "lora_state.pt")
 
-    # merged base+LoRA (for fast inference w/o peft)
+    # merged base+LoRA (for fast inference w/o peft) — inline path only
     try:
         merged_state = {}
         for name, mod in model.named_modules():
@@ -375,18 +394,121 @@ def save_artifacts(model, tok, cfg: TrainCfg, step: int, log_path: Path) -> None
     except Exception:
         pass
 
-    # config
+    # vocab from tokenizer (smoke: 256, real: 151643/151936 from Qwen)
+    vocab = int(getattr(tok, "vocab_size", 0) or 0)
+    n_tr = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
     cfg_dict = asdict(cfg)
     cfg_dict["step"] = step
-    cfg_dict["framework"] = "peft" if (HAS_PEFT and isinstance(model, PeftModel)) else "inline"
+    cfg_dict["framework"] = framework
+    cfg_dict["vocab"] = vocab
+    cfg_dict["n_trainable"] = n_tr
+
+    # config.json (human-readable)
     (out / "config.json").write_text(
         json.dumps(cfg_dict, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+    # final.pt — unified ckpt that chat_demo / chat_eval_gate can load with one call.
+    # Saves only LoRA params (peft) or merged delta + LoRA dict (inline) so file
+    # stays adapter-sized (≈MB) instead of the full base model.
+    try:
+        if framework == "peft":
+            lora_sd = {k: v.detach().cpu()
+                       for k, v in model.state_dict().items()
+                       if "lora_" in k}
+            payload_model = lora_sd
+        else:
+            payload_model = {
+                "lora": {k: v.detach().cpu()
+                         for k, v in model.state_dict().items()
+                         if "lora_A" in k or "lora_B" in k},
+                "merged": {k: v for k, v in (merged_state or {}).items()},
+            }
+        payload = {
+            "model": payload_model,
+            "config": cfg_dict,
+            "framework": framework,
+            "lora": {
+                "rank": cfg.rank,
+                "alpha": cfg.alpha,
+                "targets": ["q_proj", "k_proj", "v_proj", "o_proj"],
+            },
+            "vocab": vocab,
+        }
+        torch.save(payload, out / "final.pt")
+    except Exception as e:
+        (out / "final_save_error.txt").write_text(repr(e), encoding="utf-8")
+
     with log_path.open("a", encoding="utf-8") as f:
-        f.write(f"[save] step={step} -> {out}\n")
+        f.write(f"[save] step={step} framework={framework} vocab={vocab} "
+                f"trainable={n_tr:,} -> {out}\n")
+
+
+def _print_resolved_plan(cfg: TrainCfg) -> dict:
+    """Print the resolved training plan without touching disk/network/GPU.
+
+    Used by --print-only as a sanity check before rental orchestration burns
+    GPU time. Mirrors what ``train()`` would do but does NOT load the model,
+    write logs, allocate optimizer state, or step.
+    """
+    device = "cuda (would use)" if torch.cuda.is_available() and not cfg.smoke else "cpu"
+    targets = ("q_proj", "k_proj", "v_proj", "o_proj")
+    final_pt = str(Path(cfg.out) / "final.pt")
+    plan = {
+        "mode":           "smoke" if cfg.smoke else "real",
+        "framework":      ("peft" if HAS_PEFT and not cfg.smoke and HAS_TRANSFORMERS
+                           else "inline"),
+        "have_torch":     True,
+        "have_peft":      HAS_PEFT,
+        "have_transformers": HAS_TRANSFORMERS,
+        "have_pyarrow":   HAS_PYARROW,
+        "device":         device,
+        "base_path":      cfg.base_path,
+        "data":           cfg.data,
+        "out_dir":        cfg.out,
+        "final_ckpt":     final_pt,
+        "steps":          cfg.steps,
+        "batch_size":     cfg.bs,
+        "max_seq":        cfg.max_seq,
+        "lr_peak":        cfg.lr,
+        "lr_warmup":      cfg.warmup,
+        "lora_rank":      cfg.rank,
+        "lora_alpha":     cfg.alpha,
+        "lora_targets":   list(targets),
+        "log_every":      cfg.log_every,
+        "save_every":     cfg.save_every,
+        "sample_every":   cfg.sample_every,
+        "expected_artifacts": [
+            f"{cfg.out}/adapter/  (peft save_pretrained or lora_state.pt)",
+            f"{cfg.out}/merged.pt  (inline path only)",
+            f"{cfg.out}/final.pt   (unified ckpt for chat_eval_gate)",
+            f"{cfg.out}/tokenizer/ (so REPL only needs --out)",
+            f"{cfg.out}/config.json + train.log",
+        ],
+        "next_step": (
+            "python scripts/chat_eval_gate.py --ckpt "
+            f"{final_pt} --threshold 0.6"
+        ),
+    }
+    print("=" * 60)
+    print("[train_qwen_lora] --print-only: resolved plan")
+    print("=" * 60)
+    for k, v in plan.items():
+        if isinstance(v, list):
+            print(f"  {k}:")
+            for item in v:
+                print(f"      - {item}")
+        else:
+            print(f"  {k}: {v}")
+    print("=" * 60)
+    return plan
 
 
 def train(cfg: TrainCfg) -> dict:
+    if cfg.print_only:
+        return _print_resolved_plan(cfg)
+
     out = Path(cfg.out)
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "train.log"
@@ -539,19 +661,24 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="train_qwen_lora")
     ap.add_argument("--base-path", default=os.environ.get("QWEN_BASE_PATH", "Qwen/Qwen2.5-0.5B-Instruct"))
     ap.add_argument("--data", default="data/sft/alpaca_combined.parquet")
-    ap.add_argument("--out", default=str(Path.home() / ".synapforge" / "release" / "qwen_lora_v0"))
+    # accept both --out (legacy) and --output-dir (runbook); whichever is set wins.
+    ap.add_argument("--out", "--output-dir", dest="out",
+                    default=str(Path.home() / ".synapforge" / "release" / "qwen_lora_v0"))
     ap.add_argument("--steps", type=int, default=5000)
     ap.add_argument("--bs", type=int, default=8)
     ap.add_argument("--lr", type=float, default=2e-4)
-    ap.add_argument("--rank", type=int, default=16)
-    ap.add_argument("--alpha", type=int, default=32)
+    # accept both --rank/--alpha (legacy) and --lora-r/--lora-alpha (runbook).
+    ap.add_argument("--rank", "--lora-r", dest="rank", type=int, default=16)
+    ap.add_argument("--alpha", "--lora-alpha", dest="alpha", type=int, default=32)
     ap.add_argument("--max-seq", type=int, default=1024)
     ap.add_argument("--warmup", type=int, default=100)
     ap.add_argument("--log-every", type=int, default=50)
     ap.add_argument("--sample-every", type=int, default=500)
     ap.add_argument("--save-every", type=int, default=1000)
     ap.add_argument("--smoke", action="store_true",
-                    help="run with mock Qwen + mock data (5 steps)")
+                    help="run with mock Qwen + mock data (5 steps); zero net I/O")
+    ap.add_argument("--print-only", action="store_true",
+                    help="print resolved plan and exit (sanity check; no GPU/disk I/O)")
     args = ap.parse_args(argv)
 
     if args.smoke:
@@ -568,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
         rank=args.rank, alpha=args.alpha, max_seq=args.max_seq,
         warmup=args.warmup, log_every=args.log_every,
         sample_every=args.sample_every, save_every=args.save_every,
-        smoke=args.smoke,
+        smoke=args.smoke, print_only=args.print_only,
     )
     train(cfg)
     return 0

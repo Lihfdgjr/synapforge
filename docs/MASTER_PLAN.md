@@ -132,7 +132,7 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 | Triple-backup | `scripts/triple_backup_daemon.py` | tripwire 5-cycle warn | daemon | running |
 | Honest eval pipeline | `scripts/auto_eval_daemon.py` | per-ckpt 5+5 chat | runs on every ckpt | running |
 | Phase manager | `scripts/phase_manager.py` | log → `.phase` JSON | daemon | running |
-| Plan C LoRA Qwen | `scripts/train_qwen_lora.py` | `--smoke` flag | needs rental run | code done, untrained |
+| Plan C LoRA Qwen | `scripts/train_qwen_lora.py` | `--smoke` + `--print-only` | `qwen_lora_chat_repl.py` | code done, smoke verified, real run pending (see `PLAN_C_RUNBOOK.md`) |
 
 ---
 
@@ -160,9 +160,19 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Status**: not yet observed in training. Mitigation TBD (clamp curiosity reward, or
   schedule curiosity to ramp up only as KD weight ramps down).
 
-### P5. Plan C LoRA Qwen — never run on rental
-- **Risk**: insurance demo is theoretical. If 100M training fails phase 3, no fallback.
-- **Action**: ≤ 1 hour LoRA smoke run on rental this week.
+### P5. Plan C LoRA Qwen — runbook done, real run pending
+- **Risk**: insurance demo was theoretical. If 100M training fails phase 3, no fallback.
+- **Status (2026-05-01)**: trainer hardened — `--print-only` flag added, peft+inline LoRA
+  fallback both verified on smoke, unified `final.pt` ckpt now saved with `{model, config,
+  framework, lora, vocab}` payload (matches §6 P12 contract), `--lora-r/--lora-alpha/
+  --output-dir` aliases match rental orchestration scripts, `chat_eval_gate.py` auto-detects
+  Plan C ckpts via `framework` field and routes to `qwen_lora_chat_repl` loader. Local
+  smoke verified: `python scripts/train_qwen_lora.py --smoke --print-only` and
+  `--smoke` (5 steps, no GPU/peft/qwen weights needed). See `docs/PLAN_C_RUNBOOK.md`.
+- **Action**: ≤ 1 hour LoRA real run on rental — runbook has 4 steps (print-only
+  sanity → smoke → 200-step real → chat_eval_gate ≥ 0.6) plus a fix-and-rerun
+  decision tree. Once `pass_rate >= 0.6` and triple-backup picks up `final.pt`,
+  mark P5 RESOLVED.
 
 ### P6. NeuroMCP density saturation at ~28%
 - **Status**: empirically observed in v4.1 runs. Not a bug — might be the natural sparsity.
