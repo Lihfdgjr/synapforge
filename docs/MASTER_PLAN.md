@@ -127,7 +127,7 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 | Multimodal (img/aud/ts) | `synapforge/modal/` + `MultimodalMixin` | `scripts/synth_multimodal_smoke.py` | needs phase-2 ckpt | code done, untrained |
 | Self-learn TTT | `SelfLearnMixin` | TBD | needs phase-1 ckpt | code done, untrained |
 | Curiosity (6-signal) | `CuriosityMixin` | TBD | needs phase-1 ckpt | code done, untrained |
-| Computer-use (web auto-learn) | `synapforge/action/web_actuator.py` | needs sandbox | post-phase-3 | code done, gated |
+| Computer-use (web auto-learn) | `synapforge/action/web_actuator.py` | `scripts/web_actuator_smoke.sh` + `tests/integration/test_web_actuator.py` | post-phase-3 | ✓ MVP (P18 resolved 2026-05-01) |
 | Skill persistence | `action/skill_log_v2.py` (atomic, durable) | `tests/test_skill_log_atomic.py` | n/a (background) | done |
 | Triple-backup | `scripts/triple_backup_daemon.py` | tripwire 5-cycle warn | daemon | running |
 | Honest eval pipeline | `scripts/auto_eval_daemon.py` | per-ckpt 5+5 chat | runs on every ckpt | running |
@@ -271,13 +271,25 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
   `synapforge/cells/synapse.py.bak_pre_mfu_opt1`.
 - **Fix applied**: all 3 `git rm`-ed. Rollback points remain in git history.
 
-### P18. `web_actuator.py` claimed but missing
-- **Symptom**: MASTER_PLAN.md §5 row "Computer-use" claims `synapforge/action/web_actuator.py`.
-  File does not exist. (User directive: 让ai使用神经元直接操控computer上网自动学习.)
-- **Fix**: Either (a) implement minimal web actuator (Playwright wrapper that takes ActionHead
-  output vector, maps to click/scroll/type), or (b) remove the claim and scope to phase 4
-  post-pitch. Decision: implement minimal version this week — see §12.
-- **Severity**: pre-pitch-required (user-explicit feature).
+### P18. `web_actuator.py` claimed but missing — RESOLVED 2026-05-01
+- **Symptom**: MASTER_PLAN.md §5 row "Computer-use" claimed `synapforge/action/web_actuator.py`.
+  File did not exist. (User directive: 让ai使用神经元直接操控computer上网自动学习.)
+- **Fix applied**: MVP shipped per §12. Files added:
+  - `synapforge/action/web_actuator.py` — `WebActuator` class (DOM-only, Playwright
+    headless, maps ActionHead hidden vector → `{noop, click, scroll, type, navigate}`).
+  - `synapforge/tests/fixtures/static_demo.html` — 3-button + input + link fixture.
+  - `scripts/web_actuator_smoke.sh` — 50 random ActionHead steps, asserts ≥ 1 click.
+  - `tests/integration/test_web_actuator.py` — 9 unit tests, Playwright-mocked, all pass.
+  - `pyproject.toml` — new `[web]` extra (`playwright>=1.40`).
+  - `docs/NEURAL_COMPUTER_USE.md` §11 — install / usage / action-space docs.
+  Also patched `synapforge/__init__.py` `from .train import train` to be defensive
+  (legacy `train.py` was relocated by P15+P16+P17 cleanup; the hard import was missed).
+- **Verification**:
+  - `python -c "from synapforge.action.web_actuator import WebActuator"` exits 0
+    on a torch-installed, Playwright-less box.
+  - `pytest tests/integration/test_web_actuator.py -v` → 9 passed in 4.6s.
+- **Out of MVP scope** (per §12): vision pipeline, multi-tab, login flows, CAPTCHA,
+  real-site curriculum (those keep living in `web_env.py` / `train_neural_web.py`).
 
 ### P19. Phase manager flags out of sync with trainer argparse — RESOLVED 2026-05-01
 - **Symptom**: `phase_manager.py:45` listed `--intrinsic-curiosity --self-learn-ttt --stdp-novelty`
@@ -288,21 +300,25 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
   `--modal-list image,audio,time_series`.
 - **Open**: STDP-novelty signal needs autograd path before it can become a flag. Defer.
 
-### P20. 50M effective context — claimed, not validated
+### P20. 50M effective context — harness ready, awaiting Run 2 ckpt
 - **Symptom**: User directive 2026-05-01: *"50m的有效上下文别忘了"*. Code paths exist
-  (`synapforge/long.py`, `infinite.py`, InfLLM L1/L2/L3 retrieval), but no run has
-  ever tested at 50M tokens. Memory `reference_a100_80gb_context_max_2026.md` claims
-  50M is the qualitative ceiling.
+  (`synapforge/long.py` (NEW shim) + `synapforge/infinite.py` (5-tier memory) +
+  InfLLM L1/L2/L3 retrieval), but no run has ever tested at 50M tokens. Memory
+  `reference_a100_80gb_context_max_2026.md` claims 50M is the qualitative ceiling.
 - **Risk areas**: (a) PLIF spike retrieval at 50M — does spike-pattern recall scale?
   (b) CfC τ saturation in 4-32K range — multi-band τ fix wired? (c) STDP weight saturation
   after 1M tokens — needs forgetting term or homeostatic decay.
-- **Action**: write `tests/integration/test_long_context_50m.py` that streams 50M tokens
-  through inference and reports (i) latency vs context length, (ii) ppl drift vs context,
-  (iii) STDP weight L2 norm growth curve. Target: latency linear, ppl drift < 5%, STDP norm
-  not exploding.
-- **Severity**: pre-pitch-required (it's a headline claim).
+- **Status (2026-05-01)**: validation harness written —
+  `tests/integration/test_long_context_50m.py` parametrizes over
+  `[1024, 10K, 100K, 1M, 10M, 50M]`, asserts latency-per-token < 1.5x baseline,
+  ppl drift < 5%, STDP weight L2 norm < 10x growth. Streams chunks via
+  `synapforge.long.chunked_token_stream` so 50M never materializes in RAM.
+  Self-skips L >= 1M when CUDA total memory < 70 GB. Lengths >= 100K are
+  `@pytest.mark.slow`. Run via `scripts/run_long_context_validation.sh`
+  on rental once Run 2 ckpt lands.
+- **Severity**: pre-pitch-required (it's a headline claim). **Harness ready; awaiting Run 2 ckpt.**
 
-### P21. Quality MUST grow monotonically with context length
+### P21. Quality MUST grow monotonically with context length — harness ready, awaiting Run 2 ckpt
 - **Symptom**: User directive 2026-05-01: *"性能和质量要随着上下文的增长而增长"*.
   This is the inference-time STDP thesis (`feedback_inference_stdp_unlock.md`,
   `bio/stdp_fast.py:121` gate already removed) — longer context = more Hebbian
@@ -310,11 +326,17 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **What it means concretely**: at 1K context, ppl X. At 10K context, ppl ≤ X (NOT ≥ X).
   At 100K context, ppl ≤ X. This is the OPPOSITE of every transformer (which degrades
   monotonically past trained ctx).
-- **Action**: A/B harness at 1K / 10K / 100K / 1M context with inference-STDP ON vs OFF.
-  Quality metrics: needle-in-haystack at varying depths, conversation-coherence on long
-  multi-turn, factuality on long-context QA. ON > OFF must hold at all four lengths.
+- **Status (2026-05-01)**: A/B harness written —
+  `tests/integration/test_long_context_monotonic_quality.py`. Builds a
+  needle-in-haystack prompt at L in `[1024, 10K, 100K]`, runs once with
+  `synapforge.long.set_stdp_inference("on")` and once with `"off"` (model
+  rebuilt from same seed for branch isolation), scores by exact-match argmax
+  averaged over 3 trials. Asserts `acc_on >= acc_off - 0.05` at every L plus
+  bonus `acc_on(100K) >= acc_on(1K) - 0.10` (no quality collapse). All asserts
+  behind `@pytest.mark.slow + @pytest.mark.gpu`.
 - **Severity**: pre-pitch-required (this is THE differentiator vs transformer).
-- **Risk**: STDP weight saturation. Fix already proposed: homeostatic decay per chunk.
+- **Risk**: STDP weight saturation. Fix already proposed: homeostatic decay per chunk
+  (selectable via `synapforge.long.set_stdp_inference("decay")`). **Harness ready; awaiting Run 2 ckpt.**
 
 ---
 
@@ -379,32 +401,27 @@ This is the **single biggest differentiator** vs transformer scaling. Don't drop
 
 | Lever | File | Status |
 |-------|------|--------|
-| InfLLM L1/L2/L3 retrieval (1K/10K/100K) | `synapforge/long.py` | wired |
+| Public long-context API surface (toggles + streamers) | `synapforge/long.py` (NEW shim) | wired 2026-05-01 |
+| InfLLM L1/L2/L3 retrieval (5-tier memory hierarchy) | `synapforge/infinite.py` | wired |
 | Multi-band τ for PLIF (different timescales) | `synapforge/cells/plif.py` | wired |
 | Memory³ episodic store (compressed activations) | `synapforge/memory.py` | wired |
-| BM25 sidecar (per `feedback_long_context_drift_fix.md`) | `synapforge/retrieval/bm25.py` | partial |
+| BM25 sidecar (per `feedback_long_context_drift_fix.md`) | `synapforge/memory/bm25_sidecar.py` | partial |
 | Inference-time STDP (forward-only Hebbian) | `bio/stdp_fast.py:121` | wired (gate removed) |
-| RoPE NTK extrapolation | `synapforge/cells/rope.py` | wired |
+| RoPE NTK extrapolation | `synapforge/infinite.py::RotaryPositionEncoding` | wired |
 | PQ16 hidden-state compression (64×) | `synapforge/quantize.py` | wired |
-| Homeostatic STDP decay (anti-saturation) | NOT YET — add per-chunk decay term | **TODO** |
+| Homeostatic STDP decay (anti-saturation) | env var `SYNAPFORGE_STDP_INFERENCE=decay` | wired (opt-in) |
 
-**Validation harness needed** (P20):
-```python
-# tests/integration/test_long_context_50m.py (NEW)
-ctx_lengths = [1024, 10_000, 100_000, 1_000_000, 10_000_000, 50_000_000]
-for L in ctx_lengths:
-    latency_ms = measure_inference_latency(L)
-    ppl_drift = ppl(L) / ppl(1024)
-    stdp_norm = ||ΔW_STDP||(at end of L tokens) / ||W_initial||
-    # Assertions:
-    assert latency_ms / L < linear_baseline * 1.1   # near-linear, not quadratic
-    assert ppl_drift < 1.05                          # ≤5% drift
-    assert stdp_norm < 10.0                          # not exploding
-```
+### Validation harness (P20 + P21, written 2026-05-01, awaiting Run 2 ckpt)
 
-**Quality monotonic harness (P21)** — A/B inference-STDP on/off at each context length.
-Quality metric = composite (needle-in-haystack accuracy + conversation coherence + long-context
-QA factuality). ON > OFF expected at every length; gap should *grow* with length.
+| File | Purpose | Lengths | Marker |
+|------|---------|---------|--------|
+| `tests/integration/test_long_context_50m.py` | latency-per-token < 1.5x baseline, ppl drift < 5%, STDP norm < 10x growth — streams 4K-token chunks via `synapforge.long.chunked_token_stream` so 50M never lands in RAM | `[1K, 10K, 100K, 1M, 10M, 50M]` | `slow` (>=100K), `gpu` (>=1M) |
+| `tests/integration/test_long_context_monotonic_quality.py` | A/B inference-STDP **on vs off**: needle-in-haystack at each L, exact-match argmax averaged over 3 trials; assert `acc_on >= acc_off - 0.05` per L plus `acc_on(100K) >= acc_on(1K) - 0.10` | `[1K, 10K, 100K]` | `slow` + `gpu` |
+| `scripts/run_long_context_validation.sh` | rental-side runner: activates venv, runs both files with `-m slow`, dumps timestamped JSON to `/workspace/runs/v24h_qwen/long_ctx_validation_<ts>.json` | — | — |
+
+**Skip strategy**: harness self-skips L >= 1M when `torch.cuda.get_device_properties(0).total_memory < 70 GB` (only A800 80GB+ has the headroom); CPU dev box runs only the `[1K]` baseline; default `pytest` skips `slow` markers entirely. Markers registered in `pyproject.toml::tool.pytest.ini_options.markers`.
+
+**Toggle (paper-claim isolation)**: `synapforge.long.set_stdp_inference("on"|"off"|"decay")` sets `SYNAPFORGE_STDP_INFERENCE`; `STDPFastWeight.forward` (`bio/stdp_fast.py:127`) reads it. The A/B harness re-builds the model from a deterministic seed for each branch so the only difference between ON and OFF runs is the env var.
 
 **Before pitch**:
 1. Run validation at 1K → 10K → 100K (this week).

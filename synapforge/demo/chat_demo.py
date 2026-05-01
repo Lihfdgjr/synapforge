@@ -47,8 +47,27 @@ def _default_recorded() -> Path:
     return Path(__file__).resolve().parent / "chat_recorded.json"
 
 
+# Fallback architecture values used when the ckpt has no "config" dict
+# (legacy ckpts written before P12 / 2026-05-01). Update these together
+# with `train_100m_kd.py::MODEL_*` constants if the canonical architecture
+# ever changes — but the right path is always to write a new ckpt that
+# carries its own config dict.
+_FALLBACK_CFG = {
+    "vocab": 151936, "d": 512, "n_layers": 10, "loop_depth": 1,
+    "max_seq": 2048, "ffn_ratio": 8.0, "sparsity": 0.95,
+    "dropout": 0.0, "tie_lm_head": True,
+}
+
+
 def _try_load_live(ckpt: str, tokenizer_path: str | None):
-    """Best-effort load of model + tokenizer. Returns (model, tok) or None."""
+    """Best-effort load of model + tokenizer. Returns (model, tok) or None.
+
+    The ckpt is expected to carry a ``"config"`` dict written by the trainer
+    (see ``train_100m_kd.py::_build_config_dict``). If absent (legacy ckpt)
+    we fall back to ``_FALLBACK_CFG`` and emit a WARNING so the demo doesn't
+    silently load garbage when architecture drifts. P12 — see
+    docs/MASTER_PLAN.md §6.
+    """
     if not ckpt or not Path(ckpt).is_file():
         return None
     try:
@@ -67,17 +86,42 @@ def _try_load_live(ckpt: str, tokenizer_path: str | None):
         tok.pad_token = tok.eos_token
 
     import torch
+    raw = torch.load(ckpt, map_location="cpu")
+    if isinstance(raw, dict) and "config" in raw and isinstance(raw["config"], dict):
+        cfg = dict(_FALLBACK_CFG)
+        cfg.update(raw["config"])  # ckpt config wins
+    else:
+        cfg = dict(_FALLBACK_CFG)
+        print(
+            f"[chat_demo] WARNING: ckpt has no config; using fallback values "
+            f"d={cfg['d']} n_layers={cfg['n_layers']} loop_depth={cfg['loop_depth']} "
+            f"ffn_ratio={cfg['ffn_ratio']} sparsity={cfg['sparsity']} "
+            f"max_seq={cfg['max_seq']} vocab={cfg['vocab']} "
+            f"tie_lm_head={cfg['tie_lm_head']} -- shape drift may cause garbage output"
+        )
+
     model = SynapForge100M(
-        vocab=151936, d=512, n_layers=10, loop_depth=1, max_seq=2048,
-        ffn_ratio=8.0, sparsity=0.95, dropout=0.0, tie_lm_head=True,
+        vocab=int(cfg["vocab"]),
+        d=int(cfg["d"]),
+        n_layers=int(cfg["n_layers"]),
+        loop_depth=int(cfg["loop_depth"]),
+        max_seq=int(cfg["max_seq"]),
+        ffn_ratio=float(cfg["ffn_ratio"]),
+        sparsity=float(cfg["sparsity"]),
+        dropout=float(cfg["dropout"]),
+        tie_lm_head=bool(cfg["tie_lm_head"]),
     )
-    sd = torch.load(ckpt, map_location="cpu")
-    if isinstance(sd, dict) and "model" in sd:
-        sd = sd["model"]
+    sd = raw["model"] if (isinstance(raw, dict) and "model" in raw) else raw
     try:
-        model.load_state_dict(sd, strict=False)
+        missing, unexpected = model.load_state_dict(sd, strict=False)
     except Exception:
         return None
+    if len(missing) + len(unexpected) > 5:
+        print(
+            f"[chat_demo] WARNING: {len(missing)} missing, "
+            f"{len(unexpected)} unexpected keys -- ckpt may not match model "
+            f"architecture (cfg from ckpt: {'yes' if 'config' in (raw if isinstance(raw, dict) else {}) else 'no'})"
+        )
     model.eval()
     return model, tok
 

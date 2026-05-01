@@ -87,6 +87,42 @@ GRAD_CLIP = 1.0
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
+# Architecture constants used to build the model. These are SOURCE OF TRUTH:
+# trainer-side and persisted into every ckpt's "config" dict so the loader
+# (chat_demo.py / chat_repl.py) can reconstruct the exact model without
+# guessing. P12 — see docs/MASTER_PLAN.md §6.
+MODEL_VOCAB = 151936
+MODEL_D = 512
+MODEL_N_LAYERS = 10
+MODEL_LOOP_DEPTH = 1
+MODEL_FFN_RATIO = 8.0
+MODEL_SPARSITY = 0.95
+MODEL_DROPOUT = 0.0
+MODEL_TIE_LM_HEAD = True
+
+
+def _build_config_dict(args) -> dict:
+    """Build the architecture-config dict persisted alongside every ckpt.
+
+    Loader (chat_demo / chat_repl) reads this via ckpt["config"] and
+    rebuilds the model with the exact shapes; falls back to its own
+    hardcoded defaults if the key is missing (legacy ckpts). See P12 in
+    docs/MASTER_PLAN.md §6.
+    """
+    return {
+        "vocab": MODEL_VOCAB,
+        "d": MODEL_D,
+        "n_layers": MODEL_N_LAYERS,
+        "loop_depth": MODEL_LOOP_DEPTH,
+        # max_seq is what the trainer was actually built with -- not the arg
+        # default, since args.max_seq may not exist on this trainer.
+        "max_seq": SEQ_LEN,
+        "ffn_ratio": MODEL_FFN_RATIO,
+        "sparsity": MODEL_SPARSITY,
+        "dropout": MODEL_DROPOUT,
+        "tie_lm_head": MODEL_TIE_LM_HEAD,
+    }
+
 
 def _log(msg: str) -> None:
     """Module-level log shim. main() rebinds a closure that ALSO appends to
@@ -351,8 +387,10 @@ def main() -> int:
 
     # ---------------- model ----------------
     model = build_synapforge_100m(
-        vocab=151936, d=512, n_layers=10, loop_depth=1,
-        max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
+        vocab=MODEL_VOCAB, d=MODEL_D, n_layers=MODEL_N_LAYERS,
+        loop_depth=MODEL_LOOP_DEPTH, max_seq=SEQ_LEN,
+        ffn_ratio=MODEL_FFN_RATIO, sparsity=MODEL_SPARSITY,
+        dropout=MODEL_DROPOUT,
         use_grad_checkpoint=args.grad_checkpoint,
     )
     n_params = model.num_parameters()
@@ -708,6 +746,7 @@ def main() -> int:
                 "loss": float(loss.item()),
                 "n_params": n_params,
                 "lr": cur_lr,
+                "config": _build_config_dict(args),
             }, ckpt_path)
             _log(f"saved ckpt {ckpt_path}")
 
@@ -740,6 +779,7 @@ def main() -> int:
                                 "lr": cur_lr,
                                 "phase_id": new_id,
                                 "phase_name": payload.get("phase_name"),
+                                "config": _build_config_dict(args),
                             }, ckpt_path)
                             _log(f"[phase-aware] saved ckpt {ckpt_path}")
                         except Exception as exc:
@@ -809,6 +849,7 @@ def main() -> int:
         "optim_state": optim.state_dict(),
         "step": n_steps,
         "n_params": n_params,
+        "config": _build_config_dict(args),
     }, os.path.join(out_dir, "final.pt"))
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)

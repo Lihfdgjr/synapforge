@@ -36,18 +36,54 @@ INSTRUCTION_TEMPLATE = (
 )
 
 
+# Fallback architecture values used when the ckpt has no "config" dict
+# (legacy ckpts written before P12 / 2026-05-01). The trainer
+# (`train_100m_kd.py::_build_config_dict`) is the source of truth for new
+# ckpts. P12 — see docs/MASTER_PLAN.md §6.
+_FALLBACK_CFG = {
+    "d": 512, "n_layers": 10, "loop_depth": 1, "max_seq": 2048,
+    "ffn_ratio": 8.0, "sparsity": 0.95, "dropout": 0.0, "tie_lm_head": True,
+}
+
+
 def load_model(ckpt_path: str, vocab: int = 151936, device: str = "cuda"):
     from synapforge.model_100m import SynapForge100M
-    model = SynapForge100M(
-        vocab=vocab, d=512, n_layers=10, loop_depth=1, max_seq=2048,
-        ffn_ratio=8.0, sparsity=0.95, dropout=0.0, tie_lm_head=True,
-    )
+    raw = None
+    cfg = dict(_FALLBACK_CFG)
+    cfg["vocab"] = int(vocab)
     if ckpt_path and Path(ckpt_path).is_file():
-        sd = torch.load(ckpt_path, map_location=device)
-        if isinstance(sd, dict) and "model" in sd:
-            sd = sd["model"]
+        raw = torch.load(ckpt_path, map_location=device)
+        if isinstance(raw, dict) and "config" in raw and isinstance(raw["config"], dict):
+            cfg.update(raw["config"])  # ckpt config wins (incl. vocab)
+        else:
+            print(
+                f"[chat_repl] WARNING: ckpt has no config; using fallback values "
+                f"d={cfg['d']} n_layers={cfg['n_layers']} loop_depth={cfg['loop_depth']} "
+                f"ffn_ratio={cfg['ffn_ratio']} sparsity={cfg['sparsity']} "
+                f"max_seq={cfg['max_seq']} vocab={cfg['vocab']} "
+                f"tie_lm_head={cfg['tie_lm_head']} -- shape drift may cause garbage output"
+            )
+    model = SynapForge100M(
+        vocab=int(cfg["vocab"]),
+        d=int(cfg["d"]),
+        n_layers=int(cfg["n_layers"]),
+        loop_depth=int(cfg["loop_depth"]),
+        max_seq=int(cfg["max_seq"]),
+        ffn_ratio=float(cfg["ffn_ratio"]),
+        sparsity=float(cfg["sparsity"]),
+        dropout=float(cfg["dropout"]),
+        tie_lm_head=bool(cfg["tie_lm_head"]),
+    )
+    if raw is not None:
+        sd = raw["model"] if (isinstance(raw, dict) and "model" in raw) else raw
         missing, unexpected = model.load_state_dict(sd, strict=False)
         print(f"[chat] loaded {ckpt_path}: missing={len(missing)} unexpected={len(unexpected)}")
+        if len(missing) + len(unexpected) > 5:
+            print(
+                f"[chat_repl] WARNING: {len(missing)} missing, "
+                f"{len(unexpected)} unexpected keys -- ckpt may not match model "
+                f"architecture"
+            )
     else:
         print(f"[chat] WARN: ckpt {ckpt_path!r} not found, using RANDOM INIT (output will be garbage)")
     model.to(device).eval()

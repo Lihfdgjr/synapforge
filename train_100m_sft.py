@@ -48,6 +48,36 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 SEQ_LEN = 1024
 
+# Architecture defaults that aren't on the CLI but are passed through to
+# build_synapforge_100m. Persisted into ckpt["config"] so the loader
+# (chat_demo / chat_repl) can reconstruct the model exactly. P12 — see
+# docs/MASTER_PLAN.md §6.
+MODEL_FFN_RATIO = 8.0
+MODEL_SPARSITY = 0.95
+MODEL_DROPOUT = 0.0
+MODEL_TIE_LM_HEAD = True
+
+
+def _build_config_dict(args) -> dict:
+    """Build the architecture-config dict persisted alongside every ckpt.
+
+    Loader (chat_demo / chat_repl) reads this via ckpt["config"] and
+    rebuilds the model with the exact shapes; falls back to its own
+    hardcoded defaults if the key is missing (legacy ckpts). See P12 in
+    docs/MASTER_PLAN.md §6.
+    """
+    return {
+        "vocab": int(args.vocab),
+        "d": int(args.d),
+        "n_layers": int(args.n_layers),
+        "loop_depth": int(args.loop_depth),
+        "max_seq": int(args.max_seq),
+        "ffn_ratio": MODEL_FFN_RATIO,
+        "sparsity": MODEL_SPARSITY,
+        "dropout": MODEL_DROPOUT,
+        "tie_lm_head": MODEL_TIE_LM_HEAD,
+    }
+
 
 def _parse_args():
     p = argparse.ArgumentParser()
@@ -157,7 +187,8 @@ def main():
     model = build_synapforge_100m(
         vocab=args.vocab, d=args.d, n_layers=args.n_layers,
         loop_depth=args.loop_depth, max_seq=args.max_seq,
-        ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
+        ffn_ratio=MODEL_FFN_RATIO, sparsity=MODEL_SPARSITY,
+        dropout=MODEL_DROPOUT,
         use_grad_checkpoint=args.grad_checkpoint,
     )
     n_params = model.num_parameters()
@@ -280,10 +311,7 @@ def main():
                 "optim_state": optim.state_dict(),
                 "step": step,
                 "loss": float(loss.item()),
-                "config": {
-                    "vocab": args.vocab, "d": args.d, "n_layers": args.n_layers,
-                    "loop_depth": args.loop_depth, "max_seq": args.max_seq,
-                },
+                "config": _build_config_dict(args),
             }
             cur = float(loss.item())
             if cur < best_loss:
