@@ -503,7 +503,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.8: code data HumanEval+MBPP tokenizer (smoke + rental cmd)`.
 
 ## T3.9 — ARC-Easy / ARC-Challenge
-- [x] (02:52, PENDING_HASH, ARC tokenizer + 4 tests)
+- [x] (02:52, 3366934, ARC tokenizer + 4 tests)
 - **Status**: tokenizer script shipped. `scripts/tokenize_arc.py` (~280 LOC)
   fetches ARC-Easy + ARC-Challenge train+validation via
   `datasets.load_dataset("allenai/ai2_arc", "ARC-Easy"/"ARC-Challenge")`,
