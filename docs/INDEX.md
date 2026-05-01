@@ -18,6 +18,7 @@ If you want the warts-and-all picture, read **[HONEST_ASSESSMENT](HONEST_ASSESSM
 |-----|---------|---------|
 | [QUICKSTART.md](QUICKSTART.md) | Three paths in 30s / 5min / 1h. CPU smoke, then full setup, then rental + training. | 2026-05-01 |
 | [INVESTOR.md](INVESTOR.md) | The 30-second pitch + reproducible artifacts (`synapforge-demo all` runs in <2s on CPU). Cross-refs ARCHITECTURE, RFOLD_PAPER, NEUROMCP_UNIVERSAL. | 2026-05-01 |
+| [PROGRESS.md](PROGRESS.md) | Live training dashboard for Synap-1. One-line status + numbers table + run timeline + phase bar + next milestones. Refresh each session. | 2026-05-01 |
 
 ## Want to train it
 
