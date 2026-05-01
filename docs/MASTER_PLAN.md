@@ -1,6 +1,6 @@
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 2: + agent audit P11-P21, vocab fix, 50M context O10-O11)
+**Updated**: 2026-05-01 (revision 3: P14 mixed-device smoke test + docstring honesty)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -238,11 +238,20 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
   `torch.cuda.mem_get_info()`.
 - **Severity**: nice-to-have on A800.
 
-### P14. `parallel.py` Layer 2 (`place_mixed_device`) is orphan code
+### P14. `parallel.py` Layer 2 (`place_mixed_device`) is orphan code — RESOLVED 2026-05-01
 - **Symptom**: Documented as a 3-layer feature; only `examples/mixed_device_training.py`
-  calls it. Trainer uses only Layer 3 (DDP).
-- **Fix**: Either delete + update `INVESTOR.md` honesty section, or add 1-step smoke test.
-- **Severity**: nice-to-have / honesty.
+  called it; zero test coverage. Trainer uses only Layer 3 (DDP).
+- **Fix applied**: smoke test added — `tests/integration/test_parallel_mixed_device.py`
+  (4 tests). Verifies (a) CPU-only path produces a valid `MixedPlacement` with
+  `cpu_param_count > 0`, (b) docstring's "~40% off GPU" claim holds (toy hits
+  ~50%, above 30% lower bound), (c) default `cpu_module_names`
+  (`embed_tokens`, `lm_head`, `lm_logits`) place >95% of toy params on CPU,
+  (d) GPU path (`@pytest.mark.gpu`) places backbone on cuda:0 while
+  embed_tokens stays on cpu. All 4 pass on CPU-only Windows dev box (4.82s).
+  Docstring softened: 375M arithmetic now flagged as expected-not-measured.
+- **Status**: smoke tested, not benchmarked. End-to-end VRAM-savings claim on
+  real 375M shape still requires a rental run; deferred — function not on a
+  hot path for current single-A800 training.
 
 ### P15. `tests/` collects from two roots — RESOLVED 2026-05-01
 - **Symptom**: 15 `test_*.py` files inside `synapforge/` package + a separate `tests/` dir.
@@ -409,7 +418,8 @@ ssh -p 41614 root@117.74.66.77 \
 - BitNet b1.58 ternary edge build — code stub exists, not in 24h plan.
 - 3D world understanding — code stub exists, separate research stream.
 - Multi-node DDP — single A800 80GB is enough; layer 3 of `parallel.py` is for later.
-- Mobile/CPU inference — `parallel.py` mixed-device exists but not validated.
+- Mobile/CPU inference — `parallel.py` mixed-device smoke tested (P14) but
+  not benchmarked at 375M scale.
 
 ---
 

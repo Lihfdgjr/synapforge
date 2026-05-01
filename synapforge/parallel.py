@@ -10,9 +10,14 @@ Three layers, each independently usable:
   Layer 2 — Mixed CPU+GPU placement
     place_mixed_device(model) pushes embedding + lm_head to CPU (they're
     huge, parameter-heavy, low-FLOP) and backbone CfC/PLIF blocks to GPU
-    (compute-bound, small parameters). For a 375M model with 156M of
-    embedding/head, this moves ~40% of params off the GPU at the cost of
-    one PCIe transfer per step. Net win when GPU memory is tight.
+    (compute-bound, small parameters). Smoke test
+    (tests/integration/test_parallel_mixed_device.py) verifies the
+    placement mechanism on a toy model: with default cpu_module_names
+    >95% of params land on CPU; with only embed_tokens named, ~50%.
+    For a 375M LNN+SNN with embed+head ≈ 156M, the *expected* fraction
+    off the GPU is ~40% (arithmetic only — never yet measured end-to-end
+    on the real shape). Cost: one PCIe transfer per step. Net win when
+    GPU memory is tight. See MASTER_PLAN.md §6 P14.
 
   Layer 3 — Multi-node DDP
     init_distributed() picks gloo (CPU) / nccl (GPU) automatically and
@@ -102,10 +107,17 @@ def place_mixed_device(
 ) -> MixedPlacement:
     """Push named modules to CPU, the rest to GPU.
 
-    For a 375M LNN+SNN with embed=156M + head=tied + backbone=219M, this
-    moves ~40% of params off the GPU. The CPU module's forward incurs one
-    H2D copy of the activation (B*T*D ≈ 4MB at B=8 T=1024 D=1024) per step
-    — small relative to the freed VRAM.
+    For a 375M LNN+SNN with embed=156M + head=tied + backbone=219M, the
+    *expected* split moves ~40% of params off the GPU (arithmetic only —
+    not yet measured end-to-end on the real shape; see MASTER_PLAN.md
+    §6 P14). The CPU module's forward incurs one H2D copy of the
+    activation (B*T*D ≈ 4MB at B=8 T=1024 D=1024) per step — small
+    relative to the freed VRAM.
+
+    Smoke-tested in tests/integration/test_parallel_mixed_device.py:
+    placement mechanism + per-module device assignment + cpu_param_count
+    accounting. Both CPU-only fallback (gpu='cpu') and CUDA paths
+    covered.
 
     Pattern matching is exact-name on the top-level module attribute path
     (e.g., `model.embed_tokens`, `model.backbone.embed_tokens`). For
