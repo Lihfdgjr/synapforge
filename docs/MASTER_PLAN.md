@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 7: + P7 RESOLVED -- web_actuator real Playwright sandbox run, 100 steps in 6.97 s, 22 ok_clicks)
+**Updated**: 2026-05-01 (revision 8: + P22 RESOLVED -- phase_auto_relauncher.sh out-of-process watchdog, 6 tests passing)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -521,6 +521,41 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Severity**: pre-pitch-required (this is THE differentiator vs transformer).
 - **Risk**: STDP weight saturation. Fix already proposed: homeostatic decay per chunk
   (selectable via `synapforge.long.set_stdp_inference("decay")`). **Harness ready; awaiting Run 2 ckpt.**
+
+### P22. Phase-flip auto-relaunch on threshold crossing — RESOLVED 2026-05-01
+- **Symptom**: trainer's `--phase-aware` flag wrote `<run_dir>/.phase` JSON
+  on val ppl ≤ 250, but the human had to read it and manually restart the
+  trainer with `--self-learn-ttt --self-learn-k 8 --curiosity-weight 0.05
+  --phase-aware`. With unattended overnight runs that's a real gap — the
+  threshold trips, then sits there until somebody notices.
+- **Existing partial fix**: `scripts/relaunch_loop.sh` wraps the trainer
+  and catches exit code 101; works only if you started the trainer through
+  that wrapper. Doesn't help if the trainer's already running under
+  `systemd-run` or `setsid+disown`.
+- **Fix applied**: `scripts/phase_auto_relauncher.sh` (~180 LOC bash) is
+  an out-of-process watchdog. Polls `<run_dir>/.phase` every 60 s. On
+  phase change it (a) picks the newest `phase_change_step_*.pt` or
+  `step_*.pt`, (b) strips optim_state inline (stale Adam momentum kills
+  post-vocab-change warmstart), (c) SIGTERMs the current trainer with a
+  10 s grace then SIGKILL, (d) re-launches via `setsid + disown` with
+  the existing argv minus `--no-warmstart`, with `--warmstart` repointed
+  at the stripped ckpt, plus the new phase's flags. Anti-thrash guard:
+  no relaunch within 5 min of last restart. Refuses to start a trainer
+  that wasn't already running (operator must handle dead-trainer case).
+  Phase-1 flag string is locked to `phase_manager.PHASES[1]` (P19 fix);
+  a drift-guard test asserts they don't diverge.
+- **Verification**: `tests/integration/test_phase_auto_relauncher.py` —
+  6 tests, all passing on Windows dev box (3.6 s):
+  - `bash -n` syntax check
+  - dry-run on phase=1 `.phase` JSON detects change, builds correct argv
+    (drops `--no-warmstart`, repoints `--warmstart`, appends 4 phase-1
+    flags), persists `.par_last_phase` state file
+  - missing trainer PID -> logs "trainer not running" and skips
+  - no `.phase` file -> single poll, exits cleanly under TEST_MODE
+  - flag-string drift guard against `phase_manager.PHASES[1]`
+- **Docs**: `docs/RENTAL_OPS.md` §7 "Auto-relauncher" added with full
+  usage + safety guards. **Use one of `relaunch_loop.sh` or
+  `phase_auto_relauncher.sh`, not both.**
 
 ---
 

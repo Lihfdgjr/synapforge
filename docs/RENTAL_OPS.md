@@ -162,3 +162,60 @@ old logs if disk pressure becomes an issue (see also the
 
 If in doubt, run the launcher — it picks the best primitive available on
 the host and tells you which one it picked.
+
+---
+
+## 7. Auto-relauncher (phase-flip restart)
+
+P22 (MASTER_PLAN.md §6) RESOLVED 2026-05-01.
+
+The trainer's `--phase-aware` flag makes it write `<run_dir>/.phase` JSON
+on threshold crossings (e.g. val ppl ≤ 250 → phase 1). Two ways to act
+on that file:
+
+| Path | Trigger | When to use |
+|------|---------|-------------|
+| `scripts/relaunch_loop.sh` | wraps the trainer; trainer exits 101 on transition; outer loop respawns | you start the trainer through this wrapper from the start |
+| `scripts/phase_auto_relauncher.sh` | runs **alongside** the trainer; polls `.phase`; SIGTERMs+restarts | you already started the trainer some other way and want a watchdog |
+
+**Use one or the other**, not both — they would double-spawn.
+
+### `phase_auto_relauncher.sh` usage (P22)
+
+```bash
+bash scripts/phase_auto_relauncher.sh \
+  --run-dir /workspace/runs/v24h_qwen3 \
+  --interval 60
+```
+
+What it does on a phase change (N → N+1):
+1. Read `<run_dir>/.phase` (jq, fall back to python3).
+2. Pick the latest `phase_change_step_*.pt` (preferred) or newest `step_*.pt`.
+3. Strip optim_state inline (stale Adam momentum cripples post-vocab-change
+   warmstart — see `feedback_no_random_init_use_warmstart.md`). Output:
+   `<ckpt>_no_optim.pt`.
+4. SIGTERM current trainer (10 s grace, then SIGKILL).
+5. Re-launch with `setsid + disown` (per
+   `feedback_mcp_remote_ssh_quirks.md`), preserving the existing argv but:
+   - dropping `--no-warmstart`
+   - replacing `--warmstart`'s value with the stripped ckpt
+   - appending the new phase's flags (mirror of `phase_manager.PHASES`)
+6. Log every restart to `<run_dir>/phase_restart.log` with timestamp +
+   old phase + new phase + new flags + new PID.
+
+Safety guards:
+- 5-minute anti-thrash debounce (`PAR_THRASH_SEC`, default 300).
+- If trainer is dead (no PID), log + skip; do not auto-spawn.
+- Drop `--no-warmstart` so the new instance loads the just-saved ckpt.
+
+Phase 1 flag string (matches `scripts/phase_manager.py PHASES[1]`):
+```
+--self-learn-ttt --self-learn-k 8 --curiosity-weight 0.05 --phase-aware
+```
+
+Tests: `tests/integration/test_phase_auto_relauncher.py` covers `bash -n`
+syntax, dry-run argv composition, the no-PID safety guard, the no-`.phase`
+poll, and a drift-guard against `phase_manager.PHASES`.
+
+Combine with `scripts/launch_train_systemd.sh` so the watchdog itself
+runs as a systemd-run unit (you'll have two units: trainer + relauncher).
