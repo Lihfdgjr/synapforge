@@ -554,7 +554,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T5.2: per-layer spike rate logging flag + tests`.
 
 ## T5.3 — Gradient norm histogram per-layer
-- [x] (02:50, pending-hash, --log-grad-norm flag + 4 tests)
+- [x] (02:50, 70dc6a0, --log-grad-norm flag + 4 tests)
 - **Status**: shipped 2026-05-02 02:50 — `--log-grad-norm` (default OFF, opt-in for divergence root-cause work) emits a `grad_norm: tok_embed=X.XXXe+YY blocks_0=Y.YYYe+YY ... ln_f=W.WWWe+ZZ lm_head=V.VVVe+VV` line every 100 steps after `clip_grad_norm_` but BEFORE `optim.step()` (so the rendered numbers are exactly the post-clip gradients about to be applied). Pure-Python helpers `_compute_grad_norm_per_named_module(model)` (walks `model.named_children()` with one-level expansion of `nn.ModuleList` / `nn.ModuleDict`, skips modules whose every `p.grad is None`) and `_format_grad_norm_per_module(pairs)` (`.3e` scientific notation since grad norms span orders of magnitude). 4/4 tests pass on CPU at `tests/integration/test_log_grad_norm.py` (default_off / enabled_emits_grad_norm_log / handles_module_without_grads (full-skip, partial-grad, all-None) / format_scientific_notation).
 - **Steps**: log `param.grad.norm()` for each named module every 100 steps. Detect imbalance.
 - **Commit**: `auto-T5.3: per-named-module grad norm logging + tests`.
