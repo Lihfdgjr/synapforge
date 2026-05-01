@@ -611,8 +611,10 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: when phase manager fires, append `## Phase N reached at HH:MM (val ppl X, step N, ckpt path)` to `CHANGELOG.md`.
 
 ## T6.6 — Tweet draft per milestone
-- [ ] **Status**: pending
+- [x] (02:50, pending-hash, 8 tweet drafts for milestone triggers — STDP/R-fold/NeuroMCP/STDP-unlock/Phase1/Phase2/chat-grade/OSS-frame in docs/SOCIAL_DRAFTS.md, all 243-278 chars, ASCII-only, github.com link each)
+- **Status**: shipped 2026-05-02 02:50 — `docs/SOCIAL_DRAFTS.md` (~219 LOC) holds 8 tweet drafts mapped to milestone triggers per the H5 phase ladder. Each draft has: trigger condition, suggested tag (mostly none), tweet body in fenced code block, char count. All bodies verified ASCII-only (no emojis per CLAUDE.md memory `feedback_no_emojis`) and ≤280 chars (range 243-278). Each cites `github.com/Lihfdgjr/synapforge` or `github.com/Lihfdgjr/synapforge/releases`. Numbers cited (27% density at 200 trials, R-fold N=64 R=16 2.99x, val ppl 250/100/60 phase gates, 100M LNN+SNN, ppl X / chat_eval Y placeholders for tweet 7 to fill at trigger) match `docs/INVESTOR.md` and the H5 phase trigger table verbatim. Posting rules section reminds: do NOT auto-post, no GPT-4 parity claim, fill placeholders from CHAT_SAMPLES.md when posting tweet 7.
 - **Steps**: when chat-grade reached, draft tweet to `docs/SOCIAL_DRAFTS.md`. Don't post.
+- **Commit**: `auto-T6.6: 8 milestone tweet drafts (STDP/R-fold/NeuroMCP/+5)`.
 
 ## T6.7 — Compare to SmolLM2-360M real numbers
 - [x] (00:48, 7c053c9, harness + 4 tests; awaits rental run for live numbers)
