@@ -75,15 +75,24 @@ is now blocked on rental recovery.
 - R=8 single-fold drift **0.32%** (well under the agent-predicted 0.3-0.8% ppl)
 - chunk=2 shrinks R=8 error 10× (9.2e-3 → 9.2e-4) — chunked re-anchor works
 
-*Speed (empirical, CPU Win11 i7-class, no GPU):*
-- N=64 R=16: 1.73× (only configuration where CPU fold wins)
-- N=128 R=8: **0.60× (slower than sequential)**
-- N=256 R=8: **0.18× (5× slower)**
-- N=512 R=8: **0.03× (33× slower)** — `torch.linalg.solve` overhead dominates
+*Speed (empirical, both CPU and consumer GPU measured 2026-05-01):*
 
-The 167× was always GPU+cuBLAS+batched-bmm-on-A100. The fold's win region is
-**GPU + N≥512 + small R**, not CPU. On CPU the fold is a regression for any
-realistic hidden size. Agent's 2.7× at R=8 N=512 needs A100 to materialize.
+CPU (Win11 i7, no GPU):
+- N=64 R=16: 1.73× (only CPU config where fold wins)
+- N=128 R=8: 0.60× (slower than sequential)
+- N=256 R=8: 0.18× (5× slower)
+- N=512 R=8: 0.03× (33× slower) — `torch.linalg.solve` overhead dominates
+
+Consumer GPU (CUDA, single card via `synapforge.demo.rfold_bench`):
+- N=64 R=16: **2.99× (matches agent's 2.7× prediction)**
+- N=128 R=8: **1.67×**
+- N=256 R=8: 0.92× (parity)
+- N=512 R=8: 0.34× — solve still expensive on consumer GPU
+
+The fold's win region is **small-N + large-R + GPU**, not large-N. The
+167× was always for ungated linear S4 with single-fold; for our gated
+CfC the honest GPU number is **2-3× at the sweet spot (N=64 R=16)**.
+A100 with cuBLAS bmm should extend the win region to N=128-256.
 
 *Implementation discipline (`synapforge/cells/rfold.py`):*
 - fp32 forced internally (bf16 catastrophic at R>16)

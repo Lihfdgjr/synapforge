@@ -63,6 +63,7 @@ Three concrete questions we wanted to answer:
 | R-fold algebraic CfC closed-form                              | ✅ shipped at `synapforge/cells/rfold.py`. Math **verified on CPU** (R=1 exact to 1.5e-6, R=8 drift 0.3%, chunk=2 shrinks error 10×). CPU is slow (linalg.solve overhead at N≥256); GPU speedup pending A100 bench. See HONEST_ASSESSMENT for the full empirical table. |
 | CPU pilot for inference-STDP monotonic-quality claim          | ✅ `scripts/cpu_pilot_inference_stdp.py` — validates paper hypothesis at 1K/2K/4K on a laptop, no GPU needed |
 | Multi-core / mixed-device / multi-node parallelism            | ✅ `synapforge/parallel.py` — 3-layer (CPU thread tune + CPU/GPU mixed placement + auto gloo/nccl DDP). Example: `examples/mixed_device_training.py`. See `docs/PARALLELISM.md`. |
+| Investor demo (NeuroMCP 4-button + R-fold bench)              | ✅ `python -m synapforge.demo.cli all` — runs in <2s on CPU, includes 30s pitch. CPU 4-button: density 5.7%→6.7%, K 9→10, hit_rate 100%. GPU bench: N=64 R=16 = **2.99×** (matches the agent's 2.7× prediction). |
 
 ---
 

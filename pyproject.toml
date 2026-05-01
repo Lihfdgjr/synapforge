@@ -59,6 +59,9 @@ dev    = [
 ]
 docs   = ["mkdocs>=1.5", "mkdocs-material>=9.0"]
 
+[project.scripts]
+synapforge-demo = "synapforge.demo.cli:main"
+
 [project.urls]
 Homepage      = "https://github.com/Lihfdgjr/synapforge"
 Documentation = "https://github.com/Lihfdgjr/synapforge/tree/main/docs"
