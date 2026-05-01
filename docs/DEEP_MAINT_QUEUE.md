@@ -470,9 +470,18 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.6: mohuanfang warehouse activated, rental disk N% -> M%`.
 
 ## T3.7 — Pre-tokenize wikitext-103
-- [ ] **Status**: pending (earlier "wt103 files: 0" bug)
-- **Steps**: find actual wt103 files (`/workspace/data/wikitext-103/*` or `wt103_raw/`), pre-tokenize with Qwen, save to `/workspace/data/wt103_qwen_tokens.pkl`.
-- **Commit**: `auto-T3.7: wt103 tokenized -> wt103_qwen_tokens.pkl (N tokens)`.
+- [x] (01:58, hash-pending, scripts/tokenize_wikitext103.py + 4 tests; awaits rental run)
+- **Status**: tokenizer script shipped 2026-05-02 01:58 — `scripts/tokenize_wikitext103.py` (~270 LOC). Probes `/workspace/data/wikitext-103/*.txt`, `/workspace/data/wikitext-103/wt103_raw/*.txt`, `/workspace/data/wt103/*.txt` in priority order; first non-empty wins. Concatenates train splits, runs Qwen 2.5 0.5B tokenizer (`AutoTokenizer.from_pretrained("/workspace/teachers/qwen2.5-0.5b" -> "Qwen/Qwen2.5-0.5B")`) with `max_length=512`+`truncation=True`, slices flat stream into fixed `max_length` chunks (drops <8-token tail). Writes BOTH `--output-pkl` (Python pickle, list[list[int]]) AND `--output-parquet` (single column `input_ids: list<int32>` + companion `.manifest.json` with kind/tokenizer/rows). `--smoke` mode bypasses FS scan + Qwen download and emits 100 mock token sequences for unit tests; tests at `tests/integration/test_tokenize_wt103.py` — 6/6 PASS on CPU in 1.42s without `transformers` installed (4 spec'd: smoke_writes_pkl / smoke_writes_parquet / missing_files_clear_error / token_count_in_smoke + 2 helper bonuses: find_input_files priority, _chunk_into_sequences short-tail-drop). Missing files exit `1` with clear `[tokenize_wt103] FATAL: no wikitext-103 source files found.` on stderr.
+- **Rental run command**:
+  ```bash
+  ssh -p 41614 root@117.74.66.77 \
+      'cd /workspace/synapforge_git && \
+       python3 scripts/tokenize_wikitext103.py \
+         --output-pkl /workspace/data/wt103_qwen_tokens.pkl \
+         --output-parquet /workspace/data/wt103_qwen_tokens.parquet \
+         --max-length 512'
+  ```
+- **Commit**: `auto-T3.7: wikitext-103 tokenizer with Qwen vocab + tests`.
 
 ## T3.8 — HumanEval / MBPP code data
 - [x] (00:48, 3aa1419, scripts/tokenize_humaneval_mbpp.py shipped with --smoke; rental run pulls real datasets)
