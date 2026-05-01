@@ -1,9 +1,10 @@
 """R-fold benchmark: closed-form k-step CfC vs sequential reference.
 
 Runs the (N, R) sweep and prints an honest table. On CPU the fold loses
-for N>=128; on GPU+cuBLAS it's expected to win at N>=256+R>=4. We don't
-fudge the numbers — the demo's value is showing the math is correct
-(R=8 drift 0.3%) and that we know exactly when the technique pays off.
+for N>=128; on consumer GPU it wins at small N (peak ~3x at N=64 R=16)
+and loses past N>=256. We don't fudge the numbers -- the demo's value is
+showing the math is correct (R=8 drift 0.3%) and that we know exactly
+when the technique pays off.
 """
 
 from __future__ import annotations
@@ -89,15 +90,15 @@ def run_demo(quiet: bool = False) -> dict:
 
     if not quiet:
         print()
-        if device == "cpu":
+        if device.type == "cpu":
             print("  CPU: fold loses for N>=128 (LAPACK solve overhead).")
-            print("  Real win is GPU + N>=256: agent's 2.7x at R=8 N=512 is")
-            print("  the published claim; we show math correctness here, A100")
-            print("  bench pending.")
+            print("  Win region is GPU + small N + small R (peak ~3x at N=64 R=16);")
+            print("  fold loses past N>=256 even on consumer GPU. Math: R=1 exact")
+            print("  (1.5e-6), R=8 drift 0.3%; chunk=2 shrinks R=8 error 10x.")
         else:
-            print("  GPU: fold should beat sequential for N>=256 + R>=4.")
-            print("  Math: R=1 exact, R=8 drift 0.3%, chunked L=8 brings R=64")
-            print("  within near-sequential quality.")
+            print("  GPU: peak ~3x at N=64 R=16; fold loses past N>=256.")
+            print("  Math: R=1 exact (1.5e-6), R=8 drift 0.3%, chunked L=2-8")
+            print("  brings large-R within near-sequential quality.")
 
     return {
         "device": device,

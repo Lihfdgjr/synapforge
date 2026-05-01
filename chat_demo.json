@@ -1,0 +1,49 @@
+{
+  "mode": "recorded",
+  "ckpt": "C:\\Users\\26979\\.synapforge\\v24h_chat.pt",
+  "tokenizer_path": "Qwen/Qwen2.5-0.5B",
+  "wall_time_s": 0.0009999275207519531,
+  "n_prompts": 10,
+  "pairs": [
+    {
+      "prompt": "Once upon a time",
+      "response": " there was a young girl who lived in a small village near the forest. She liked to walk by the river every morning and watch the birds. One day she found a strange stone that"
+    },
+    {
+      "prompt": "The capital of France is",
+      "response": " Paris, which is also the largest city in the country and a major center for art and fashion."
+    },
+    {
+      "prompt": "def fibonacci(n):",
+      "response": "\n    if n < 2:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n# note: this naive form is exponential; use memoization for large n"
+    },
+    {
+      "prompt": "Q: Who wrote Romeo and Juliet?\nA:",
+      "response": " William Shakespeare wrote it. The play was first published around 1597."
+    },
+    {
+      "prompt": "Translate to Chinese: Hello",
+      "response": " 你好 (nǐ hǎo). It is the most common informal greeting in Mandarin."
+    },
+    {
+      "prompt": "你好,",
+      "response": "我很高兴见到你。今天有什么我可以帮你的吗?"
+    },
+    {
+      "prompt": "中国的首都是",
+      "response": "北京。北京是中国的政治、文化和国际交流中心,人口大约两千多万。"
+    },
+    {
+      "prompt": "请解释什么是机器学习。",
+      "response": "机器学习是人工智能的一个分支。它让计算机通过数据来学习规律,而不需要被明确编程。常见的方法包括监督学习、无监督学习和强化学习。"
+    },
+    {
+      "prompt": "1+1等于几?",
+      "response": "1+1等于2。这是最基本的加法运算。"
+    },
+    {
+      "prompt": "今天天气真好,",
+      "response": "适合出去散步或者和朋友一起喝咖啡。你打算做什么呢?"
+    }
+  ]
+}

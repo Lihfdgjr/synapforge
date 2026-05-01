@@ -45,7 +45,7 @@ Three concrete questions we wanted to answer:
 
 ---
 
-## Status snapshot (2026-04-30)
+## Status snapshot (2026-05-01)
 
 | Component                                                     | Status |
 | ------------------------------------------------------------- | ------ |
@@ -63,7 +63,7 @@ Three concrete questions we wanted to answer:
 | R-fold algebraic CfC closed-form                              | ✅ shipped at `synapforge/cells/rfold.py`. Math **verified on CPU** (R=1 exact to 1.5e-6, R=8 drift 0.3%, chunk=2 shrinks error 10×). CPU is slow (linalg.solve overhead at N≥256); GPU speedup pending A100 bench. See HONEST_ASSESSMENT for the full empirical table. |
 | CPU pilot for inference-STDP monotonic-quality claim          | ✅ `scripts/cpu_pilot_inference_stdp.py` — validates paper hypothesis at 1K/2K/4K on a laptop, no GPU needed |
 | Multi-core / mixed-device / multi-node parallelism            | ✅ `synapforge/parallel.py` — 3-layer (CPU thread tune + CPU/GPU mixed placement + auto gloo/nccl DDP). Example: `examples/mixed_device_training.py`. See `docs/PARALLELISM.md`. |
-| Investor demo (NeuroMCP 4-button + R-fold bench)              | ✅ `python -m synapforge.demo.cli all` — runs in <2s on CPU, includes 30s pitch. CPU 4-button: density 5.7%→6.7%, K 9→10, hit_rate 100%. GPU bench: N=64 R=16 = **2.99×** (matches the agent's 2.7× prediction). |
+| Investor demo (NeuroMCP 4-button + R-fold bench + STDP + chat)| ✅ `python -m synapforge.demo.cli all` — runs in <2s on CPU, includes 30s pitch + 5 EN + 5 ZH chat replay. CPU 4-button @ 80 trials: density 5.7%→7.7%, K 9→11, hit_rate 100%. STDP @ 200 trials: density 0.0%→27.3% (no optimizer). GPU R-fold N=64 R=16 = **2.99×** peak (consumer GPU, matches the agent's 2.7× prediction); A800/A100 bench pending. |
 | Full-volume triple-path backup (mohuanfang + GitHub + HF)     | ✅ `scripts/triple_backup_daemon.py`, auto-spawned by trainer at startup (`--backup-interval 600`). After 2026-04-30 v4.1 disaster, every step's full out-dir is mirrored off-rental within 10 min. See `docs/BACKUP.md`. |
 | 🤖 Auto-eval per checkpoint (chat samples + bench subset)     | ✅ `scripts/auto_eval_daemon.py` — watches `out_dir`, on every fresh ckpt dumps 5 EN + 5 ZH chat samples and runs MMLU/HellaSwag/LAMBADA (logits-only, ~3 min). On `best*.pt` also runs HumanEval/MBPP/GSM8K. Aggregates to `auto_eval/index.json`; render with `scripts/plot_eval_curves.py` (ASCII, no matplotlib needed). See `docs/AUTO_EVAL.md`. |
 

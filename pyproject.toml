@@ -82,6 +82,10 @@ synapforge = ["py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
+# Note: synapforge/tests/ contains both fresh tests (test_rfold.py, test_bio.py
+# et al.) and legacy fixtures referencing the deprecated mscfc package.  Adding
+# the directory wholesale breaks collection.  Run R-fold tests explicitly:
+#     pytest synapforge/tests/test_rfold.py -v
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra -q"

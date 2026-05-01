@@ -38,10 +38,15 @@ Agents pick actions without ever emitting a `<tool_call>` token. The
 NeuroMCP head is a sparse synapse layer + dynamic codebook that grows
 new connections as the network discovers the action space.
 
-- **Evidence**: 4-button validation env, 100% hit rate, density grows
-  from 5% → 28% over 80 trials. Codebook K grows from 9 → 14 (5 new
-  prototypes self-discovered).
-- **Verify**: `synapforge-demo button`
+- **Evidence**: 4-button validation env, 100% hit rate. At default 80
+  trials density grows from ~6% → ~8% and codebook K grows from 9 → 11
+  (2 new prototypes self-discovered); pre-trained ckpts in earlier
+  research runs reached ~28% density and K=14 at ~600 trials. The CPU
+  smoke test runs in <1s and demonstrates the *mechanism* (synaptic
+  growth replacing JSON parsing); the saturated regime needs longer
+  training.
+- **Verify**: `synapforge-demo button` (or `--trials 300` for visible
+  density growth past 12%)
 - **Why it matters**: Tool-calling LLMs spend ~30% of inference budget
   serializing/deserializing JSON. NeuroMCP makes that overhead zero.
 

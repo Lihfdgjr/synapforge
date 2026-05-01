@@ -32,9 +32,9 @@ If you want the warts-and-all picture, read **[HONEST_ASSESSMENT](HONEST_ASSESSM
 |-----|---------|---------|
 | [BENCHMARKS.md](BENCHMARKS.md) | Six paper-grade benches (HumanEval, MBPP, MMLU, GSM8K, HellaSwag, LAMBADA). Public baselines + sandbox + how to add a new one. | 2026-05-01 |
 | [AUTO_EVAL.md](AUTO_EVAL.md) | Per-checkpoint auto-eval daemon. What gets dumped, how to read curves, fast/heavy split. Cross-refs BENCHMARKS + HONEST_ASSESSMENT. | 2026-05-01 |
-| [RFOLD_PAPER.md](RFOLD_PAPER.md) | R-fold algebraic CfC closed-form. Math derivation + measured 167x speedup at R=1024. CPU correctness table. | 2026-05-01 |
+| [RFOLD_PAPER.md](RFOLD_PAPER.md) | R-fold algebraic CfC closed-form. Math derivation + honest GPU peak 2.99x at N=64 R=16. CPU correctness table. Appendix B retracts an earlier 167x extrapolation. | 2026-05-01 |
 | [HONEST_ASSESSMENT.md](HONEST_ASSESSMENT.md) | What works (verified), what doesn't yet, what's still rhetoric. Updated each major version. | 2026-05-01 |
-| [REVIEW_DEMO.md](REVIEW_DEMO.md) | (planned) Code review of `synapforge.demo`. See `synapforge/demo/cli.py` and INVESTOR.md until written. | not yet written |
+| [REVIEW_DEMO.md](REVIEW_DEMO.md) | Code review of `synapforge.demo` + R-fold bench + parallel helpers. Bug list + investor-flow walkthrough + top polish items. | 2026-05-01 |
 | [REVIEW_MULTIMODAL.md](REVIEW_MULTIMODAL.md) | (planned) Code review of `synapforge.modal`. See MULTIMODAL_TRAINING + the encoders directly until written. | not yet written |
 
 ## Reliability + ops
@@ -110,7 +110,7 @@ papers / READMEs themselves.
 | CfC + PLIF block | ARCHITECTURE | RFOLD_PAPER, REVIEW_TRAINER |
 | Coconut latent thinking | ARCHITECTURE (final section) | PHASE_TRAINING (phase 1 unlocks k>1) |
 | NeuroMCP / action vectors | NEUROMCP_UNIVERSAL | NEURAL_COMPUTER_USE, REVIEW_NEUROMCP, INVESTOR |
-| R-fold | RFOLD_PAPER | INVESTOR (the 167x bench) |
+| R-fold | RFOLD_PAPER | INVESTOR (the 2.99x peak speedup), HONEST_ASSESSMENT (full CPU/GPU table) |
 | 7-gate Track A | CONTINUAL_LEARNING | SAFETY_PLAN |
 | Chat memory (Track B) | CONTINUAL_LEARNING | CHAT_PROTOCOL |
 | Triple-backup daemon | BACKUP | RELIABILITY (recovery flow) |

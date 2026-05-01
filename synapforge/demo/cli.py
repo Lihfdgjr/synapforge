@@ -11,8 +11,22 @@ import json
 import sys
 
 
+# Force UTF-8 stdout so the recorded transcript's Chinese / em-dashes /
+# block-element heatmaps render correctly on Windows console (cp936/gbk
+# default), Linux terminal, and pipe redirects alike.
+def _force_utf8_stdout() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # py3.7+
+        except Exception:
+            pass
+
+
+_force_utf8_stdout()
+
+
 PITCH = """
-SynapForge — 30 second pitch
+SynapForge -- 30 second pitch
 
   GPT-class transformers cost millions to train. We built a 375-million-
   parameter LNN+SNN hybrid: continuous-time CfC + spiking PLIF + Hebbian
@@ -20,17 +34,18 @@ SynapForge — 30 second pitch
 
   Three differentiated claims, each with a CPU-runnable demo:
 
-    1.  NeuroMCP — agents use tools without ever emitting a tool-call
-        token. Synapses literally grow into the action space (5% -> 28%
-        density on the 4-button validation env).
+    1.  NeuroMCP -- agents use tools without ever emitting a tool-call
+        token. Synapses grow into the action space (4-button toy env,
+        ~6-8% density growth at 80 trials, 100% hit-rate post warmup).
 
-    2.  R-fold latent thinking — k=8 closed-form algebraic CfC fold,
+    2.  R-fold latent thinking -- k=8 closed-form algebraic CfC fold,
         gives the model "8 reasoning steps" worth of compute per token.
-        Math verified: R=1 exact, R=8 drift 0.3%.
+        Math verified: R=1 exact (1.5e-6), R=8 drift 0.3%.
 
-    3.  Inference-time STDP — forward-only Hebbian rule active at
+    3.  Inference-time STDP -- forward-only Hebbian rule active at
         inference, so the network keeps learning from the live context
-        at the *weight* level. (Paper claim; gated on v4.1 ckpt.)
+        at the *weight* level. Density (|W|>0.05) climbs 0% -> ~27%
+        in 200 trials with no optimizer, no loss.
 
   Same architecture scales to the 375M flagship at ppl 44.2 on
   multilingual chat (zh + en + math).

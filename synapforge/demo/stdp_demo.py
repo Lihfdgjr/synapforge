@@ -24,7 +24,11 @@ import torch
 from ..bio.stdp_fast import STDPFastWeight
 
 
-HEAT_GLYPHS = " ▏▎▍▌▋▊▉█"
+# ASCII-only intensity ladder so the heatmap renders on cp936 (Windows
+# default), Linux terminals, and pipe redirects identically. Unicode
+# block-element glyphs (U+2580..U+258F) end up as `??` on cp936 even
+# after stdout reconfigure, so we don't risk them here.
+HEAT_GLYPHS = " .:-=+*#@"
 
 
 def _heatmap(W: torch.Tensor, size: int = 8) -> list[str]:
@@ -102,11 +106,14 @@ def run_demo(
     torch.manual_seed(seed)
     gen = torch.Generator().manual_seed(seed)
 
-    # a_plus / a_minus tuned so density (|W|>0.02) climbs from ~5% to
-    # ~20% over 200 trials. Larger a_plus would saturate the matrix.
+    # a_plus / a_minus tuned so density (|W|>0.05) climbs from 0% to
+    # ~25-30% over 200 trials. Larger a_plus would saturate the matrix.
+    # n_trials < ~50 will show density stuck near 0% -- that's expected
+    # given the eps threshold; LTP needs ~50 trials of structured input
+    # to push enough cells past the salient-weight cutoff.
     layer = STDPFastWeight(hidden_size=hidden, a_plus=0.012, a_minus=0.022,
                            tau_plus=20.0, tau_minus=20.0, clip=1.0)
-    layer.eval()  # inference mode — STDP still active per stdp_fast.py:121
+    layer.eval()  # inference mode -- STDP still active per stdp_fast.py:127
 
     if not quiet:
         print(f"  STDPFastWeight hidden={hidden}, n_trials={n_trials}, batch={batch}")
@@ -157,7 +164,7 @@ def run_demo(
         print(f"  mean|W|: {history[0]['mean_w']:.4f} -> {history[-1]['mean_w']:.4f}")
         print()
         print("  no optimizer, no loss. structure emerged from the Hebbian rule")
-        print("  alone — the same rule SynapForge runs at inference time.")
+        print("  alone -- the same rule SynapForge runs at inference time.")
 
     return {
         "wall_time_s": dt,

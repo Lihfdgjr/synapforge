@@ -269,3 +269,9 @@ def print_setup() -> None:
             f"            distributed: rank={dist.rank}/{dist.world_size} "
             f"backend={dist.backend} device={dist.device}"
         )
+
+
+if __name__ == "__main__":
+    # `python -m synapforge.parallel` smoke-test: print thread + device setup.
+    print("=== synapforge.parallel ===")
+    print_setup()

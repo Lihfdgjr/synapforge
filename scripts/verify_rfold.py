@@ -112,9 +112,9 @@ def main():
             )
 
     print()
-    print("Verdict: math is correct (R=8 drift 0.3%, chunk shrinks 10x).")
-    print("CPU win threshold: ~N>=512. Smaller N: matpow overhead dominates.")
-    print("On A100 with batched bmm + cuBLAS, agent's 2.7x at R=8 N=512 is plausible.")
+    print("Verdict: math is correct (R=8 drift 0.3%, chunk=2 shrinks error 10x).")
+    print("CPU win region: ~N=64 R>=16 only. Larger N loses to LAPACK solve overhead.")
+    print("Win region is GPU + small N + small R; consumer GPU peak ~3x at N=64 R=16.")
 
 
 if __name__ == "__main__":
