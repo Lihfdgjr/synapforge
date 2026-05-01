@@ -91,6 +91,28 @@ CUDA graph mode is intentionally NOT exposed (would break with dynamic
 seq_len in the eval-vs-train mismatch). `reduce-overhead` is the safer
 pick.
 
+#### v3 sweep — measured tok/s A/B (T2.11)
+
+| commit | hardware | bs / seq | no-compile tok/s | compile tok/s | speedup | source |
+|--------|----------|----------|------------------|---------------|---------|--------|
+| TODO   | A800-80GB | 8 / 256 | TBD              | TBD           | TBD     | bench_results/torch_compile_HHMMSS.json (rental run) |
+
+`scripts/bench_torch_compile.py` builds a fresh
+`SynapForge100M(d=512, n_layers=10, vocab=151936)` from identical seed
+twice (no compile + compile), runs 100 timed forward+backward passes
+each (5 warmup), and saves the JSON record above. Run on the rental
+once GPU is available::
+
+    ssh -p 41614 root@117.74.66.77 \
+      'cd /workspace/synapforge_git && \
+       python3 scripts/bench_torch_compile.py \
+         --steps 100 --batch-size 8 --seq-len 256 --device cuda'
+
+The CPU/Windows fallback path emits `compile_supported=false` +
+`compile_skip_reason` (torch 2.0.x refuses to compile on Windows), so
+the smoke at `tests/integration/test_bench_torch_compile.py` runs
+green on CI without a GPU.
+
 ## Recommended combo for A800-80GB
 
 ```bash
