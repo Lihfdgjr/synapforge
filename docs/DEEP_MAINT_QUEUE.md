@@ -650,7 +650,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: write 1-2 `feedback_*.md` per fire if new durable lesson learned. Index in MEMORY.md.
 
 ## T7.3 — Advance 1 P# from MASTER_PLAN §6
-- [x] (02:18, PENDING_HASH, advanced P28: ship primary pre-LM-head LayerNorm fix + 5 integration tests + trainer flag, OPEN -> IN PROGRESS)
+- [x] (02:18, be1bba6, advanced P28: ship primary pre-LM-head LayerNorm fix + 5 integration tests + trainer flag, OPEN -> IN PROGRESS)
 - ~~**Status**: pending — recurring task~~
 - **Steps**: read MASTER_PLAN §6, find first non-RESOLVED P#, take 30-min stab.
 - **Done (2026-05-02 02:18)**: P28 z-loss linear drift — shipped the
