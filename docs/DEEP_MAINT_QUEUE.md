@@ -204,6 +204,46 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Output**: `docs/VRAM_TIMELINE.md` (NEW) with peak per loss component.
 - **Commit**: `auto-T1.10: VRAM peak ce=A z=B kd=C total=D GB`.
 
+## T1.11 — Run 3m launch script + phase-1 autopilot
+- [x] (00:33, PENDING_HASH, launch_qwen3m.sh + phase autopilot wired with T2.3+T2.5+T2.6 flags)
+- **Status**: shipped 2026-05-02 00:33 — does NOT auto-fire; user invokes
+  `bash scripts/launch_qwen3m.sh` on the rental, OR phase autopilot calls
+  `python3 scripts/build_next_launch.py --phase 1 --letter n` then runs
+  the generated `launch_qwen3n.sh` once val ppl crosses 250.
+- **Goal**: stage the next-gen launch with T2.3 (surrogate width anneal
+  10->1 over 5000 steps) + T2.5 (spike-rate-target loss weight 0.05 =
+  50x default) + T2.6 (LM head spectral norm) so the dead-PLIF revival
+  package fires together. Run 3l (currently running, no fixes) is left
+  alone -- only relaunch if/when its VAL trajectory fails to recover.
+- **Files**:
+  - `scripts/launch_qwen3m.sh` (NEW, +x): warmstart from
+    `LATEST=$(ls -t /workspace/runs/v24h_qwen3/step_[0-9]*.pt | head -1)`,
+    `--kd-topk 2048`, `--shuffle-seed 411` (rotate from 311),
+    `--spike-target-loss-weight 0.05`,
+    `--surrogate-anneal-{start 10.0, target 1.0, steps 5000}`,
+    `--lm-head-spectral-norm`, output `train_run3m.log`,
+    `setsid + disown` (NOT nohup -- per
+    feedback_mcp_nohup_hangs_use_systemd_run).
+  - `scripts/build_next_launch.py` (NEW): takes any base
+    `launch_qwen3<letter>.sh` and emits a phase-N variant by splicing
+    PHASE_FLAGS (mirror of `phase_auto_relauncher.sh::flags_for_phase`)
+    after `--phase-aware`. Renames `train_run3<old>.log` to
+    `train_run3<new>.log`. `--dry-run` prints to stdout. Single-letter
+    output validation. Idempotent: re-running same letter overwrites.
+- **T2.6 caveat audit**: T2.6 commit `16f5de5` lists ONE caveat ("bf16
+  quirks: power-iter buffers stay fp32"). This is PyTorch's standard
+  spectral_norm behaviour. NOT incompatible with `--backend triton_block`
+  or `--kd-topk 2048` -- safe to enable. Tied-weight path wraps
+  tok_embed (the live path).
+- **T2.2 (--triton-fused-backward)**: NOT enabled. Stub-only on main
+  (commit `5a3ecef`); formal kernel `3dab79c` lives on a separate
+  worktree branch and hasn't been merged + verified vs the 7-test
+  suite on A800. Add when stable.
+- **Smoke**: `bash -n scripts/launch_qwen3m.sh` passes.
+  `python -m py_compile scripts/build_next_launch.py` passes.
+  Phase-1 dry-run splice verified (`launch_qwen3n.sh` body parses).
+- **Commit**: `auto-T1.11: launch_qwen3m.sh wires T2.3/T2.5/T2.6 + phase 1 autopilot`.
+
 ---
 
 # Tier 2 — Architecture research + ship (each Agent-spawn)
