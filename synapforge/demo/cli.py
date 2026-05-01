@@ -71,12 +71,17 @@ def cmd_chat(args) -> dict:
     # Per-user memory lives at ~/.synapforge/memory/<user_id>/.  The chat
     # demo is read-only against the model weights — this flag only namespaces
     # retrieval cache, learned preferences, and the conversation log.
+    # The `synapforge-demo chat` subcommand is the investor-pitch path: print
+    # the per-prompt block to stdout. The deeper-maintenance T1.1 cron uses
+    # ``python -m synapforge.demo.chat_demo`` directly, where verbose
+    # defaults to False and only the JSON file is consumed.
     return run_demo(
         ckpt=args.ckpt,
         tokenizer_path=args.tokenizer_path,
         max_new=args.max_new,
         temperature=args.temperature,
         save_path=args.save,
+        verbose=True,
     )
 
 

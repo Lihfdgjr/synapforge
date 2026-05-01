@@ -9,6 +9,12 @@ Usage:
     synapforge-demo chat
     synapforge-demo chat --ckpt /path/to/v24h_chat.pt --tokenizer-path Qwen/Qwen2.5-0.5B
     python -m synapforge.demo.chat_demo --save chat_demo.json
+    # T1.1 deep-maintenance probe (queue prompts, JSON with lang):
+    python -m synapforge.demo.chat_demo \
+        --ckpt /workspace/runs/v24h_qwen3/step_004000.pt \
+        --tokenizer-path /workspace/teachers/qwen2.5-0.5b \
+        --max-new 60 --temperature 0.7 \
+        --save /tmp/chat_HHMM.json
 """
 
 from __future__ import annotations
@@ -20,7 +26,34 @@ import sys
 import time
 from pathlib import Path
 
-EN_PROMPTS = [
+# ---------- Prompt sets ----------
+#
+# T1 prompts (docs/DEEP_MAINT_QUEUE.md T1.1) — used by the live deep-maintenance
+# chat sample CLI. Short open-ended completions, designed for the
+# `tokenizer.encode(prompt, ...)` -> raw continuation pattern (NOT the
+# instruction template). Do not change these without updating the queue
+# validation gates ([一-鿿]+ regex, len > 5 tokens).
+EN_PROMPTS_T1 = [
+    "The capital of France is",
+    "In the morning, I like to",
+    "Photosynthesis is the process",
+    "def reverse_string(s):",
+    "Once upon a time,",
+]
+
+ZH_PROMPTS_T1 = [
+    "中国的首都是",
+    "今天天气",
+    "光合作用是",
+    "我喜欢吃",
+    "从前有一个",
+]
+
+# Legacy prompts (chat_recorded.json) — kept for the recorded-replay
+# fallback (docs/INSURANCE_NATIVE.md Option B). The recorded transcript
+# was captured against these and has zero overlap with EN_PROMPTS_T1, so
+# replaying with T1 prompts would produce all "<no recorded response>".
+EN_PROMPTS_LEGACY = [
     "Once upon a time",
     "The capital of France is",
     "def fibonacci(n):",
@@ -28,13 +61,17 @@ EN_PROMPTS = [
     "Translate to Chinese: Hello",
 ]
 
-ZH_PROMPTS = [
+ZH_PROMPTS_LEGACY = [
     "你好,",
     "中国的首都是",
     "请解释什么是机器学习。",
     "1+1等于几?",
     "今天天气真好,",
 ]
+
+# Back-compat module-level aliases (used by older callers / tests).
+EN_PROMPTS = EN_PROMPTS_LEGACY
+ZH_PROMPTS = ZH_PROMPTS_LEGACY
 
 INSTRUCTION_TEMPLATE = "### Instruction:\n{instruction}\n### Response:\n"
 
@@ -45,6 +82,27 @@ def _default_ckpt() -> str:
 
 def _default_recorded() -> Path:
     return Path(__file__).resolve().parent / "chat_recorded.json"
+
+
+def _resolve_device(device: str | None) -> str:
+    """auto -> 'cuda' if available else 'cpu'. Anything else passes through."""
+    if device is None or device == "auto":
+        try:
+            import torch
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
+    return device
+
+
+def _strip_module_prefix(sd: dict) -> dict:
+    """Strip leading 'module.' from DDP-saved state_dicts."""
+    if not isinstance(sd, dict):
+        return sd
+    if any(k.startswith("module.") for k in sd):
+        return {k[len("module."):] if k.startswith("module.") else k: v
+                for k, v in sd.items()}
+    return sd
 
 
 # Fallback architecture values used when the ckpt has no "config" dict
@@ -59,14 +117,22 @@ _FALLBACK_CFG = {
 }
 
 
-def _try_load_live(ckpt: str, tokenizer_path: str | None):
-    """Best-effort load of model + tokenizer. Returns (model, tok) or None.
+def _try_load_live(
+    ckpt: str,
+    tokenizer_path: str | None,
+    device: str = "cpu",
+    verbose: bool = False,
+):
+    """Best-effort load of model + tokenizer. Returns (model, tok, meta) or None.
 
     The ckpt is expected to carry a ``"config"`` dict written by the trainer
     (see ``train_100m_kd.py::_build_config_dict``). If absent (legacy ckpt)
     we fall back to ``_FALLBACK_CFG`` and emit a WARNING so the demo doesn't
     silently load garbage when architecture drifts. P12 — see
     docs/MASTER_PLAN.md §6.
+
+    ``meta`` carries auxiliary info (step, ppl, ...) parsed from the ckpt
+    dict so callers can stamp it into JSON output.
     """
     if not ckpt or not Path(ckpt).is_file():
         return None
@@ -86,19 +152,27 @@ def _try_load_live(ckpt: str, tokenizer_path: str | None):
         tok.pad_token = tok.eos_token
 
     import torch
-    raw = torch.load(ckpt, map_location="cpu")
+    # weights_only=False is the torch <2.6 default; setting it explicitly so
+    # the same call path survives a future torch upgrade where the default
+    # flips to True (which would refuse our optim_state pickled blobs).
+    try:
+        raw = torch.load(ckpt, map_location=device, weights_only=False)
+    except TypeError:
+        # torch <2.0 doesn't accept weights_only.
+        raw = torch.load(ckpt, map_location=device)
     if isinstance(raw, dict) and "config" in raw and isinstance(raw["config"], dict):
         cfg = dict(_FALLBACK_CFG)
         cfg.update(raw["config"])  # ckpt config wins
     else:
         cfg = dict(_FALLBACK_CFG)
-        print(
-            f"[chat_demo] WARNING: ckpt has no config; using fallback values "
-            f"d={cfg['d']} n_layers={cfg['n_layers']} loop_depth={cfg['loop_depth']} "
-            f"ffn_ratio={cfg['ffn_ratio']} sparsity={cfg['sparsity']} "
-            f"max_seq={cfg['max_seq']} vocab={cfg['vocab']} "
-            f"tie_lm_head={cfg['tie_lm_head']} -- shape drift may cause garbage output"
-        )
+        if verbose:
+            print(
+                f"[chat_demo] WARNING: ckpt has no config; using fallback values "
+                f"d={cfg['d']} n_layers={cfg['n_layers']} loop_depth={cfg['loop_depth']} "
+                f"ffn_ratio={cfg['ffn_ratio']} sparsity={cfg['sparsity']} "
+                f"max_seq={cfg['max_seq']} vocab={cfg['vocab']} "
+                f"tie_lm_head={cfg['tie_lm_head']} -- shape drift may cause garbage output"
+            )
 
     model = SynapForge100M(
         vocab=int(cfg["vocab"]),
@@ -112,24 +186,46 @@ def _try_load_live(ckpt: str, tokenizer_path: str | None):
         tie_lm_head=bool(cfg["tie_lm_head"]),
     )
     sd = raw["model"] if (isinstance(raw, dict) and "model" in raw) else raw
+    sd = _strip_module_prefix(sd)
     try:
         missing, unexpected = model.load_state_dict(sd, strict=False)
     except Exception:
         return None
-    if len(missing) + len(unexpected) > 5:
+    if verbose and len(missing) + len(unexpected) > 5:
         print(
             f"[chat_demo] WARNING: {len(missing)} missing, "
             f"{len(unexpected)} unexpected keys -- ckpt may not match model "
             f"architecture (cfg from ckpt: {'yes' if 'config' in (raw if isinstance(raw, dict) else {}) else 'no'})"
         )
+    try:
+        model = model.to(device)
+    except Exception:
+        # Unknown device -- fall back to CPU silently rather than crash.
+        model = model.to("cpu")
     model.eval()
-    return model, tok
+    meta = {
+        "step": int(raw["step"]) if isinstance(raw, dict) and "step" in raw else None,
+        "loss": float(raw["loss"]) if isinstance(raw, dict) and "loss" in raw else None,
+        "missing_keys": len(missing),
+        "unexpected_keys": len(unexpected),
+        "had_config": bool(isinstance(raw, dict) and "config" in raw),
+    }
+    return model, tok, meta
 
 
-def _generate_one(model, tok, prompt: str, max_new: int, temperature: float) -> str:
+def _generate_one(
+    model,
+    tok,
+    prompt: str,
+    max_new: int,
+    temperature: float,
+    use_template: bool = True,
+    device: str = "cpu",
+) -> str:
+    """Greedy / temperature-sampled completion. Returns just the suffix."""
     import torch
-    text = INSTRUCTION_TEMPLATE.format(instruction=prompt)
-    ids = tok.encode(text, add_special_tokens=False, return_tensors="pt")
+    text = INSTRUCTION_TEMPLATE.format(instruction=prompt) if use_template else prompt
+    ids = tok.encode(text, add_special_tokens=False, return_tensors="pt").to(device)
     eos_ids = {tok.eos_token_id} if tok.eos_token_id is not None else set()
     im_end = tok.convert_tokens_to_ids("<|im_end|>") if hasattr(tok, "convert_tokens_to_ids") else None
     if im_end is not None and im_end >= 0:
@@ -174,6 +270,14 @@ def _print_pair(prompt: str, response: str) -> None:
     print()
 
 
+def _select_prompts(prompt_set: str) -> tuple[list[str], list[str]]:
+    if prompt_set == "t1":
+        return EN_PROMPTS_T1, ZH_PROMPTS_T1
+    if prompt_set == "legacy":
+        return EN_PROMPTS_LEGACY, ZH_PROMPTS_LEGACY
+    raise ValueError(f"unknown prompt_set: {prompt_set!r}")
+
+
 def run_demo(
     ckpt: str | None = None,
     tokenizer_path: str | None = None,
@@ -181,31 +285,74 @@ def run_demo(
     temperature: float = 0.7,
     save_path: str | None = None,
     quiet: bool = False,
+    device: str = "auto",
+    verbose: bool = False,
+    prompt_set: str = "auto",
+    use_template: bool | None = None,
 ) -> dict:
-    ckpt = ckpt or os.environ.get("SYNAPFORGE_CKPT") or _default_ckpt()
-    prompts = EN_PROMPTS + ZH_PROMPTS
+    """Run the chat demo.
 
-    live = _try_load_live(ckpt, tokenizer_path)
-    pairs: list[dict] = []
+    ``prompt_set``:
+      - ``"t1"``   : queue T1.1 prompts (live raw completion)
+      - ``"legacy"``: chat_recorded.json prompts (back-compat replay)
+      - ``"auto"``  : t1 if a live ckpt loads, legacy if we fall through
+                      to the recorded replay path
+
+    ``use_template``:
+      - ``True``   : wrap each prompt with INSTRUCTION_TEMPLATE
+      - ``False``  : pass prompt verbatim to tokenizer (raw completion)
+      - ``None``   : auto — False for ``t1`` (queue prompts are open-ended
+                     completions), True for ``legacy`` (instruction-tuned
+                     prompts that need the response template).
+    """
+    ckpt = ckpt or os.environ.get("SYNAPFORGE_CKPT") or _default_ckpt()
+    resolved_device = _resolve_device(device)
+
+    live = _try_load_live(ckpt, tokenizer_path, device=resolved_device,
+                          verbose=verbose)
+
+    # Pick prompt set after we know whether live mode is available.
+    if prompt_set == "auto":
+        active_prompt_set = "t1" if live is not None else "legacy"
+    else:
+        active_prompt_set = prompt_set
+    en_prompts, zh_prompts = _select_prompts(active_prompt_set)
+    prompts = [(p, "EN") for p in en_prompts] + [(p, "ZH") for p in zh_prompts]
+
+    if use_template is None:
+        # T1 = raw completion; legacy recorded transcripts were generated
+        # with the instruction template.
+        effective_use_template = (active_prompt_set == "legacy")
+    else:
+        effective_use_template = bool(use_template)
+
+    samples: list[dict] = []
     t0 = time.time()
+    meta: dict = {}
     if live is not None:
-        model, tok = live
-        if not quiet:
+        model, tok, meta = live
+        if verbose and not quiet:
             print(f"  ckpt loaded: {ckpt}")
             print(f"  tokenizer:   {tokenizer_path}")
+            print(f"  device:      {resolved_device}")
+            print(f"  prompt_set:  {active_prompt_set}")
             print()
-        for p in prompts:
+        for p, lang in prompts:
             try:
-                resp = _generate_one(model, tok, p, max_new=max_new,
-                                     temperature=temperature)
+                resp = _generate_one(
+                    model, tok, p, max_new=max_new,
+                    temperature=temperature,
+                    use_template=effective_use_template,
+                    device=resolved_device,
+                )
             except Exception as e:
                 resp = f"<generation error: {e}>"
-            pairs.append({"prompt": p, "response": resp})
-            if not quiet:
+            samples.append({"lang": lang, "prompt": p, "response": resp})
+            if verbose and not quiet:
                 _print_pair(p, resp)
         mode = "live"
     else:
-        if not quiet:
+        if verbose and not quiet:
             # docs/INSURANCE_NATIVE.md Option B: when the live ckpt is
             # unloadable we play the recorded v4.x transcript -- but loud
             # disclosure first so the investor knows it's not live. Same
@@ -219,11 +366,14 @@ def run_demo(
             print("  ckpt unavailable, replaying recorded transcript:")
             print(f"  source: {_default_recorded()}")
             print()
-        recorded = {r["prompt"]: r["response"] for r in _load_recorded()}
-        for p in prompts:
+        try:
+            recorded = {r["prompt"]: r["response"] for r in _load_recorded()}
+        except FileNotFoundError:
+            recorded = {}
+        for p, lang in prompts:
             resp = recorded.get(p, "<no recorded response>")
-            pairs.append({"prompt": p, "response": resp})
-            if not quiet:
+            samples.append({"lang": lang, "prompt": p, "response": resp})
+            if verbose and not quiet:
                 _print_pair(p, resp)
         mode = "recorded"
 
@@ -232,18 +382,28 @@ def run_demo(
         "mode": mode,
         "ckpt": ckpt,
         "tokenizer_path": tokenizer_path,
+        "device": resolved_device,
+        "prompt_set": active_prompt_set,
         "wall_time_s": dt,
         "n_prompts": len(prompts),
-        "pairs": pairs,
+        "step": meta.get("step") if meta else None,
+        "samples": samples,
+        # Back-compat: older callers (cli.py JSON dump, downstream analysis
+        # scripts) read out["pairs"] without the "lang" key. Mirror samples
+        # into "pairs" keeping just prompt + response so old code paths
+        # don't break while new ones can read the richer "samples" list.
+        "pairs": [{"prompt": s["prompt"], "response": s["response"]}
+                  for s in samples],
     }
     if save_path:
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         Path(save_path).write_text(
             json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8"
         )
-        if not quiet:
+        if verbose and not quiet:
             print(f"  saved transcript -> {save_path}")
-    if not quiet:
-        print(f"  done ({mode}) in {dt:.1f}s, {len(pairs)} prompts.")
+    if verbose and not quiet:
+        print(f"  done ({mode}) in {dt:.1f}s, {len(samples)} prompts.")
     return out
 
 
@@ -253,9 +413,16 @@ def main(argv: list[str] | None = None) -> int:
                     help="path to v24h-style ckpt (default ~/.synapforge/v24h_chat.pt)")
     ap.add_argument("--tokenizer-path", default=None,
                     help="HF tokenizer path or repo id (default Qwen/Qwen2.5-0.5B)")
-    ap.add_argument("--max-new", type=int, default=80)
+    ap.add_argument("--max-new", type=int, default=60)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--save", default="chat_demo.json")
+    ap.add_argument("--device", default="auto",
+                    help="cuda / cpu / auto (default: auto)")
+    ap.add_argument("--verbose", action="store_true", default=False,
+                    help="print per-prompt output and load diagnostics")
+    ap.add_argument("--prompt-set", default="auto",
+                    choices=["auto", "t1", "legacy"],
+                    help="auto picks t1 for live, legacy for recorded")
     args = ap.parse_args(argv)
     run_demo(
         ckpt=args.ckpt,
@@ -263,6 +430,9 @@ def main(argv: list[str] | None = None) -> int:
         max_new=args.max_new,
         temperature=args.temperature,
         save_path=args.save,
+        device=args.device,
+        verbose=args.verbose,
+        prompt_set=args.prompt_set,
     )
     return 0
 

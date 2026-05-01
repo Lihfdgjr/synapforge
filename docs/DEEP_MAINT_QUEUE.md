@@ -88,7 +88,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 # Tier 1 — Quality validation (do ASAP when ckpt available)
 
 ## T1.1 — Real chat sample on latest ckpt
-- [ ] **Status**: pending
+- [x] (00:36, fixed CLI; awaits rental ckpt run) **Status**: chat_demo CLI shipped (T1 prompts, --device, --verbose, module.-strip, JSON {ckpt,step,samples:[{lang,prompt,response}]}); 8/8 smoke tests pass on CPU; live ckpt run still pending on rental.
 - **Goal**: validate chat ability per ckpt with verbatim output (NEVER fake).
 - **Trigger**: latest `step_*.pt` mtime > last `CHAT_SAMPLES.md` entry by ≥ 3 hours, AND step ≥ 4000.
 - **Steps**:
@@ -198,7 +198,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T1.9: inference latency TTFT=Xms per-step=Yms`.
 
 ## T1.10 — VRAM usage timeline
-- [ ] **Status**: pending
+- [in 00:06] **Status**: rental SSH probe
 - **Goal**: profile peak VRAM within one training step to confirm sparse z-loss + kd-topk savings.
 - **Cmd**: ssh ... add `torch.cuda.memory_summary(abbreviated=True)` before/after each loss component for 1 step.
 - **Output**: `docs/VRAM_TIMELINE.md` (NEW) with peak per loss component.
@@ -261,7 +261,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.1: arxiv scan +N papers (highlights: ...)`.
 
 ## T2.2 — Triton fused PLIF backward kernel
-- [ ] **Status**: stub at `synapforge/backends/triton_fused_backward.py` (commit `5a3ecef`)
+- [in 00:06] **Status**: agent (worktree) implementing actual Triton kernel
 - **Goal**: implement actual Triton kernel for `(spike, dspike/dv) = surrogate(v - thr)` fused.
 - **Steps** (Agent: general-purpose, isolation: worktree):
   1. Read existing stub + `synapforge/triton_block_kernel.py` for forward pattern
@@ -273,7 +273,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.2: triton fused PLIF backward Triton kernel + tests`.
 
 ## T2.3 — Surrogate gradient annealing
-- [ ] **Status**: pending (addresses P25 PLIF dead)
+- [in 00:06] **Status**: agent (worktree) implementing 10→1 anneal
 - **Goal**: anneal surrogate gradient width from 10 → 1 over first 5000 steps to address sharp surrogate at training start.
 - **Steps** (Agent: general-purpose):
   1. Read `synapforge/surrogate.py` ATan / sigmoid surrogate, find width param
