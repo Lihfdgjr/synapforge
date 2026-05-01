@@ -90,12 +90,19 @@ class HybridBlock(Module):
         # ~=0.49*1.0=0.49 but most channels at init have |x|<0.3, so
         # threshold=0.3 -> nearly zero spikes (dead=N/N). Lowered to 0.05
         # to match LearnableThreshold default and let learning bootstrap.
+        weight_quant: str = "none",
+        # T2.8 / MATMUL_FREE.md M1 — when "ternary", the LiquidCell input
+        # projections (delta_proj, b_proj) are BitNet b1.58 AbsMean
+        # ternary-QAT layers. ALL OTHER weights (PLIF tau/threshold,
+        # SparseSynapse, gate, FFN, RMSNorm) stay fp/bf16. Default
+        # "none" matches the historical fp baseline.
     ) -> None:
         super().__init__()
         self.d = int(d)
 
         self.ln1 = _RMSNorm(d)
-        self.liquid = LiquidCell(d, d, init="hasani")
+        self.liquid = LiquidCell(d, d, init="hasani",
+                                 weight_quant=weight_quant)
         # tau_init=2.5 (was 1.5): 1-decay = 0.33 (was 0.49), so per-step
         # input drive is smaller but membrane integrates over more steps,
         # which is the textbook LIF behavior (Fang 2021 uses tau~2-4).
@@ -153,6 +160,11 @@ class SynapForge100M(Module):
         freeze_vocab_tail: bool = True,
         live_vocab: int = QWEN25_LIVE_VOCAB,
         lm_head_spectral_norm: bool = False,
+        weight_quant_cfc: str = "none",
+        # T2.8 / MATMUL_FREE.md M1 — when "ternary" the LiquidCell input
+        # projections inside every HybridBlock are BitNet b1.58 ternary
+        # QAT layers. PLIF / Synapse / FFN / LM head untouched. Default
+        # "none" preserves the historical fp baseline.
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -165,6 +177,12 @@ class SynapForge100M(Module):
         self.freeze_vocab_tail = bool(freeze_vocab_tail)
         self.live_vocab = int(live_vocab)
         self.lm_head_spectral_norm = bool(lm_head_spectral_norm)
+        self.weight_quant_cfc = str(weight_quant_cfc)
+        if self.weight_quant_cfc not in ("none", "ternary"):
+            raise ValueError(
+                f"weight_quant_cfc must be 'none' or 'ternary', "
+                f"got {weight_quant_cfc!r}"
+            )
 
         self.tok_embed = nn.Embedding(vocab, d)
         nn.init.normal_(self.tok_embed.weight, std=0.02)
@@ -173,7 +191,8 @@ class SynapForge100M(Module):
 
         self.blocks = nn.ModuleList(
             HybridBlock(d, ffn_ratio=ffn_ratio, sparsity=sparsity,
-                        dropout=dropout)
+                        dropout=dropout,
+                        weight_quant=self.weight_quant_cfc)
             for _ in range(n_layers)
         )
         self.ln_f = _RMSNorm(d)
@@ -302,6 +321,7 @@ def build_synapforge_100m(
     freeze_vocab_tail: bool = True,
     live_vocab: int = QWEN25_LIVE_VOCAB,
     lm_head_spectral_norm: bool = False,
+    weight_quant_cfc: str = "none",
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
@@ -311,6 +331,7 @@ def build_synapforge_100m(
         freeze_vocab_tail=freeze_vocab_tail,
         live_vocab=live_vocab,
         lm_head_spectral_norm=lm_head_spectral_norm,
+        weight_quant_cfc=weight_quant_cfc,
     )
 
 

@@ -37,7 +37,32 @@ from ..module import Module
 
 
 class LiquidCell(Module):
-    """Closed-form-scannable Liquid (CfC-S4) recurrence cell."""
+    """Closed-form-scannable Liquid (CfC-S4) recurrence cell.
+
+    Parameters
+    ----------
+    in_dim, hidden_dim
+        Standard CfC dimensions.
+    init
+        ``"hasani"`` (default, A in [0.5, 2.0]) or ``"mamba"``
+        (A in [1.0, 16.0]).
+    bound
+        If True, wrap the output in ``tanh``.
+    weight_quant
+        Quantization scheme for the input-projection weights
+        (``delta_proj`` and ``b_proj`` only — the recurrent decay
+        ``A_log`` is *never* quantized because per-channel tau is
+        the most sensitive parameter in a CfC).
+
+        * ``"none"`` (default): standard fp ``nn.Linear``, matches
+          historical behaviour.
+        * ``"ternary"``: BitNet b1.58 AbsMean ternary QAT
+          (arXiv:2402.17764). Forward emits weights in
+          ``{-gamma, 0, +gamma}`` per-tensor; backward uses STE
+          (straight-through estimator). Compatible with bf16 autocast
+          (``gamma`` stays in fp32). This is the M1 milestone of
+          ``docs/MATMUL_FREE.md``.
+    """
 
     def __init__(
         self,
@@ -45,14 +70,30 @@ class LiquidCell(Module):
         hidden_dim: int,
         init: str = "hasani",
         bound: bool = True,
+        weight_quant: str = "none",
     ) -> None:
         super().__init__()
         self.in_dim = int(in_dim)
         self.hidden_dim = int(hidden_dim)
         self.bound = bool(bound)
+        self.weight_quant = str(weight_quant)
+        if self.weight_quant not in ("none", "ternary"):
+            raise ValueError(
+                f"unknown weight_quant {weight_quant!r}; "
+                f"use 'none' or 'ternary'"
+            )
 
-        self.delta_proj = nn.Linear(in_dim, hidden_dim)
-        self.b_proj = nn.Linear(in_dim, hidden_dim)
+        if self.weight_quant == "ternary":
+            # BitNet b1.58 AbsMean ternary QAT on the two input
+            # projections only. Imported lazily so cells.liquid stays
+            # importable even when synapforge.quantize fails to load
+            # (e.g. minimal CI without the full package).
+            from ..quantize import TernaryLinear
+            self.delta_proj = TernaryLinear(in_dim, hidden_dim, bias=True)
+            self.b_proj = TernaryLinear(in_dim, hidden_dim, bias=True)
+        else:
+            self.delta_proj = nn.Linear(in_dim, hidden_dim)
+            self.b_proj = nn.Linear(in_dim, hidden_dim)
 
         if init == "hasani":
             A_init = torch.log(torch.linspace(0.5, 2.0, hidden_dim))

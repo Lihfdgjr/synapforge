@@ -393,6 +393,89 @@ def count_ternary_params(model: nn.Module) -> tuple[int, int]:
     return n_tern, n_total
 
 
+# ---------------------------------------------------------------------------
+# T2.8 / MATMUL_FREE.md M1 — ternarize CfC input projections only.
+# ---------------------------------------------------------------------------
+#
+# The mixed-signal CfC update (Hasani et al. 2022) is
+#   delta_t = softplus(W_delta @ x_t)        # input projection
+#   B_t     = delta_t * (W_B @ x_t)          # input projection
+#   A_t     = exp(-delta_t * exp(A_log))     # per-channel decay (A_log)
+#   h_t     = A_t * h_{t-1} + B_t
+# In synapforge.cells.liquid.LiquidCell those map directly to:
+#   delta_proj : nn.Linear(in_dim, hidden_dim)   # the "W"   (input)
+#   b_proj     : nn.Linear(in_dim, hidden_dim)   # the "Wi"  (input)
+#   A_log      : nn.Parameter(hidden_dim)        # the "U"   (recurrent / tau)
+#
+# M1 ternarizes ONLY the two input projections (W, Wi) — A_log stays fp32
+# because the per-channel decay is the most sensitive of the three (loss
+# explodes if it's clamped). This is the BitNet b1.58 / arXiv:2406.02528
+# matmul-free recipe scoped to the CfC.
+
+
+def apply_ternary_to_cfc(
+    model: nn.Module,
+    gamma_warmup_steps: int = DEFAULT_GAMMA_WARMUP_STEPS,
+) -> int:
+    """Walk `model`; replace the input-projection nn.Linears inside every
+    ``LiquidCell`` with ``TernaryLinear``. Leaves the recurrent decay
+    parameter ``A_log`` and any tau-style buffers alone.
+
+    Targets exactly two attributes per cell:
+        cell.delta_proj   (W : input -> selective dt)
+        cell.b_proj       (Wi : input -> input gain)
+
+    Returns the number of layers replaced (== 2 * #cells).
+
+    Notes
+    -----
+    * Idempotent: a second call after conversion is a no-op (the children
+      are already ``TernaryLinear``, not ``nn.Linear``).
+    * The replacement copies weight/bias data so the post-conversion
+      forward starts numerically equivalent to the fp baseline (modulo
+      discretization noise). A short fine-tune (~1-5% of original steps,
+      per BitNet b1.58 §3.2) recovers full accuracy.
+    * Plasticity / Hebbian buffers and the LM head are NEVER touched
+      because we only inspect attributes named ``delta_proj`` /
+      ``b_proj`` on ``LiquidCell`` instances.
+    """
+    # Late import: synapforge.cells.liquid imports torch at module load,
+    # and importing it at quantize.py top-level would create a cycle
+    # because cells.liquid pulls in synapforge.module which can pull in
+    # the package __init__.
+    from .cells.liquid import LiquidCell
+
+    count = 0
+    for module in model.modules():
+        if not isinstance(module, LiquidCell):
+            continue
+        for child_name in ("delta_proj", "b_proj"):
+            child = getattr(module, child_name, None)
+            if child is None:
+                continue
+            if isinstance(child, TernaryLinear):
+                # Already converted — idempotent no-op.
+                continue
+            if not isinstance(child, nn.Linear):
+                # Defensive: someone replaced this with something exotic.
+                continue
+            tern = TernaryLinear(
+                in_features=child.in_features,
+                out_features=child.out_features,
+                bias=child.bias is not None,
+                gamma_warmup_steps=gamma_warmup_steps,
+            )
+            tern.weight.data.copy_(child.weight.data)
+            if child.bias is not None and tern.bias is not None:
+                tern.bias.data.copy_(child.bias.data)
+            tern = tern.to(
+                device=child.weight.device, dtype=child.weight.dtype
+            )
+            setattr(module, child_name, tern)
+            count += 1
+    return count
+
+
 __all__ = [
     "DEFAULT_EXCLUDE",
     "DEFAULT_GAMMA_WARMUP_STEPS",
@@ -402,6 +485,7 @@ __all__ = [
     "AbsMeanTernary",
     "quantize_ternary",
     "convert_model_to_ternary",
+    "apply_ternary_to_cfc",
     "freeze_gamma",
     "count_ternary_params",
 ]

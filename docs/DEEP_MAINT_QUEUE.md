@@ -327,7 +327,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.7: gradient accumulation N-step CLI flag`.
 
 ## T2.8 — Ternary CfC weights M1
-- [ ] **Status**: pending (addresses MATMUL_FREE.md M1)
+- [x] (00:37, auto-T2.8, AbsMean ternary on CfC W only + 5 tests + 100step parity test, rel_diff=0.296%)
+- ~~**Status**: pending (addresses MATMUL_FREE.md M1)~~
 - **Goal**: enable AbsMeanTernary on CfC `W` only (CfC is ~30% of params).
 - **Steps** (Agent: general-purpose):
   1. Apply `synapforge.quantize.AbsMeanTernary` to `LiquidCell.W` post-init

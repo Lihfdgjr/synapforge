@@ -255,6 +255,18 @@ def _parse_args() -> argparse.Namespace:
     # shared weight is reparameterised as W / sigma each forward; when
     # untied, it wraps lm_head directly. Opt-in because spectral_norm has
     # known bf16 quirks (power-iter buffers stay fp32).
+    # T2.8 / MATMUL_FREE.md M1 — BitNet b1.58 ternary QAT on CfC input
+    # projections only (delta_proj + b_proj inside every LiquidCell).
+    # Default "none" preserves the historical fp baseline. "ternary"
+    # turns on AbsMean ternary QAT with STE backward; gamma stays in
+    # fp32 so bf16 autocast is safe.
+    p.add_argument("--quant-cfc-weights", default="none",
+                   choices=["none", "ternary"],
+                   help="quantization scheme for CfC input projections "
+                        "(LiquidCell.delta_proj + LiquidCell.b_proj). "
+                        "'ternary' = BitNet b1.58 AbsMean QAT (arXiv: "
+                        "2402.17764). Untouched: A_log (recurrent decay), "
+                        "PLIF tau/threshold, SparseSynapse, FFN, LM head.")
     p.add_argument("--lm-head-spectral-norm", action="store_true",
                    default=False, dest="lm_head_spectral_norm",
                    help="apply torch.nn.utils.spectral_norm to the LM head "
@@ -852,9 +864,20 @@ def main() -> int:
         use_grad_checkpoint=args.grad_checkpoint,
         freeze_vocab_tail=bool(args.freeze_vocab_tail),
         lm_head_spectral_norm=bool(args.lm_head_spectral_norm),
+        weight_quant_cfc=str(args.quant_cfc_weights),
     )
     n_params = model.num_parameters()
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
+    if str(args.quant_cfc_weights) == "ternary":
+        # MATMUL_FREE.md M1 — log how many CfC input projections the
+        # constructor wired as TernaryLinear so post-mortems can confirm
+        # the flag actually took effect (and the QAT path isn't a no-op).
+        from synapforge.quantize import TernaryLinear
+        n_tern = sum(
+            1 for m in model.modules() if isinstance(m, TernaryLinear)
+        )
+        print(f"[quant] CfC ternary QAT enabled: "
+              f"{n_tern} TernaryLinear layers wired (delta_proj + b_proj)")
     plif_cells = [m for m in model.modules() if isinstance(m, PLIFCell)]
     print(f"plif cells found: {len(plif_cells)}")
 
