@@ -548,7 +548,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T5.1: loss component % logging`.
 
 ## T5.2 — Spike rate per layer (10 layers)
-- [x] (02:37, hash, --log-spike-per-layer flag + 4 tests)
+- [x] (02:37, 6403256, --log-spike-per-layer flag + 4 tests)
 - **Status**: shipped 2026-05-02 02:37 — `--log-spike-per-layer` (default OFF, opt-in for dead-layer debugging) emits a `spike_rates_per_layer: l0=... l<N-1>=...` line immediately below the existing aggregated `spike: mean=...` line at the same 50-step cadence. Pure-Python helper `_format_spike_rates_per_layer(rates)` renders any layer count to 3-decimal precision matching the existing log style; aggregated line is untouched so downstream parsers stay disturbed-free. 4/4 tests pass on CPU at `tests/integration/test_per_layer_spike_log.py` (default_off / enabled_emits_per_layer / handles_variable_n_layers (4 + 12 + 1 + 0 layer cases) / format_3decimal_places).
 - **Steps** (Agent: general-purpose): log `spike_rate_l0 ... spike_rate_l9` per step. Detect dead layers individually.
 - **Commit**: `auto-T5.2: per-layer spike rate logging flag + tests`.
