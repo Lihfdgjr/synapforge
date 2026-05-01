@@ -596,7 +596,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T6.1: demo video 3-min script`.
 
 ## T6.2 — Paper draft section 4 (results)
-- [x] (02:54, pending-hash, paper §4 auto-fill from train log + bench JSON)
+- [x] (02:54, 3d2cc27, paper §4 auto-fill from train log + bench JSON)
 - **Status**: shipped 2026-05-02 02:54 — `scripts/fill_paper_section4.py` (~370 LOC) re-uses the regex parser from `scripts/plot_train_curves.py` (T5.5) so log-format drift only needs to be patched once. Generates `paper/section4_auto.tex` containing (1) Table 4.1 booktabs of Train CE / Val PPL TTT / holdout at key steps {1k, 5k, 10k, snapshot, best} (auto-resolved from `min(val_ppl_holdout)`), (2) Table 4.2 booktabs of throughput tok/s mean / GPU memory peak / wall-clock (mean step_ms × last_step) / `torch.compile` speedup overlay from bench JSON, (3) Figure 4.1 caption with run name resolved from `train_run3<letter>.log`. Missing metrics fall back to `\textbf{TBD}` (e.g., snapshot row when `--ckpt-step 10000` exceeds last logged step; compile-speedup cell when `--bench-json` not passed). Materialises `paper/draft.tex` skeleton with `\input{section4_auto}` placeholder if absent. Tests at `tests/integration/test_fill_paper_section4.py` — 5/5 PASS on CPU in 0.5s (smoke writes section4_auto.tex / both tables booktabs / TBD when metric missing / compile-skip says "skipped (CPU/Windows)" not "+0.00%" / best row picks min holdout PPL). CLI: `python scripts/fill_paper_section4.py --log <log> --bench-json <json> --ckpt-step <N> --out paper/section4_auto.tex`.
 - **Commit**: `auto-T6.2: paper §4 auto-fill from train log + bench JSON`.
 
