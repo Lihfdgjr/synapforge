@@ -70,8 +70,11 @@ class DualPathPLIFGate:
         rates = []
         for m in self.plifs:
             if hasattr(m, "last_spike_rate"):
-                r = float(m.last_spike_rate)
-                rates.append(r)
+                attr = m.last_spike_rate
+                # PLIFCell exposes ``last_spike_rate`` as a method (T2.5);
+                # legacy PLIF cells expose it as a tensor buffer.
+                rate_t = attr() if callable(attr) else attr
+                rates.append(float(rate_t))
         if not rates:
             return self.state.spike_rate_ema
         return sum(rates) / len(rates)

@@ -354,19 +354,59 @@ class PLIFCell(nn.Module):
         self.alpha = float(alpha)
         self.reset = reset
         # Spike-rate monitor: scalar latest mean spike rate over the last
-        # forward pass. Populated by forward / forward_seq. Caller reads it
-        # via .item(). Non-persistent so legacy ckpts load cleanly.
+        # forward pass. Populated by forward / forward_seq. Read via the
+        # public ``last_spike_rate()`` method (returns the buffer tensor).
+        # Backed by a private ``_last_spike_rate`` buffer so the public
+        # name is the method (T2.5: spike-rate target loss reads it via
+        # the method on each PLIF cell). Non-persistent so legacy ckpts
+        # load cleanly.
         self.register_buffer(
-            "last_spike_rate",
+            "_last_spike_rate",
             torch.zeros(1),
             persistent=False,
         )
+        # T2.5: live (graph-attached) scalar of the most recent spike-rate
+        # mean. Unlike ``_last_spike_rate`` (detached, for monitoring),
+        # this tensor still has the autograd graph back to ``threshold``
+        # and ``log_tau`` via the surrogate-gradient path through
+        # :func:`spike`. The trainer's spike-rate-target auxiliary loss
+        # reads this tensor so its gradient pushes the parameters back
+        # into the target band [low, high]. Reset to ``None`` outside a
+        # forward so callers without a fresh forward fall back to the
+        # detached buffer.
+        self._last_spike_rate_live: torch.Tensor | None = None
 
     # -- decays -----------------------------------------------------------
 
     def get_decay(self) -> torch.Tensor:
         """Return per-channel decay factor in (0, 1)."""
         return torch.exp(-1.0 / torch.exp(self.log_tau))
+
+    # -- spike-rate readout ----------------------------------------------
+
+    def last_spike_rate(self) -> torch.Tensor:
+        """Return the mean spike rate from the most recent forward.
+
+        Returns the *live* (autograd-attached) scalar produced by the
+        last :meth:`forward` / :meth:`forward_seq` call when one is
+        available — gradient flows back to ``threshold`` and
+        ``log_tau`` through the surrogate-gradient path in
+        :func:`spike`. This is the tensor read by the trainer's
+        spike-rate-target auxiliary loss (T2.5,
+        ``--spike-target-loss-weight``); writing the loss against this
+        return value is what lets the loss actually push the rate
+        toward the target band.
+
+        Falls back to the detached ``_last_spike_rate`` monitoring
+        buffer if no forward has run since instantiation (returned
+        zeros) or the live tensor was cleared. Always returns a
+        1-element ``torch.Tensor`` on the cell's device — call
+        ``.item()`` for a Python float, or use it directly in a loss
+        expression for the auxiliary-loss path.
+        """
+        if self._last_spike_rate_live is not None:
+            return self._last_spike_rate_live
+        return self._last_spike_rate
 
     # -- single step ------------------------------------------------------
 
@@ -397,10 +437,14 @@ class PLIFCell(nn.Module):
         else:  # "zero"
             v_t = v_t * (1.0 - s_t)
         # Record latest spike rate (mean over batch+channels) for monitoring.
+        # ``_last_spike_rate`` is detached (.item() / read-only inspection);
+        # ``_last_spike_rate_live`` keeps autograd so T2.5's
+        # spike-rate-target auxiliary loss can backprop through it to
+        # ``threshold`` / ``log_tau`` via the surrogate-gradient path.
+        live_rate = s_t.float().mean()
         with torch.no_grad():
-            self.last_spike_rate.copy_(
-                s_t.detach().float().mean().reshape(1)
-            )
+            self._last_spike_rate.copy_(live_rate.detach().reshape(1))
+        self._last_spike_rate_live = live_rate
         return s_t, v_t
 
     # -- vectorised over time --------------------------------------------
@@ -431,11 +475,12 @@ class PLIFCell(nn.Module):
             spikes.append(s)
         s_seq = torch.stack(spikes, dim=1)
         # Overwrite per-step buffer with sequence-level mean so callers using
-        # forward_seq see the aggregated rate, not just T-1.
+        # forward_seq see the aggregated rate, not just T-1. Live tensor
+        # carries autograd for T2.5 spike-rate-target loss.
+        live_rate = s_seq.float().mean()
         with torch.no_grad():
-            self.last_spike_rate.copy_(
-                s_seq.detach().float().mean().reshape(1)
-            )
+            self._last_spike_rate.copy_(live_rate.detach().reshape(1))
+        self._last_spike_rate_live = live_rate
         return s_seq, v
 
     # -- homeostatic threshold control (P1) ------------------------------
