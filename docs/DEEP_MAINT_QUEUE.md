@@ -508,7 +508,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.9: ARC tokenized for reasoning eval`.
 
 ## T3.10 — SWE-bench mini subset
-- [ ] **Status**: pending
+- [x] (03:01, ea93c06, SWE-bench-lite 50 issues + 4 tests) **Status**: done. `scripts/tokenize_swebench_mini.py` (~280 LOC) subsets `princeton-nlp/SWE-bench_Lite` test split (300) → first 50 sorted by `instance_id`, formats `Repo: <repo>\nProblem:\n<problem_statement>\n\nProvide a unified diff patch:\n` prompt, tokenizes prompt + patch with Qwen 2.5 0.5B (`max_length=4096`, `truncation=True`), writes parquet (instance_id, repo, prompt, patch_target, prompt_input_ids, target_input_ids) + manifest. Argparse: `--smoke` (5 mocked), `--n` (default 50), `--out`, `--cache-dir`, `--max-length`. Tests at `tests/integration/test_tokenize_swebench.py`: smoke parquet schema/manifest, format_prompt repo+problem ordering, long-patch hard truncate to max_length, default `--n=50` + helper sort/cap coverage. 6/6 pass on CPU, no transformers/network.
 - **Steps**: subset 50 issues from SWE-bench-lite, tokenize for code-fix demo.
 - **Commit**: `auto-T3.10: SWE-bench mini 50 issues tokenized`.
 
