@@ -119,6 +119,50 @@ def quantize_ternary(w: torch.Tensor, gamma: torch.Tensor | None = None) -> torc
     return TernaryQuantizer.apply(w, gamma)
 
 
+@torch.no_grad()
+def AbsMeanTernary(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """BitNet b1.58 AbsMean ternary quantization (Ma et al. 2024, arXiv:2402.17764).
+
+    Returns the ternary code tensor in ``{-1, 0, +1}`` (as int8) plus the
+    per-tensor fp scale ``gamma = mean(|w|)``. Together they reconstruct the
+    effective weight as ``codes.float() * gamma``.
+
+    This is the "naked" form most papers describe: no STE, no autograd, no
+    EMA bookkeeping -- just the discretization step. Use ``TernaryLinear`` for
+    the trainable QAT module that wraps this with straight-through gradient.
+
+    Parameters
+    ----------
+    weight
+        Any fp tensor. Shape is preserved.
+
+    Returns
+    -------
+    codes
+        ``int8`` tensor, same shape as ``weight``, values in ``{-1, 0, +1}``.
+    gamma
+        ``fp32`` 0-d tensor, the per-tensor scale ``mean(|weight|)``.
+
+    Examples
+    --------
+    >>> w = torch.randn(512, 512)
+    >>> codes, gamma = AbsMeanTernary(w)
+    >>> codes.dtype, codes.unique().tolist(), gamma.shape
+    (torch.int8, [-1, 0, 1], torch.Size([]))
+    >>> w_eff = codes.float() * gamma   # reconstructed dense weight
+
+    Notes
+    -----
+    This is the natural fit for SynapForge SNN paths: when activations are
+    PLIF spikes ``s in {0, 1}``, the matmul ``codes @ s`` reduces to a
+    bitfield popcount (no integer multiplications). See ``docs/MATMUL_FREE.md``.
+    """
+    gamma = weight.detach().abs().mean().to(torch.float32).clamp(min=EPS)
+    w_n = weight.detach().to(torch.float32) / gamma
+    codes = torch.round(w_n).clamp_(-1.0, 1.0).to(torch.int8)
+    return codes, gamma
+
+
 # ---------------------------------------------------------------------------
 # TernaryLinear: drop-in replacement for nn.Linear
 # ---------------------------------------------------------------------------
@@ -355,6 +399,7 @@ __all__ = [
     "DEFAULT_GAMMA_EMA",
     "TernaryQuantizer",
     "TernaryLinear",
+    "AbsMeanTernary",
     "quantize_ternary",
     "convert_model_to_ternary",
     "freeze_gamma",

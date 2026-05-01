@@ -41,6 +41,7 @@ A single sentence: **Synap-1 — a 100M LNN+SNN that chats in EN+ZH, learns at i
 | O9 | NeuroMCP universal codebook (L1/L2/L3, never lose mints) | code done | atomic skill log + reload test |
 | O10 | **50M effective context** with linear inference cost | partial: long.py + InfLLM L1/L2/L3 wired, untested at 50M | benchmark: 1K → 10K → 100K → 1M → 10M → 50M latency linear, ppl drift < 5% |
 | O11 | **Quality monotonic with context length** (longer = better, not worse) | thesis: inference-time STDP + retrieval, not yet validated | A/B: same prompt at 1K vs 50K context; quality score must NOT regress |
+| O12 | **Matmul-free Synap-Edge variant** (ternary weights `{−1,0,+1}` × binary spikes `{0,1}` = pure adder logic) | QAT front-end shipped (`synapforge/quantize.py`), milestones M1/M2/M3 gated post-phase-3 | see `docs/MATMUL_FREE.md` (M1 ≤1% ppl loss, M2 ≥5× CPU speedup, M3 binary×ternary Triton kernel) |
 
 ---
 
