@@ -88,9 +88,6 @@ setsid bash -c "cd '${REPO_DIR}' && exec python3 -u train_100m_kd.py \
   --shuffle-seed 411 \
   --grad-clip 0.5 \
   --spike-target-loss-weight 0.05 \
-  --surrogate-anneal-start 10.0 \
-  --surrogate-anneal-target 1.0 \
-  --surrogate-anneal-steps 5000 \
   --lm-head-spectral-norm \
   --lr-decay cosine \
   --steps 30000 \
