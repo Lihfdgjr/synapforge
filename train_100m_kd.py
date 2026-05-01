@@ -196,6 +196,114 @@ def _format_loss_pct(
     return out
 
 
+def _update_best_ckpt(
+    *,
+    out_dir: str,
+    step: int,
+    val_ppl: float,
+    best_val_ppl: float,
+    enabled: bool = True,
+    log_fn=None,
+    os_name: Optional[str] = None,
+) -> tuple[float, Optional[str]]:
+    """T5.4 — track best val_ppl_holdout and maintain a ``best_step_*.pt`` link.
+
+    On Linux/Mac creates a *relative* symlink ``best_step_<N>.pt -> step_<N>.pt``;
+    on Windows (where symlinks need admin) falls back to a file copy.  Idempotent:
+    if the new ``val_ppl`` does NOT improve on ``best_val_ppl``, returns the old
+    value unchanged and the link is left alone (so re-running with the same val
+    multiple times is a no-op).
+
+    Args:
+        out_dir:        directory containing ``step_<N>.pt`` ckpts.
+        step:           current step (used to format ``best_step_<N>.pt``).
+        val_ppl:        the just-computed ``val_ppl_holdout`` for this step.
+        best_val_ppl:   running min so far (use ``float('inf')`` on the first eval).
+        enabled:        if False this is a no-op and ``best_val_ppl`` is returned as is.
+        log_fn:         optional logger; receives one human-readable string when an
+                        improvement is recorded. Defaults to ``_log``.
+        os_name:        override for ``os.name`` (``'nt'`` forces the Windows copy
+                        fallback). Used by tests; production callers leave None.
+
+    Returns:
+        ``(new_best_val_ppl, link_path_or_None)``. ``link_path`` is the path of
+        the freshly created ``best_step_<N>.pt`` if the val improved, else None.
+
+    Notes:
+        * The source ckpt ``step_<N>.pt`` MUST already exist on disk -- this
+          helper does NOT save the model, it only links/copies an already-saved
+          ckpt. Caller is responsible for ordering: save first, then call us.
+        * Stale ``best_step_*.pt`` files in ``out_dir`` (from previous runs or
+          prior bests) are removed BEFORE the new one is created so there is
+          always exactly one ``best_step_*.pt`` after a successful improvement.
+    """
+    if not enabled:
+        return best_val_ppl, None
+    if log_fn is None:
+        log_fn = _log
+    val_f = float(val_ppl)
+    if not (val_f < float(best_val_ppl)):  # also handles NaN -> no update
+        return best_val_ppl, None
+
+    src_name = f"step_{step:06d}.pt"
+    src_path = os.path.join(out_dir, src_name)
+    if not os.path.exists(src_path):
+        # ckpt wasn't saved at this step (eval_every doesn't divide save_every);
+        # nothing to link to, so we can't actually mark this as best yet.
+        log_fn(
+            f"[best-ckpt] val={val_f:.2f} would improve from "
+            f"{float(best_val_ppl):.2f} but {src_name!r} not on disk; "
+            f"skipped"
+        )
+        return best_val_ppl, None
+
+    dst_name = f"best_step_{step:06d}.pt"
+    dst_path = os.path.join(out_dir, dst_name)
+
+    # Remove any stale best_step_*.pt files (and the new dst if a partial run
+    # left a turd) so there is exactly one after we're done.
+    try:
+        for fname in os.listdir(out_dir):
+            if fname.startswith("best_step_") and fname.endswith(".pt"):
+                stale = os.path.join(out_dir, fname)
+                try:
+                    os.remove(stale)
+                except OSError:
+                    pass
+    except OSError:
+        # out_dir vanished -- nothing we can do.
+        return best_val_ppl, None
+
+    is_windows = (os_name if os_name is not None else os.name) == "nt"
+    used_copy = False
+    if is_windows:
+        # Windows symlinks need admin; copy is the portable fallback.
+        import shutil
+        shutil.copyfile(src_path, dst_path)
+        used_copy = True
+    else:
+        try:
+            # Relative target so the link survives moving the run dir.
+            os.symlink(src_name, dst_path)
+        except (OSError, NotImplementedError):
+            # POSIX symlink failed (no perms / weird FS) -> fall back to copy.
+            import shutil
+            shutil.copyfile(src_path, dst_path)
+            used_copy = True
+
+    prev_str = (
+        f"{float(best_val_ppl):.2f}"
+        if not math.isinf(float(best_val_ppl))
+        else "inf"
+    )
+    method = "copy" if used_copy else "symlink"
+    log_fn(
+        f"[best-ckpt] val={val_f:.2f} improved from {prev_str} at step "
+        f"{step} -> {dst_name} ({method})"
+    )
+    return val_f, dst_path
+
+
 def _adaptive_kd_every(student_ce: float,
                        teacher_ce_estimate: float = 4.5,
                        base: int = 4) -> int:
@@ -280,6 +388,22 @@ def _parse_args() -> argparse.Namespace:
                    help="disable the T5.1 pct_ce/pct_kd/... columns; the "
                         "log line reverts to the legacy "
                         "loss=/ce=/kd=/z=/lr=/step_ms=/tok/s= format.")
+    # T5.4 (DEEP_MAINT_QUEUE.md) — track best val_ppl_holdout across the
+    # run and maintain a ``best_step_*.pt`` symlink (Linux) or copy
+    # (Windows) so warmstart resilience does not depend on remembering
+    # which step had the lowest val. Default ON; toggle off with
+    # ``--no-best-ckpt-track`` for ablations or for runs where the
+    # extra disk write is unwanted.
+    p.add_argument("--best-ckpt-track", action="store_true", default=True,
+                   dest="best_ckpt_track",
+                   help="after each val eval, if val_ppl_holdout improved, "
+                        "create/update a ``best_step_<N>.pt`` link pointing "
+                        "at the matching step ckpt. Default ON.")
+    p.add_argument("--no-best-ckpt-track", action="store_false",
+                   dest="best_ckpt_track",
+                   help="disable T5.4 best ckpt tracking. No best_step_*.pt "
+                        "link is created; warmstart must explicitly pick a "
+                        "step_*.pt to resume from.")
     p.add_argument("--seq-len", type=int, default=SEQ_LEN,
                    help="tokens per training example (overrides SEQ_LEN).")
     # ---- P9 architecture overrides for tiny-model smoke / unit testing ----
@@ -340,6 +464,20 @@ def _parse_args() -> argparse.Namespace:
                         "therefore the z-loss term -- cannot grow "
                         "unboundedly during long training. Default OFF "
                         "(opt-in; see docs/PERF_KNOBS.md and T2.6 / P28).")
+    p.add_argument("--lm-head-pre-ln", action="store_true",
+                   default=False, dest="lm_head_pre_ln",
+                   help="insert nn.LayerNorm(d, elementwise_affine=False) "
+                        "immediately before the final lm_head projection. "
+                        "Bounds the INPUT to lm_head: every row is "
+                        "re-projected to a fixed sqrt(d)-norm sphere "
+                        "regardless of how the affine RMSNorm scale in "
+                        "ln_f drifted under Adam. Stops z-loss from "
+                        "trending linearly upward across long training. "
+                        "Orthogonal to --lm-head-spectral-norm (which "
+                        "bounds the OPERATOR norm); both can be on. "
+                        "Default OFF (opt-in; see T7.3 / P28 primary "
+                        "plan in docs/TRAINING_ISSUES_RETROSPECTIVE.md "
+                        "section 2.d).")
     # T2.9 / arxiv:2412.06769 — Coconut latent thinking budget.
     p.add_argument("--latent-k", type=int, default=0,
                    dest="latent_k",
@@ -938,6 +1076,7 @@ def main() -> int:
         use_grad_checkpoint=args.grad_checkpoint,
         freeze_vocab_tail=bool(args.freeze_vocab_tail),
         lm_head_spectral_norm=bool(args.lm_head_spectral_norm),
+        lm_head_pre_ln=bool(args.lm_head_pre_ln),
         weight_quant_cfc=str(args.quant_cfc_weights),
         latent_k=int(args.latent_k),
     )
@@ -1258,6 +1397,11 @@ def main() -> int:
     metrics = {"step": [], "loss": [], "step_ms": [], "tok_per_s": [],
                "ppl_eval": {}, "ppl_eval_ttt": {}, "ppl_eval_holdout": {},
                "samples": {}}
+    # T5.4 -- track lowest val_ppl_holdout we've seen this run. The
+    # `_update_best_ckpt` helper compares against this and (on improvement)
+    # creates/updates a ``best_step_<N>.pt`` symlink/copy so a relauncher can
+    # warmstart from the actual best ckpt without grepping the log.
+    best_val_ppl_holdout = float("inf")
     t0 = time.time()
     last_log_t = t0
     cum_tok = 0
@@ -1716,6 +1860,20 @@ def main() -> int:
                 f"VAL step {step}: val_ppl_ttt={ppl_ttt:.2f} "
                 f"val_ppl_holdout={ppl_holdout:.2f} (honest)"
             )
+            # T5.4 -- maintain best_step_*.pt link/copy. Fail-soft: any
+            # error (disk full, missing src ckpt, FS without symlinks) is
+            # logged but does not interrupt training.
+            try:
+                best_val_ppl_holdout, _best_link = _update_best_ckpt(
+                    out_dir=out_dir,
+                    step=step,
+                    val_ppl=float(ppl_holdout),
+                    best_val_ppl=best_val_ppl_holdout,
+                    enabled=bool(getattr(args, "best_ckpt_track", True)),
+                    log_fn=_log,
+                )
+            except Exception as exc:  # pragma: no cover
+                _log(f"[best-ckpt] update failed (continuing): {exc}")
             # Honest eval (default ON, fail-soft). Dumps real chat samples to
             # honest_eval.jsonl alongside this run -- catches the case where
             # ppl monotonically decreases but the model emits word-salad.

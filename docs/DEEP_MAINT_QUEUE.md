@@ -555,8 +555,9 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: log `param.grad.norm()` for each named module every 100 steps. Detect imbalance.
 
 ## T5.4 — Best ckpt selector
-- [ ] **Status**: pending
+- [x] (02:16, d5ae97e, best ckpt symlink + 5 tests; tracks val_ppl_holdout running min) **Status**: done — `--best-ckpt-track` (default ON, `--no-best-ckpt-track` disables) tracks `best_val_ppl_holdout = float('inf')` across the run; on each val eval the new pure-Python `_update_best_ckpt(...)` helper compares against the running min and (on improvement) maintains a single `best_step_<N>.pt` link in the run dir — relative symlink on POSIX, `shutil.copyfile` fallback on Windows / unsupported FS. 5/5 CPU tests pass at `tests/integration/test_best_ckpt_track.py` (first eval / better val swaps / equal-or-worse no-op + idempotent / `enabled=False` short-circuits / `os_name='nt'` forces copy branch).
 - **Steps**: hook in trainer to track `best_val_ppl_holdout` and `cp` to `best_step_*.pt` symlink. Useful for warmstart.
+- **Commit**: `auto-T5.4: best-val ckpt symlink tracker + 5 tests`.
 
 ## T5.5 — Train/val curves matplotlib
 - [x] (01:48, 589e339, plot script + 20 tests; awaits rental log scp for live PNG)
