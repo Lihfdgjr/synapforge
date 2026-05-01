@@ -13,7 +13,9 @@
 
 ## 1. North star
 
-A single sentence: **a 100M LNN+SNN that chats in EN+ZH, learns at inference via STDP, grows synapses into the action space (NeuroMCP) instead of emitting tool-call tokens, and never hallucinates "training is going up" — every claim is backed by a runnable demo.**
+A single sentence: **Synap-1 — a 100M LNN+SNN that chats in EN+ZH, learns at inference via STDP, grows synapses into the action space (NeuroMCP) instead of emitting tool-call tokens, and never hallucinates "training is going up" — every claim is backed by a runnable demo.**
+
+**Naming**: framework = `SynapForge` (the forge); model = **Synap-1** (突触一号, the artifact). See [`NAMING.md`](NAMING.md) for the variant roadmap (Synap-1 / Synap-1-SFT / Synap-1-RL / Synap-Pro / Synap-Edge / Synap-Air).
 
 **Investor-pitch reduction**: 5 differentiated claims (see `docs/INVESTOR.md`):
 1. NeuroMCP synaptic growth replaces tool calling.

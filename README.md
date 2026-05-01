@@ -1,6 +1,9 @@
 # SynapForge
 
-A small (375M-parameter) **LNN + SNN hybrid language model** — *not a transformer*.
+**SynapForge** is the framework; **Synap-1** (突触一号) is the model trained with it
+— a 100M-parameter **LNN + SNN hybrid language model** — *not a transformer*.
+See [docs/NAMING.md](docs/NAMING.md) for the framework-vs-model split + the
+Synap-1 / Synap-Pro / Synap-Edge roadmap.
 
 Built from the ground up around four ideas that aren't in standard LLM stacks:
 

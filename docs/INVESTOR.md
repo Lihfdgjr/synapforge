@@ -1,5 +1,9 @@
 # SynapForge — Investor Pitch
 
+**Model**: **Synap-1** (突触一号) — the trained artifact.
+**Framework**: `SynapForge` — the codebase that produces Synap-1 and its variants.
+See [NAMING.md](NAMING.md) for the variant roadmap.
+
 **One sentence**: A 100M-parameter LNN+SNN hybrid that learns from spike
 timing at inference, grows synapses into the action space without
 emitting tool-call tokens, and uses a closed-form k-step CfC fold to
