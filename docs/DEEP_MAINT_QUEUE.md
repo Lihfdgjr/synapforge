@@ -351,7 +351,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.10: CoE audit, status: live/orphan/deferred`.
 
 ## T2.11 — torch.compile reduce-overhead real timing A/B
-- [x] (00:47, pending-hash, bench harness ready; awaits rental A800 run for real numbers) **Status**: bench harness shipped at `scripts/bench_torch_compile.py`; A/B against `torch.compile(mode='reduce-overhead', dynamic=True)` on a fresh `SynapForge100M(d=512, n_layers=10, vocab=151936)`; outputs `bench_results/torch_compile_HHMMSS.json` with `no_compile_tok_s` / `compile_tok_s` / `speedup_ratio` / `pct_speedup`. CPU/Windows path skips compile arm cleanly with a recorded `compile_skip_reason`. Smoke tests at `tests/integration/test_bench_torch_compile.py` (2/2 pass on CPU). Real numbers blocked on GPU rental — see `docs/PERF_KNOBS.md` v3 sweep TODO row.
+- [x] (00:47, 4215b01, bench harness ready; awaits rental A800 run for real numbers) **Status**: bench harness shipped at `scripts/bench_torch_compile.py`; A/B against `torch.compile(mode='reduce-overhead', dynamic=True)` on a fresh `SynapForge100M(d=512, n_layers=10, vocab=151936)`; outputs `bench_results/torch_compile_HHMMSS.json` with `no_compile_tok_s` / `compile_tok_s` / `speedup_ratio` / `pct_speedup`. CPU/Windows path skips compile arm cleanly with a recorded `compile_skip_reason`. Smoke tests at `tests/integration/test_bench_torch_compile.py` (2/2 pass on CPU). Real numbers blocked on GPU rental — see `docs/PERF_KNOBS.md` v3 sweep TODO row.
 - **Goal**: measure actual speedup from `--torch-compile reduce-overhead` (we expect 5-15%, claim untested).
 - **Real-bench command (run on rental A800 once available)**:
   ```bash
