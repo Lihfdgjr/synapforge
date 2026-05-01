@@ -145,6 +145,57 @@ def _log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def _format_loss_pct(
+    *,
+    step_loss: float,
+    step_ce: float,
+    step_kd: float,
+    step_z: float,
+    z_loss_weight: float,
+    step_modal_aux: float = 0.0,
+    has_modal: bool = False,
+    step_cur_aux: float = 0.0,
+    cur_weight: float = 0.0,
+    has_curiosity: bool = False,
+) -> str:
+    """T5.1 — compute the ``pct_*`` log columns for the per-step log line.
+
+    Returns a string starting with a leading space (or empty if there is
+    nothing to add). The math:
+
+        denom    = max(step_loss, 1e-9)
+        pct_ce    = step_ce          / denom * 100
+        pct_kd    = step_kd          / denom * 100
+        pct_z     = step_z * z_w     / denom * 100
+        pct_modal = step_modal_aux   / denom * 100   (modal added unweighted)
+        pct_cur   = step_cur_aux*c_w / denom * 100
+
+    ``z`` and ``cur`` accumulators in the trainer hold RAW (un-weighted)
+    means so we re-weight here to reflect the actual fraction of
+    ``loss``. ``modal_aux`` is added directly to ``loss`` un-weighted.
+
+    KD-OFF steps (``step_kd == 0``) print ``pct_kd=0.0`` rather than
+    omitting the column so downstream parsers see a stable schema.
+
+    Floors by 1e-9 so the pre-backward step (loss == 0.0 fallback) does
+    not divide by zero.
+
+    Pure function -- no torch, no IO -- so it is unit-testable on CPU.
+    """
+    denom = max(float(step_loss), 1e-9)
+    pct_ce = float(step_ce) / denom * 100.0
+    pct_kd = float(step_kd) / denom * 100.0
+    pct_z = float(step_z) * float(z_loss_weight) / denom * 100.0
+    out = f" pct_ce={pct_ce:.1f} pct_kd={pct_kd:.1f} pct_z={pct_z:.1f}"
+    if has_modal:
+        pct_modal = float(step_modal_aux) / denom * 100.0
+        out += f" pct_modal={pct_modal:.1f}"
+    if has_curiosity:
+        pct_cur = float(step_cur_aux) * float(cur_weight) / denom * 100.0
+        out += f" pct_cur={pct_cur:.1f}"
+    return out
+
+
 def _adaptive_kd_every(student_ce: float,
                        teacher_ce_estimate: float = 4.5,
                        base: int = 4) -> int:
@@ -215,6 +266,20 @@ def _parse_args() -> argparse.Namespace:
                    help="run val ppl every N steps (overrides EVAL_EVERY).")
     p.add_argument("--log-every", type=int, default=LOG_EVERY,
                    help="emit a log line every N steps (overrides LOG_EVERY).")
+    # T5.1 (DEEP_MAINT_QUEUE.md) — append loss-component % columns to the
+    # per-step log line so root-cause work can see at a glance whether ce/kd/
+    # z/modal/cur dominates total. Default ON; toggle off with
+    # ``--no-log-loss-pct`` if downstream tooling parses a fixed prefix.
+    p.add_argument("--log-loss-pct", action="store_true", default=True,
+                   dest="log_loss_pct",
+                   help="append pct_ce/pct_kd/pct_z (and pct_modal/pct_cur "
+                        "when those mixins are active) columns to the "
+                        "per-step log line. Default ON.")
+    p.add_argument("--no-log-loss-pct", action="store_false",
+                   dest="log_loss_pct",
+                   help="disable the T5.1 pct_ce/pct_kd/... columns; the "
+                        "log line reverts to the legacy "
+                        "loss=/ce=/kd=/z=/lr=/step_ms=/tok/s= format.")
     p.add_argument("--seq-len", type=int, default=SEQ_LEN,
                    help="tokens per training example (overrides SEQ_LEN).")
     # ---- P9 architecture overrides for tiny-model smoke / unit testing ----
@@ -1488,9 +1553,30 @@ def main() -> int:
                 mixin_str += f" cur={float(cur_aux.detach()):.4f}"
             if args.spike_target_loss_weight > 0:
                 mixin_str += f" stl={float(spike_target_loss.detach()):.4f}"
+            # T5.1 — loss component %. Computed from the per-step accumulator
+            # means (``_step_*``) so the percentages match the same window
+            # whatever ``--accum`` is set to. ``_format_loss_pct`` re-weights
+            # the un-weighted ``z`` / ``cur`` accumulators and skips
+            # ``pct_modal`` / ``pct_cur`` when the corresponding mixin is
+            # disabled. Off when ``--no-log-loss-pct`` is passed.
+            pct_str = ""
+            if args.log_loss_pct:
+                pct_str = _format_loss_pct(
+                    step_loss=_step_loss,
+                    step_ce=_step_ce,
+                    step_kd=_step_kd,
+                    step_z=_step_z,
+                    z_loss_weight=args.z_loss_weight,
+                    step_modal_aux=_step_modal_aux,
+                    has_modal=modal_mixin is not None,
+                    step_cur_aux=_step_cur_aux,
+                    cur_weight=args.curiosity_weight,
+                    has_curiosity=curiosity_mixin is not None,
+                )
             _log(f"step {step:5d} loss={loss.item():.4f} ce={ce_loss.item():.3f} "
                  f"kd={kd.item():.3f} z={z_loss.item():.3f} lr={cur_lr:.5f} "
-                 f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}{mixin_str}")
+                 f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}{mixin_str}"
+                 f"{pct_str}")
             if step % 50 == 0 and plif_cells:
                 # T2.5: ``last_spike_rate`` is a method now.
                 rates = [m.last_spike_rate().item() for m in plif_cells]
