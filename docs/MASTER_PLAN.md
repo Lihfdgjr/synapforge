@@ -1,6 +1,6 @@
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01
+**Updated**: 2026-05-01 (revision 2: + agent audit P11-P21, vocab fix, 50M context O10-O11)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -36,6 +36,8 @@ A single sentence: **a 100M LNN+SNN that chats in EN+ZH, learns at inference via
 | O7 | Plan C insurance: LoRA Qwen 0.5B as backup demo | code done | run ≥ once on rental, ≥ 60% chat |
 | O8 | Honest evaluation pipeline (no fake curves) | wired, daemon running | every ckpt = 5 EN + 5 ZH samples |
 | O9 | NeuroMCP universal codebook (L1/L2/L3, never lose mints) | code done | atomic skill log + reload test |
+| O10 | **50M effective context** with linear inference cost | partial: long.py + InfLLM L1/L2/L3 wired, untested at 50M | benchmark: 1K → 10K → 100K → 1M → 10M → 50M latency linear, ppl drift < 5% |
+| O11 | **Quality monotonic with context length** (longer = better, not worse) | thesis: inference-time STDP + retrieval, not yet validated | A/B: same prompt at 1K vs 50K context; quality score must NOT regress |
 
 ---
 
@@ -75,10 +77,24 @@ expectation. If phase 1 doesn't trip in 8h of training, fall back to Plan C.
 - STDP novelty signal (||ΔW_STDP||) is robust to noise (random pre/post averages to ~0)
   but its absolute magnitude is meaningless until the network has a structured weight matrix.
 
-**Concretely**:
-- Curiosity weight starts at 0, ramps to 0.05 over 1k steps after gate. Don't slam it on.
-- Self-learn TTT runs on top-K=8 high-CE samples, 1 inner step each, every K=200 outer steps.
-- STDP novelty contributes to curiosity reward only after STDP has >100 mints in the codebook.
+**Concretely** (audit 2026-05-01 confirmed wiring is correct, KD compose is good):
+- Curiosity weight ramps 0 → 0.05 over **1500 steps** (not 1k — Run 1 history says ramp slower).
+- Self-learn TTT: `--self-learn-k 8`, 1 inner step, val-time only, weights restored.
+- STDP-novelty signal: **deferred** — no autograd path yet. Bookkeeping-only via
+  `||ΔW_STDP||` in `trainer_mixins.py:540-543`. Wire it before claiming the curiosity
+  formula's `0.25·||ΔW_STDP||` term is live.
+- **Concrete activation flag string** (when val ppl ≤ 250, two consecutive evals):
+  ```
+  --self-learn-ttt --self-learn-k 8 --curiosity-weight 0.05 --phase-aware
+  ```
+  Do **not** pass `--intrinsic-curiosity` or `--stdp-novelty` (no such args; argparse fails).
+  phase_manager.py was patched 2026-05-01 to match.
+
+**Pre-activation gate (multi-signal, not just ppl)**:
+1. val ppl ≤ 250 (two consecutive evals — anti-noise).
+2. CE std over last 100 steps < 0.5 (no divergence event).
+3. Mean spike rate ∈ [0.05, 0.20] (PLIF healthy, not dead, not saturated).
+4. Step ≥ 2× warmup (predictor MLPs need warmup before `delta_F` gradient is meaningful).
 
 **Failure modes to watch**:
 1. Curiosity drives the model toward tokens *the teacher* hasn't predicted → KD breaks.
@@ -178,6 +194,105 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Action**: doc-sync agent on next push, or add a per-doc `_stamp.json` so we know what
   was last verified.
 
+### P11. Vocab 151643 vs 151936 mismatch — RESOLVED 2026-05-01
+- **Symptom**: 7 code sites hardcoded 151643 (real Qwen tokenizer vocab); 5 doc sites said 151936
+  (Qwen 2.5 model embedding padded dim). KD teacher emits 151936 logits — student at 151643
+  meant logit shape mismatch every step.
+- **Fix applied**: all 7 code sites patched to 151936 (`train_100m_kd.py:284,354`,
+  `train_100m_sft.py:7,63`, `chat_repl.py:39,148`, `chat_demo.py:71`). Tokenizer still emits
+  IDs in [0, 151643); rows 151643-151935 of embedding are unused but reachable for malformed
+  inputs (no OOB).
+- **Open**: Run 2 (PID 13663) was launched before this patch. Restart with patched code at
+  next ckpt boundary. **Do NOT** lose Run 2's progress — warmstart from latest best ckpt.
+
+### P12. `chat_demo` strict=False silently swallows shape mismatch
+- **Symptom**: `synapforge/demo/chat_demo.py:69-82` calls `load_state_dict(strict=False)`.
+  If a future ckpt's `d`/`n_layers`/`ffn_ratio` differs, demo loads garbage.
+- **Fix**: Save `{"model": ..., "config": {...}}` in trainer; chat_demo reads config from
+  ckpt. Until then: log WARNING when >5% of params drop.
+- **Severity**: pre-pitch-required.
+
+### P13. KD chunk size hardcoded `bs // 4`
+- **Symptom**: `train_100m_kd.py:318` chunk = bs // 4. At bs=128 still 3.7GiB intermediate.
+  Won't scale to smaller cards.
+- **Fix**: `chunk = max(1, int(vram_free * 0.5 / (seq * vocab * 4)))` from
+  `torch.cuda.mem_get_info()`.
+- **Severity**: nice-to-have on A800.
+
+### P14. `parallel.py` Layer 2 (`place_mixed_device`) is orphan code
+- **Symptom**: Documented as a 3-layer feature; only `examples/mixed_device_training.py`
+  calls it. Trainer uses only Layer 3 (DDP).
+- **Fix**: Either delete + update `INVESTOR.md` honesty section, or add 1-step smoke test.
+- **Severity**: nice-to-have / honesty.
+
+### P15. `tests/` collects from two roots — `synapforge/test_*.py` inside the package
+- **Symptom**: 15 `test_*.py` files inside `synapforge/` package + a separate `tests/` dir.
+  Pytest collects both. On a torch-less box collection of `synapforge/test_distributed_smoke.py`
+  raises ImportError immediately.
+- **Fix**: `conftest.py` add `collect_ignore_glob = ["synapforge/test_*.py"]` OR rename to
+  `_smoke.py`.
+- **Severity**: pre-pitch-required (investor running pytest sees noise).
+
+### P16. 12 trainer entry points, README ambiguous
+- **Symptom**: top-level has `train_100m.py`, `train_100m_kd.py`, `train_100m_sft.py`,
+  `train_3d.py`, `train_full_modal.py`, `train_multimodal.py`, `train_v15_full.py`,
+  `train_v16_unified.py`, `train_v18_full_self.py`, `synapforge/train.py`,
+  `train_native_unified.py`, `train_v42_universal.py`. Plus `.bak` files (P17).
+- **Fix**: README "How to train" names `train_100m_kd.py` canonical for phase 0/1,
+  `train_100m_sft.py` for phase 3. Move others to `legacy/`.
+- **Severity**: pre-pitch-required.
+
+### P17. `.bak` files committed in source tree
+- **Symptom**: `synapforge/train_100m.py.bak`, `synapforge/__init__.py.bak_pre_action`,
+  `synapforge/cells/synapse.py.bak_pre_mfu_opt1`.
+- **Fix**: `git rm` them; history has the rollback point.
+- **Severity**: nice-to-have.
+
+### P18. `web_actuator.py` claimed but missing
+- **Symptom**: MASTER_PLAN.md §5 row "Computer-use" claims `synapforge/action/web_actuator.py`.
+  File does not exist. (User directive: 让ai使用神经元直接操控computer上网自动学习.)
+- **Fix**: Either (a) implement minimal web actuator (Playwright wrapper that takes ActionHead
+  output vector, maps to click/scroll/type), or (b) remove the claim and scope to phase 4
+  post-pitch. Decision: implement minimal version this week — see §12.
+- **Severity**: pre-pitch-required (user-explicit feature).
+
+### P19. Phase manager flags out of sync with trainer argparse — RESOLVED 2026-05-01
+- **Symptom**: `phase_manager.py:45` listed `--intrinsic-curiosity --self-learn-ttt --stdp-novelty`
+  for phase 1. Only `--self-learn-ttt` and `--curiosity-weight` exist in trainer. Relauncher
+  would crash on argparse error.
+- **Fix applied**: phase 1 flags now `--self-learn-ttt --self-learn-k 8 --curiosity-weight 0.05`.
+  Phase 2 dropped `--modal-byte-patch --cross-modal-contrastive` (not in argparse), kept
+  `--modal-list image,audio,time_series`.
+- **Open**: STDP-novelty signal needs autograd path before it can become a flag. Defer.
+
+### P20. 50M effective context — claimed, not validated
+- **Symptom**: User directive 2026-05-01: *"50m的有效上下文别忘了"*. Code paths exist
+  (`synapforge/long.py`, `infinite.py`, InfLLM L1/L2/L3 retrieval), but no run has
+  ever tested at 50M tokens. Memory `reference_a100_80gb_context_max_2026.md` claims
+  50M is the qualitative ceiling.
+- **Risk areas**: (a) PLIF spike retrieval at 50M — does spike-pattern recall scale?
+  (b) CfC τ saturation in 4-32K range — multi-band τ fix wired? (c) STDP weight saturation
+  after 1M tokens — needs forgetting term or homeostatic decay.
+- **Action**: write `tests/integration/test_long_context_50m.py` that streams 50M tokens
+  through inference and reports (i) latency vs context length, (ii) ppl drift vs context,
+  (iii) STDP weight L2 norm growth curve. Target: latency linear, ppl drift < 5%, STDP norm
+  not exploding.
+- **Severity**: pre-pitch-required (it's a headline claim).
+
+### P21. Quality MUST grow monotonically with context length
+- **Symptom**: User directive 2026-05-01: *"性能和质量要随着上下文的增长而增长"*.
+  This is the inference-time STDP thesis (`feedback_inference_stdp_unlock.md`,
+  `bio/stdp_fast.py:121` gate already removed) — longer context = more Hebbian
+  updates = better adaptation.
+- **What it means concretely**: at 1K context, ppl X. At 10K context, ppl ≤ X (NOT ≥ X).
+  At 100K context, ppl ≤ X. This is the OPPOSITE of every transformer (which degrades
+  monotonically past trained ctx).
+- **Action**: A/B harness at 1K / 10K / 100K / 1M context with inference-STDP ON vs OFF.
+  Quality metrics: needle-in-haystack at varying depths, conversation-coherence on long
+  multi-turn, factuality on long-context QA. ON > OFF must hold at all four lengths.
+- **Severity**: pre-pitch-required (this is THE differentiator vs transformer).
+- **Risk**: STDP weight saturation. Fix already proposed: homeostatic decay per chunk.
+
 ---
 
 ## 7. Active runs (rental: 117.74.66.77:41614)
@@ -231,7 +346,80 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 
 ---
 
-## 11. How to update this doc
+## 11. Long-context strategy — 50M effective + monotonic quality (O10, O11)
+
+User directive 2026-05-01: *"要实现的50m的有效上下文别忘了，而且性能和质量要随着上下文的增长而增长"*.
+
+This is the **single biggest differentiator** vs transformer scaling. Don't drop it.
+
+**Architecture levers** (all already in code, must be wired into eval harness):
+
+| Lever | File | Status |
+|-------|------|--------|
+| InfLLM L1/L2/L3 retrieval (1K/10K/100K) | `synapforge/long.py` | wired |
+| Multi-band τ for PLIF (different timescales) | `synapforge/cells/plif.py` | wired |
+| Memory³ episodic store (compressed activations) | `synapforge/memory.py` | wired |
+| BM25 sidecar (per `feedback_long_context_drift_fix.md`) | `synapforge/retrieval/bm25.py` | partial |
+| Inference-time STDP (forward-only Hebbian) | `bio/stdp_fast.py:121` | wired (gate removed) |
+| RoPE NTK extrapolation | `synapforge/cells/rope.py` | wired |
+| PQ16 hidden-state compression (64×) | `synapforge/quantize.py` | wired |
+| Homeostatic STDP decay (anti-saturation) | NOT YET — add per-chunk decay term | **TODO** |
+
+**Validation harness needed** (P20):
+```python
+# tests/integration/test_long_context_50m.py (NEW)
+ctx_lengths = [1024, 10_000, 100_000, 1_000_000, 10_000_000, 50_000_000]
+for L in ctx_lengths:
+    latency_ms = measure_inference_latency(L)
+    ppl_drift = ppl(L) / ppl(1024)
+    stdp_norm = ||ΔW_STDP||(at end of L tokens) / ||W_initial||
+    # Assertions:
+    assert latency_ms / L < linear_baseline * 1.1   # near-linear, not quadratic
+    assert ppl_drift < 1.05                          # ≤5% drift
+    assert stdp_norm < 10.0                          # not exploding
+```
+
+**Quality monotonic harness (P21)** — A/B inference-STDP on/off at each context length.
+Quality metric = composite (needle-in-haystack accuracy + conversation coherence + long-context
+QA factuality). ON > OFF expected at every length; gap should *grow* with length.
+
+**Before pitch**:
+1. Run validation at 1K → 10K → 100K (this week).
+2. Run at 1M → 10M (next week, requires bigger ctx allocator).
+3. Run at 50M (final, requires PQ16 hidden state compression for memory).
+4. Document the *exact* gain numbers in `docs/CONTEXT_SCALING.md` + INVESTOR.md §1
+   (currently makes the linear-cost claim without empirical 50M data).
+
+---
+
+## 12. Computer-use (`web_actuator.py`) — minimum viable scope (P18)
+
+User directive: *"让ai使用神经元直接操控computer上网自动学习"*.
+
+Audit 2026-05-01 found `synapforge/action/web_actuator.py` MISSING. MVP scope to ship by pitch:
+
+```
+synapforge/action/web_actuator.py  (NEW)
+    class WebActuator:
+        # Takes ActionHead's hidden vector (no JSON tool calls) →
+        # maps to {click(x,y), scroll(dy), type(text), navigate(url)}.
+        # Uses Playwright headless. No vision pipeline; uses DOM accessibility tree.
+        def __init__(self, page: Playwright.Page, action_head: nn.Module): ...
+        def step(self, hidden: Tensor) -> ActionResult: ...
+        def trace(self, n_steps: int) -> List[ActionResult]: ...
+
+scripts/web_actuator_smoke.sh  (NEW)
+    # Boots playwright, navigates to a static local HTML page,
+    # runs 50 ActionHead steps, asserts >= 1 successful click.
+```
+
+NOT in MVP scope: vision (we can do DOM-only first), multi-tab, login flows, CAPTCHA.
+
+ETA: 4-6 hours — block before phase 3 SFT activation. Tracking item P18.
+
+---
+
+## 13. How to update this doc
 
 Every session that produces facts (run results, gate trips, agent findings, design changes)
 should:

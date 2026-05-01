@@ -4,7 +4,7 @@ Trimmed copy of train_100m_kd.py:
   * No KD teacher (alpaca SFT doesn't need one; KD already happened in pretrain).
   * Loads SFT parquet with input_ids + loss_mask columns (see scripts/prep_alpaca_qwen.py).
   * Response-only loss: cross_entropy with ignore_index=-100 over masked labels.
-  * Same SynapForge100M architecture (vocab=151643 d=512 n_layers=10 loop_depth=1)
+  * Same SynapForge100M architecture (vocab=151936 d=512 n_layers=10 loop_depth=1)
     -- must match pretrain to load warmstart cleanly.
   * Smaller LR (1e-5), shorter run (2-4k steps).
 
@@ -60,7 +60,7 @@ def _parse_args():
                    help="output of scripts/prep_alpaca_qwen.py")
     p.add_argument("--tokenizer-path", required=True,
                    help="for eos_token_id and chat sample")
-    p.add_argument("--vocab", type=int, default=151643)
+    p.add_argument("--vocab", type=int, default=151936)
     p.add_argument("--d", type=int, default=512)
     p.add_argument("--n-layers", type=int, default=10)
     p.add_argument("--loop-depth", type=int, default=1)

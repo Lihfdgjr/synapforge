@@ -68,7 +68,7 @@ def _try_load_live(ckpt: str, tokenizer_path: str | None):
 
     import torch
     model = SynapForge100M(
-        vocab=151643, d=512, n_layers=10, loop_depth=1, max_seq=2048,
+        vocab=151936, d=512, n_layers=10, loop_depth=1, max_seq=2048,
         ffn_ratio=8.0, sparsity=0.95, dropout=0.0, tie_lm_head=True,
     )
     sd = torch.load(ckpt, map_location="cpu")

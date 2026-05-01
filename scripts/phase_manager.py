@@ -41,11 +41,14 @@ from pathlib import Path
 
 PHASES = [
     {"id": 0, "name": "lm_kd",      "ppl_max": float("inf"), "flags": []},
+    # NB: only flags that train_100m_kd.py argparse accepts. Audit 2026-05-01:
+    # `--intrinsic-curiosity` and `--stdp-novelty` were imagined; trainer has
+    # `--self-learn-ttt` and `--curiosity-weight` only. STDP novelty signal
+    # is bookkeeping-only (no autograd path) so it stays off until wired.
     {"id": 1, "name": "intrinsic",  "ppl_max": 250.0,
-     "flags": ["--intrinsic-curiosity", "--self-learn-ttt", "--stdp-novelty"]},
+     "flags": ["--self-learn-ttt", "--self-learn-k 8", "--curiosity-weight 0.05"]},
     {"id": 2, "name": "multimodal", "ppl_max": 100.0,
-     "flags": ["--modal-byte-patch", "--cross-modal-contrastive",
-               "--modal-list image,audio,time_series"]},
+     "flags": ["--modal-list image,audio,time_series"]},
     {"id": 3, "name": "chat_sft",   "ppl_max": 60.0,
      "flags": ["--sft-data /workspace/data/alpaca_zh/alpaca_zh.json",
                "--response-only-loss", "--lr 1e-4"]},

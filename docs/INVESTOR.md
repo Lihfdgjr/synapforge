@@ -82,7 +82,7 @@ time without backprop.
 
 ### 4. 100M LNN+SNN with Qwen vocab + Qwen 0.5B teacher KD
 
-The flagship: SynapForge100M (vocab=151643, d=512, n_layers=10,
+The flagship: SynapForge100M (vocab=151936, d=512, n_layers=10,
 loop_depth=1) trained on FineWeb-en + alpaca-zh + GSM8K with knowledge
 distillation from Qwen2.5-0.5B as the teacher.
 

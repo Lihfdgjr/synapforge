@@ -281,7 +281,7 @@ def _load_teacher(name: str, fallback_ckpt: str = "") -> "torch.nn.Module":
             ck = torch.load(fallback_ckpt, map_location="cpu")
             sd = ck.get("model", ck)
             t_model = build_synapforge_100m(
-                vocab=151643, d=512, n_layers=10, loop_depth=1,
+                vocab=151936, d=512, n_layers=10, loop_depth=1,
                 max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
                 use_grad_checkpoint=False,
             )
@@ -351,7 +351,7 @@ def main() -> int:
 
     # ---------------- model ----------------
     model = build_synapforge_100m(
-        vocab=151643, d=512, n_layers=10, loop_depth=1,
+        vocab=151936, d=512, n_layers=10, loop_depth=1,
         max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
         use_grad_checkpoint=args.grad_checkpoint,
     )

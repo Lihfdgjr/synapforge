@@ -36,7 +36,7 @@ INSTRUCTION_TEMPLATE = (
 )
 
 
-def load_model(ckpt_path: str, vocab: int = 151643, device: str = "cuda"):
+def load_model(ckpt_path: str, vocab: int = 151936, device: str = "cuda"):
     from synapforge.model_100m import SynapForge100M
     model = SynapForge100M(
         vocab=vocab, d=512, n_layers=10, loop_depth=1, max_seq=2048,
@@ -145,7 +145,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", default=os.environ.get("SYNAPFORGE_CKPT", ""))
     ap.add_argument("--tokenizer-path", default="/workspace/teachers/qwen2.5-0.5b")
-    ap.add_argument("--vocab", type=int, default=151643)
+    ap.add_argument("--vocab", type=int, default=151936)
     ap.add_argument("--max-new", type=int, default=80)
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--save", default=None, help="dump (prompt,response) pairs to JSON")
