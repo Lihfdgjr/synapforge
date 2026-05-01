@@ -52,3 +52,4 @@ runtime.py.bak
 # bench output (T2.11 + future bench harnesses); rental runs land
 # real numbers here, but smoke artefacts shouldn't enter git
 bench_results/
+.claude/
