@@ -276,7 +276,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.6: LM head spectral norm flag`.
 
 ## T2.7 — Adaptive grad accumulation
-- [ ] **Status**: pending (addresses P29)
+- [x] (23:50, f2ccc2d, gradient accumulation flag bs_eff>VRAM-cap workaround; tests/integration/test_grad_accum.py 5/5 pass — math identity ±1e-5, accum=1 bit-exact no-op, micro-batch peak activation = 50.00% of full-batch)
+- ~~**Status**: pending (addresses P29)~~
 - **Goal**: bs_eff=128 via `--grad-accum-steps 2` at bs=64. Workaround for bs=80 OOM.
 - **Steps** (Agent: general-purpose):
   1. CLI flag `--grad-accum-steps N` default 1
