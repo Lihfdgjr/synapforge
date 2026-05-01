@@ -201,10 +201,29 @@ def compute_gae(
     dones: list[bool],
     gamma: float = 0.99,
     lam: float = 0.95,
+    bootstrap_value: float | None = None,
 ) -> tuple[list[float], list[float]]:
+    """Standard GAE-lambda.
+
+    ``bootstrap_value`` is V(s_T), the predicted value of the state AFTER
+    the last action.  If the trajectory ended on a real terminal (done=True
+    on the last step) leave it at 0; if it was truncated by max_steps,
+    pass the current critic estimate so the bias from clipping the horizon
+    is reduced.  Default 0.0 preserves the historical (slightly biased)
+    behaviour for callers that don't supply it.
+    """
+    if not rewards:
+        return [], []
     advs: list[float] = [0.0] * len(rewards)
     last = 0.0
-    next_v = 0.0
+    if bootstrap_value is None:
+        # If the final step is a real terminal, V(s_T) = 0 by definition.
+        # Otherwise reuse the critic estimate at the last collected step
+        # (acceptable on-policy approximation when no extra bootstrap is
+        # available).
+        next_v = 0.0 if dones[-1] else float(values[-1])
+    else:
+        next_v = float(bootstrap_value)
     for t in reversed(range(len(rewards))):
         not_done = 0.0 if dones[t] else 1.0
         delta = rewards[t] + gamma * next_v * not_done - values[t]
@@ -257,8 +276,14 @@ def ppo_update(
         surr2 = torch.clamp(ratio, 1 - clip, 1 + clip) * adv_t
         policy_loss = -torch.min(surr1, surr2).mean()
         value_loss = F.mse_loss(fwd["value"], ret_t)
-        # Entropy bonus on type distribution
-        ent = -(type_logits.softmax(-1) * F.log_softmax(type_logits, -1)).sum(-1).mean()
+        # Entropy bonus over BOTH sampled distributions (was: type only).
+        type_p = type_logits.softmax(-1)
+        type_logp_full = F.log_softmax(type_logits, -1)
+        text_p = text_logits.softmax(-1)
+        text_logp_full = F.log_softmax(text_logits, -1)
+        ent_type = -(type_p * type_logp_full).sum(-1).mean()
+        ent_text = -(text_p * text_logp_full).sum(-1).mean()
+        ent = ent_type + ent_text
         loss = policy_loss + vf_coef * value_loss - ent_coef * ent
         optim.zero_grad()
         loss.backward()

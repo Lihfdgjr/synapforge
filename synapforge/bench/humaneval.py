@@ -101,8 +101,10 @@ def extract_code(completion: str, prompt: str, entry_point: str) -> str:
 _HARNESS = """\
 import sys, signal
 def _handler(signum, frame): raise TimeoutError()
+# SIGALRM is POSIX-only; on Windows the try/except swallows AttributeError and
+# we rely on the outer subprocess timeout for liveness.
 try:
-    signal.signal(signal.SIGALRM, _handler); signal.alarm(5)
+    signal.signal(signal.SIGALRM, _handler); signal.alarm({timeout_s})
 except Exception:
     pass
 __SOLUTION__
@@ -112,30 +114,61 @@ print("__OK__")
 """
 
 
+# Maximum bytes captured from stdout/stderr per subprocess.  Generated code
+# emitting >stdout_limit bytes is treated as a failure.  Defends against an
+# OOM-by-stdout attacker.
+_STDOUT_LIMIT_BYTES = 1 << 20  # 1 MiB
+
+
+def _build_safe_env() -> dict:
+    """Subset of env passed to the child.  Strips PYTHONPATH / network proxy /
+    AWS credentials / anything that could let user code reach external services
+    or shadow-import malicious modules from the parent CWD.
+    """
+    keep = {"PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL"}
+    return {k: v for k, v in os.environ.items() if k in keep}
+
+
 def run_one_test(solution: str, test: str, entry_point: str, timeout_s: int = 5) -> bool:
     """Run `solution + test + check(entry_point)` in a fresh subprocess.
 
     Returns True if the subprocess prints "__OK__" within the timeout, False
     otherwise (timeout, exception, assertion failure, anything).
+
+    Sandbox notes (still NOT a full sandbox — see docs/REVIEW_MULTIMODAL.md):
+    - Outer subprocess timeout is the only liveness guarantee on Windows.
+    - PYTHONPATH/proxy/credentials env stripped via ``_build_safe_env``.
+    - cwd is set to a fresh temporary directory so generated code can't
+      casually shadow-import or write into the repo.
+    - stdout/stderr are capped at 1 MiB each.
+    For real isolation use a container, gVisor, firejail, or seccomp.
     """
+    # IMPORTANT ORDERING: format() before replace().  Solution/test code can
+    # contain literal ``{`` braces (dict literals, f-strings) that would be
+    # interpreted as format placeholders if substituted first.
     code = (
         _HARNESS
+        .format(entry_point=entry_point, timeout_s=int(max(1, timeout_s)))
         .replace("__SOLUTION__", solution)
         .replace("__TEST__", test)
-        .format(entry_point=entry_point)
     )
+    import tempfile
     try:
-        r = subprocess.run(
-            [sys.executable, "-c", code],
-            timeout=timeout_s,
-            capture_output=True,
-            text=True,
-        )
+        with tempfile.TemporaryDirectory(prefix="sf_humaneval_") as workdir:
+            r = subprocess.run(
+                [sys.executable, "-I", "-c", code],  # -I: isolated mode, no site
+                timeout=timeout_s,
+                capture_output=True,
+                text=True,
+                env=_build_safe_env(),
+                cwd=workdir,
+            )
     except subprocess.TimeoutExpired:
         return False
     except Exception:
         return False
-    return r.returncode == 0 and "__OK__" in (r.stdout or "")
+    stdout = (r.stdout or "")[:_STDOUT_LIMIT_BYTES]
+    return r.returncode == 0 and "__OK__" in stdout
 
 
 # ---------------------------------------------------------------- generation

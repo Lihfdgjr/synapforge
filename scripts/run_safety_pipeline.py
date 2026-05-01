@@ -500,7 +500,9 @@ def ensure_persona_corpus(safety_dir: Path) -> Path:
     if out.exists() and out.stat().st_size > 0:
         return out
     print(f"[bootstrap] generating persona-swap corpus → {out}")
-    entries = generate_corpus(n_personas=200, n_templates=50, seed=42)
+    # 105 unique personas × 50 templates = 5250 prompts (cycles past 105 add
+    # variant-suffixed entries so prompts stay byte-distinct).
+    entries = generate_corpus(n_personas=105, n_templates=50, seed=42)
     write_jsonl(out, entries)
     return out
 

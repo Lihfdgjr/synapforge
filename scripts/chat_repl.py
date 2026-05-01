@@ -68,12 +68,19 @@ def generate(model, tok, prompt: str, max_new: int = 80, temperature: float = 0.
     """Greedy or temperature-sampling generation. Stops at EOS / im_end."""
     text = INSTRUCTION_TEMPLATE.format(instruction=prompt)
     ids = tok.encode(text, add_special_tokens=False, return_tensors="pt").to(device)
-    eos_ids = {tok.eos_token_id}
+    # eos_token_id is sometimes None on un-configured tokenizers; build a
+    # set of ints only.
+    eos_ids: set[int] = set()
+    if tok.eos_token_id is not None:
+        eos_ids.add(int(tok.eos_token_id))
     im_end = tok.convert_tokens_to_ids("<|im_end|>")
-    if im_end is not None and im_end >= 0:
+    if isinstance(im_end, int) and im_end >= 0:
         eos_ids.add(im_end)
     # `\n###` is the next-instruction marker — also a soft stop
     stop_str = "###"
+    # Cache prompt length once -- the previous code re-encoded the prompt
+    # every iteration to compute the slice offset (O(N^2) decode cost).
+    prompt_len = ids.size(1)
 
     generated_text = ""
     for _ in range(max_new):
@@ -98,7 +105,7 @@ def generate(model, tok, prompt: str, max_new: int = 80, temperature: float = 0.
             break
         ids = torch.cat([ids, next_id], dim=1)
         # detokenize incrementally so we can stop on `###`
-        generated_text = tok.decode(ids[0, len(tok.encode(text, add_special_tokens=False)):], skip_special_tokens=True)
+        generated_text = tok.decode(ids[0, prompt_len:], skip_special_tokens=True)
         if stop_str in generated_text:
             generated_text = generated_text.split(stop_str)[0]
             break

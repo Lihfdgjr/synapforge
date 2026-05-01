@@ -35,7 +35,9 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-import torch
+
+# NOTE: do NOT import torch here -- this script is pure numpy. The trainer
+# (train_3d.py) is the only consumer that needs torch.
 
 SHAPES = ("cube", "sphere", "cylinder")
 COLORS = {
@@ -275,7 +277,17 @@ def main() -> None:
     p.add_argument("--image-w", type=int, default=64)
     p.add_argument("--out", type=str, required=True, help="Parquet output path")
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Tiny config (32x32 image, 10 examples) for fast code-path validation.",
+    )
     args = p.parse_args()
+    if args.smoke:
+        # Force tiny-config so smoke runs in seconds.
+        args.n_examples = min(args.n_examples, 10)
+        args.image_h = min(args.image_h, 32)
+        args.image_w = min(args.image_w, 32)
 
     rng = np.random.default_rng(args.seed)
     out_path = Path(args.out)

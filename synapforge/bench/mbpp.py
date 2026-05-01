@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -92,8 +93,9 @@ def extract_code(completion: str) -> str:
 _HARNESS = """\
 import sys, signal
 def _handler(signum, frame): raise TimeoutError()
+# SIGALRM is POSIX-only; outer subprocess timeout guards Windows.
 try:
-    signal.signal(signal.SIGALRM, _handler); signal.alarm(5)
+    signal.signal(signal.SIGALRM, _handler); signal.alarm({timeout_s})
 except Exception:
     pass
 __SETUP__
@@ -103,23 +105,40 @@ print("__OK__")
 """
 
 
+_STDOUT_LIMIT_BYTES = 1 << 20  # 1 MiB cap on captured stdout/stderr
+
+
+def _build_safe_env() -> dict:
+    keep = {"PATH", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL"}
+    return {k: v for k, v in os.environ.items() if k in keep}
+
+
 def run_tests(solution: str, tests: List[str], setup: str = "", timeout_s: int = 5) -> bool:
+    """Sandbox notes: see humaneval.run_one_test docstring.  Same caveats."""
+    # IMPORTANT ORDERING: format() before replace().  Test/solution code can
+    # contain literal ``{`` braces (dict literals, f-strings) that would be
+    # interpreted as format placeholders if substituted first.
     code = (
         _HARNESS
+        .format(timeout_s=int(max(1, timeout_s)))
         .replace("__SETUP__",    setup)
         .replace("__SOLUTION__", solution)
         .replace("__TESTS__",    "\n".join(tests))
     )
+    import tempfile
     try:
-        r = subprocess.run(
-            [sys.executable, "-c", code],
-            timeout=timeout_s, capture_output=True, text=True,
-        )
+        with tempfile.TemporaryDirectory(prefix="sf_mbpp_") as workdir:
+            r = subprocess.run(
+                [sys.executable, "-I", "-c", code],
+                timeout=timeout_s, capture_output=True, text=True,
+                env=_build_safe_env(), cwd=workdir,
+            )
     except subprocess.TimeoutExpired:
         return False
     except Exception:
         return False
-    return r.returncode == 0 and "__OK__" in (r.stdout or "")
+    stdout = (r.stdout or "")[:_STDOUT_LIMIT_BYTES]
+    return r.returncode == 0 and "__OK__" in stdout
 
 
 # ---------------------------------------------------------------- generation

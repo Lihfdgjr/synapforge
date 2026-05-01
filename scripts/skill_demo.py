@@ -104,11 +104,11 @@ def _random_action(rng: random.Random) -> dict:
     return d
 
 
-def _episode(env: WebBrowserEnv, synth: SkillSynthesizer, rng: random.Random, max_steps: int = 8) -> List[int]:
+def _episode(env: WebBrowserEnv, synth: SkillSynthesizer, rng: random.Random, max_steps: int = 8) -> tuple[List[int], float]:
     """Run one episode, drive the codebook with each emitted action.
 
-    Returns the L1 trace id sequence so the caller can mint a compound
-    if the episode accumulated a positive reward.
+    Returns ``(trace, total_reward)``.  Caller decides whether the trace
+    earned enough reward to be minted as an L3 macro.
     """
     env.reset("https://www.bing.com")
     trace: List[int] = []
@@ -164,9 +164,14 @@ def main(seed: int = 0, n_episodes: int = 50) -> None:
     n_l2_before = cb.size_by_layer()["L2"]
     n_l3_before = cb.size_by_layer()["L3"]
     successes: List[List[int]] = []
+    # Threshold raised from 0.5 to 2.0 — the mock env hands out +1.0 per
+    # novel-page step, so 0.5 fired on virtually every episode and minted
+    # a lot of L3 noise.  2.0 corresponds to "agent navigated to at least
+    # two new pages", i.e., real progress.
+    success_threshold = 2.0
     for ep in range(n_episodes):
         trace, total_r = _episode(env, synth, rng)
-        if total_r > 0.5 and len(trace) >= 2:
+        if total_r > success_threshold and len(trace) >= 3:
             # Successful trace -> let the AI mint a compound.
             pid = synth.synthesize_from_trace(trace, success=True, reward=total_r)
             if pid >= 0:

@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -112,43 +113,95 @@ class SkillLog:
         path: str | os.PathLike = DEFAULT_SAVE_PATH,
         rotation_keep: int = 5,
         write_history: bool = True,
+        history_buffer_max: int = 4096,
     ) -> None:
         self.path = Path(path)
         self.rotation_keep = int(rotation_keep)
         self.write_history = bool(write_history)
         self.history_path = self.path.with_suffix(self.path.suffix + ".history.jsonl")
+        # In-memory tail of the audit log (bounded so long runs don't OOM).
+        # Disk file remains complete; `_history_buffer` is just a cache.
+        self.history_buffer_max = int(history_buffer_max)
         self._history_buffer: List[HistoryEvent] = []
         # cached snapshot returned by load_codebook so callers can re-use
         self._last_snapshot: Optional[dict] = None
+        # Coarse-grained lock so two threads can't race a save+rotate cycle.
+        # The whole save_codebook+rotate path is short so contention is OK.
+        self._io_lock = threading.RLock()
 
     # ------------------------------------------------------------------ atomic IO
+
+    @staticmethod
+    def _fsync_dir(path: Path) -> None:
+        """Best-effort fsync of the directory entry on POSIX.
+
+        On Windows, opening a directory for fsync is not generally possible;
+        we silently skip.  os.replace already provides MoveFileEx semantics
+        on NTFS which survives a clean shutdown.
+        """
+        try:
+            if os.name != "nt":
+                fd = os.open(str(path), os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        except (OSError, AttributeError):
+            pass
 
     def _atomic_write(self, target: Path, payload: dict) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(target.suffix + ".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+            # Force the data out of the OS write buffer before rename.
+            # Without this, a hard reboot between close() and replace()
+            # can leave a 0-byte tmp file with the rename already done.
+            try:
+                f.flush()
+                os.fsync(f.fileno())
+            except (OSError, AttributeError):
+                pass
         os.replace(tmp, target)
+        # Make sure the directory entry update itself is durable.
+        self._fsync_dir(target.parent)
 
     def _rotate(self, target: Path) -> None:
         """Rotate ``target`` to a timestamped sibling, keep last K."""
         if not target.exists() or self.rotation_keep <= 0:
             return
-        ts = int(time.time())
+        # Sub-second precision so two saves in the same wallclock second
+        # don't clobber each other (was: int(time.time())).
+        ts = f"{time.time():.6f}".replace(".", "_")
         rotated = target.with_suffix(target.suffix + f".{ts}")
         try:
-            # On Windows, copy then unlink avoids "in use" cases.  We use
-            # replace to keep semantics consistent.
+            # Read + write copy.  We can't os.link the file because the
+            # next save_codebook will os.replace it and break the link
+            # on some filesystems.
             data = target.read_bytes()
-            rotated.write_bytes(data)
+            tmp_rot = rotated.with_suffix(rotated.suffix + ".tmp")
+            with open(tmp_rot, "wb") as f:
+                f.write(data)
+                try:
+                    f.flush()
+                    os.fsync(f.fileno())
+                except (OSError, AttributeError):
+                    pass
+            os.replace(tmp_rot, rotated)
         except OSError:
             return
         # Drop oldest above keep limit.
         siblings = sorted(
-            target.parent.glob(target.name + ".[0-9]*"),
+            target.parent.glob(target.name + ".[0-9_]*"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
+        # Filter out non-rotation files (history file, the .tmp artifacts).
+        siblings = [
+            p for p in siblings
+            if not p.name.endswith(".tmp")
+            and not p.name.endswith(".history.jsonl")
+        ]
         for old in siblings[self.rotation_keep:]:
             try:
                 old.unlink()
@@ -159,6 +212,10 @@ class SkillLog:
         if not self.write_history:
             return
         self._history_buffer.append(evt)
+        # Keep only the last ``history_buffer_max`` events in RAM; the
+        # full history remains on disk via append-only writes.
+        if len(self._history_buffer) > self.history_buffer_max:
+            del self._history_buffer[: len(self._history_buffer) - self.history_buffer_max]
         try:
             self.history_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.history_path, "a", encoding="utf-8") as f:
@@ -170,54 +227,105 @@ class SkillLog:
 
     def save_codebook(self, codebook: Any, log_event: bool = True) -> int:
         """Atomically save the codebook state.  Returns number of skills."""
-        payload = codebook.to_dict()
-        skills = payload.get("skills", [])
-        # add v2-specific fields
-        for s in skills:
-            s.setdefault("first_seen_ts", s.get("created_at", time.time()))
-            s.setdefault("last_used_ts", s.get("last_used_at", time.time()))
-            s.setdefault("co_fire_history", [])
-        out = {
-            "version": SCHEMA_VERSION,
-            "saved_at": time.time(),
-            "hidden": payload.get("hidden"),
-            "K_alive": payload.get("K_alive"),
-            "next_proto_id": payload.get("next_proto_id"),
-            "L1_primitives": payload.get("L1_primitives", []),
-            "skills": skills,
-            "stats": codebook.stats() if hasattr(codebook, "stats") else {},
-        }
-        self._rotate(self.path)
-        self._atomic_write(self.path, out)
-        if log_event:
-            self._append_history(HistoryEvent(
-                ts=time.time(),
-                event="save",
-                extra={"n_skills": len(skills), "path": str(self.path)},
-            ))
-        self._last_snapshot = out
-        return len(skills)
+        with self._io_lock:
+            payload = codebook.to_dict()
+            skills = payload.get("skills", [])
+            # add v2-specific fields
+            for s in skills:
+                s.setdefault("first_seen_ts", s.get("created_at", time.time()))
+                s.setdefault("last_used_ts", s.get("last_used_at", time.time()))
+                s.setdefault("co_fire_history", [])
+            out = {
+                "version": SCHEMA_VERSION,
+                "saved_at": time.time(),
+                "hidden": payload.get("hidden"),
+                "K_alive": payload.get("K_alive"),
+                "next_proto_id": payload.get("next_proto_id"),
+                "L1_primitives": payload.get("L1_primitives", []),
+                "skills": skills,
+                "stats": codebook.stats() if hasattr(codebook, "stats") else {},
+            }
+            self._rotate(self.path)
+            self._atomic_write(self.path, out)
+            if log_event:
+                self._append_history(HistoryEvent(
+                    ts=time.time(),
+                    event="save",
+                    extra={"n_skills": len(skills), "path": str(self.path)},
+                ))
+            self._last_snapshot = out
+            return len(skills)
 
     def load_codebook(self, codebook: Any, log_event: bool = True) -> int:
-        """Load the latest snapshot into ``codebook`` in-place.  Idempotent."""
-        if not self.path.exists():
-            return 0
-        with open(self.path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        if payload.get("version") != SCHEMA_VERSION:
-            raise ValueError(
-                f"unsupported schema version: {payload.get('version')!r} "
-                f"(expected {SCHEMA_VERSION})"
-            )
-        n_loaded = codebook.load_dict(payload)
-        if log_event:
+        """Load the latest snapshot into ``codebook`` in-place.  Idempotent.
+
+        On corrupt-JSON / truncated-file we transparently fall back to the
+        most-recent rotation that DOES parse cleanly.  This is the recovery
+        path for "rental dies mid-write" scenarios.  Returns the number of
+        skills restored or 0 if nothing usable was found.
+        """
+        with self._io_lock:
+            if not self.path.exists():
+                return 0
+            payload = self._read_json_or_recover()
+            if payload is None:
+                return 0
+            if payload.get("version") != SCHEMA_VERSION:
+                raise ValueError(
+                    f"unsupported schema version: {payload.get('version')!r} "
+                    f"(expected {SCHEMA_VERSION})"
+                )
+            n_loaded = codebook.load_dict(payload)
+            if log_event:
+                self._append_history(HistoryEvent(
+                    ts=time.time(),
+                    event="load",
+                    extra={"n_skills": n_loaded, "path": str(self.path)},
+                ))
+            self._last_snapshot = payload
+            return n_loaded
+
+    def _read_json_or_recover(self) -> Optional[dict]:
+        """Try to parse self.path; if it's corrupt, fall back to the
+        most-recent rotation snapshot that parses cleanly.
+
+        Returns the parsed payload dict, or ``None`` if no snapshot is
+        recoverable.  Logs each failed attempt so operators can see why
+        recovery happened.
+        """
+        # 1. happy path — current file
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
             self._append_history(HistoryEvent(
                 ts=time.time(),
-                event="load",
-                extra={"n_skills": n_loaded, "path": str(self.path)},
+                event="load_corrupt",
+                extra={"path": str(self.path), "error": repr(e)},
             ))
-        self._last_snapshot = payload
-        return n_loaded
+        # 2. fallback — newest-first rotation siblings
+        siblings = sorted(
+            (
+                p for p in self.path.parent.glob(self.path.name + ".[0-9_]*")
+                if not p.name.endswith(".tmp")
+                and not p.name.endswith(".history.jsonl")
+            ),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for sibling in siblings:
+            try:
+                with open(sibling, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                self._append_history(HistoryEvent(
+                    ts=time.time(),
+                    event="load_recovered",
+                    extra={"from": sibling.name},
+                ))
+                return payload
+            except (OSError, json.JSONDecodeError):
+                continue
+        return None
 
     # ------------------------------------------------------------------ event log
 

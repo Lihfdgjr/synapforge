@@ -268,7 +268,9 @@ def push_mohuanfang_full(watch_dir: Path, run_name: str) -> bool:
         _log("  mohuanfang TIMEOUT (3600s) -- partial may be on disk")
         return False
     except subprocess.CalledProcessError as e:
-        _log(f"  mohuanfang FAIL: {e.stderr.decode()[:200]}")
+        # e.stderr may be bytes or None depending on capture_output state.
+        msg = (e.stderr or b"").decode(errors="replace")[:200]
+        _log(f"  mohuanfang FAIL: {msg}")
         return False
 
 
@@ -306,7 +308,9 @@ def _gh_release_upload(
              f"({len(bests)-len(fresh_paths)} skipped)")
         cache_file.write_text(json.dumps(cache))
         return True
-    _log(f"  github FAIL: {(create.stderr or upload.stderr).decode()[:200]}")
+    # Both stderrs may be None on certain subprocess paths -- coerce to b"".
+    err = (create.stderr or upload.stderr or b"").decode(errors="replace")[:200]
+    _log(f"  github FAIL: {err}")
     return False
 
 

@@ -168,7 +168,15 @@ def main():
         _log(f"FATAL: warmstart {args.warmstart!r} not found -- SFT without "
              f"pretrain will not produce chat-quality output.")
         return 2
-    rep = adv_warmstart(model, args.warmstart, name_map=[])
+    # Mirror the kd trainer's remap so we accept either modern (.liquid./
+    # .tok_embed.) or legacy (.cfc./.embed.text_embed.) ckpt key naming.
+    rep = adv_warmstart(
+        model, args.warmstart,
+        name_map=[
+            (r"\.cfc\.", ".liquid."),
+            (r"\.embed\.text_embed\.", ".tok_embed."),
+        ],
+    )
     _log(f"warmstart matched={rep.matched}/{rep.total_target} "
          f"missing={len(rep.missing)} extra={len(rep.extra)}")
     model = model.to(DEVICE)
@@ -219,6 +227,11 @@ def main():
             pg["lr"] = cur_lr
         t_step = time.time()
         x, mask = next(train_iter)
+        # Compute response-token count BEFORE the device move so we don't
+        # need a GPU->CPU sync barrier each step just for cum_tok.
+        # mask[:, 1:] is the slice that corresponds to label_mask after the
+        # next-token shift inside the forward path.
+        n_resp_step = int(mask[:, 1:].sum().item())
         x = x.to(DEVICE, non_blocking=True)
         mask = mask.to(DEVICE, non_blocking=True)
 
@@ -249,7 +262,7 @@ def main():
         if DEVICE == "cuda":
             torch.cuda.synchronize()
         step_ms = (time.time() - t_step) * 1000.0
-        cum_tok += int(label_mask.sum().item())
+        cum_tok += n_resp_step
 
         if step % args.log_every == 0 or step == 1:
             tok_s = cum_tok / max(time.time() - t0, 1e-6)

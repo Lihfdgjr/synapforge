@@ -86,6 +86,7 @@ def _predict_last_word(model, tok, context: str, target: str,
     out_ids: List[int] = []
     work = list(ids)
     max_seq = getattr(model, "max_seq", None)
+    eos_id = getattr(tok, "eos_token_id", None)
     for _ in range(budget):
         ctx = work
         if max_seq is not None and len(ctx) > max_seq:
@@ -94,14 +95,22 @@ def _predict_last_word(model, tok, context: str, target: str,
         with torch.no_grad():
             logits = _forward_logits(model, inp)
         nxt = int(logits[0, -1].argmax().item())
+        # Stop on EOS first (decoding the EOS token can be empty or noise).
+        if eos_id is not None and nxt == eos_id and out_ids:
+            break
         out_ids.append(nxt)
         work.append(nxt)
-        # Early exit on EOS or whitespace token (we have a complete word).
+        # Stop after we've emitted at least the expected number of target
+        # tokens AND the most recent piece ends with a word boundary.
         try:
             piece = tok.decode([nxt])
         except Exception:
             piece = ""
-        if piece and piece.endswith(("\n", " ", ".", "!", "?")) and len(out_ids) >= 1:
+        # Don't bail on the very first token — leading-space pieces ("hello")
+        # don't *end* with space anyway, so this rarely fires too early.
+        if (len(out_ids) >= n_target
+                and piece
+                and piece.endswith(("\n", " ", ".", "!", "?"))):
             break
     try:
         return tok.decode(out_ids).strip()

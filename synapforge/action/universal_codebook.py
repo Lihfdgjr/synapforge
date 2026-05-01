@@ -344,25 +344,52 @@ class UniversalCodebook(Module):
 
     def _grow_capacity(self) -> None:
         """Geometric grow of the slots tensor when full but K_max_lifelong
-        not yet reached.  Keeps gradients on existing rows."""
+        not yet reached.  Keeps gradients on existing rows.
+
+        WARNING: this re-binds ``self.slots`` to a new ``nn.Parameter`` and
+        therefore invalidates any optimizer state holding the old reference.
+        Callers training the codebook end-to-end SHOULD either:
+          1. pre-size ``K_initial`` / ``K_growth_block`` so growth never
+             happens during training, or
+          2. detect the rebind and rebuild the optimizer (e.g., re-run
+             ``optim = AdamW(model.parameters(), ...)``).
+        """
         old = self.slots.shape[0]
         new = min(self.K_max_lifelong, old + self.K_growth_block)
         if new <= old:
             return  # at the lifelong cap
-        # New parameter / buffers.  Copy old contents into the front slice.
-        new_slots = nn.Parameter(torch.randn(new, self.hidden) * 0.02)
-        with torch.no_grad():
-            new_slots[:old].copy_(self.slots.data)
+        # New parameter / buffers.  Copy old contents into the front slice
+        # in-place so any tied views remain valid until rebind.
+        device = self.slots.device
+        dtype = self.slots.dtype
+        new_data = torch.randn(new, self.hidden, device=device, dtype=dtype) * 0.02
+        new_data[:old].copy_(self.slots.data)
+        new_slots = nn.Parameter(new_data, requires_grad=self.slots.requires_grad)
+        # nn.Module __setattr__ handles the parameter-registry update.
         self.slots = new_slots
 
         def _grow(buf: torch.Tensor, fill: float = 0.0) -> torch.Tensor:
-            extra = torch.full((new - old,) + tuple(buf.shape[1:]), fill, dtype=buf.dtype, device=buf.device)
+            extra = torch.full(
+                (new - old,) + tuple(buf.shape[1:]),
+                fill,
+                dtype=buf.dtype,
+                device=buf.device,
+            )
             return torch.cat([buf, extra], dim=0)
 
         self.alive = _grow(self.alive, 0.0).bool()
         self.layer_id = _grow(self.layer_id, 0.0).long()
         self.uses = _grow(self.uses, 0.0).long()
         self.strength = _grow(self.strength, 0.0).float()
+        # Make sure the HNSW backend also has room.  Doubling roughly mirrors
+        # PyTorch's geometric growth so we don't constantly resize.
+        if self._hnsw is not None:
+            try:
+                if new > self._hnsw_max_elements:
+                    self._hnsw_max_elements = max(self._hnsw_max_elements * 2, new)
+                    self._hnsw.resize_index(self._hnsw_max_elements)
+            except Exception:
+                pass
 
     def _allocate_slot(self) -> int:
         """Return a free slot index, growing capacity if needed."""
@@ -391,11 +418,14 @@ class UniversalCodebook(Module):
         p_n = F.normalize(live, dim=-1)
         sim = z_n @ p_n.T                                                 # [..., K]
         layer = self.layer_id[alive_idx].unsqueeze(0).expand(*sim.shape)  # broadcast
-        proto = torch.tensor(
-            [self._slot_to_proto[int(s.item())] for s in alive_idx],
-            dtype=torch.long,
-            device=z.device,
-        ).unsqueeze(0).expand(*sim.shape)
+        # Build [K] proto_id once (Python list comprehension is cheap on K
+        # alive but expensive if called every step in a hot loop).  We avoid
+        # a per-step Python loop by caching the lookup table on the long
+        # buffer side; rebuilt only when alive_idx changes shape.
+        slot_list = alive_idx.detach().cpu().tolist()
+        proto_ids = [self._slot_to_proto[int(s)] for s in slot_list]
+        proto_t = torch.as_tensor(proto_ids, dtype=torch.long, device=z.device)
+        proto = proto_t.unsqueeze(0).expand(*sim.shape)
         return {"logits": sim / float(tau), "layer": layer, "proto_id": proto}
 
     @torch.no_grad()
@@ -418,11 +448,15 @@ class UniversalCodebook(Module):
 
         if self._hnsw is not None:
             try:
-                k_q = min(max(1, top_k * 2), self.K)
+                # Over-fetch so archived/missing pids don't shrink the
+                # result below `top_k`.  Cap at currently-alive K.
+                k_q = min(max(1, top_k * 4), max(1, self.K))
                 labels, dists = self._hnsw.knn_query(v.reshape(1, -1), k=k_q)
                 out: List[Tuple[int, str, float]] = []
                 for lab, d in zip(labels[0].tolist(), dists[0].tolist()):
                     pid = int(lab)
+                    if pid < 0:
+                        continue
                     meta = self.meta.get(pid)
                     if meta is None or meta.archived:
                         continue
@@ -430,7 +464,10 @@ class UniversalCodebook(Module):
                     out.append((pid, meta.layer, sim))
                     if len(out) >= top_k:
                         break
-                return out
+                if out:
+                    return out
+                # If HNSW returned only stale entries, fall through to the
+                # dense scan instead of returning empty.
             except Exception:
                 pass
 
@@ -466,7 +503,11 @@ class UniversalCodebook(Module):
             return -1
         pid = self._next_proto_id
         self._next_proto_id += 1
-        self.slots[slot] = embedding.detach().to(self.slots.dtype)
+        # Use .data assignment to avoid bumping the autograd version counter
+        # on the slots Parameter.  An in-place __setitem__ here would conflict
+        # with any forward whose result is still being held for backward
+        # (cf. memory feedback_torch_buffer_inplace.md).
+        self.slots.data[slot] = embedding.detach().to(self.slots.dtype).to(self.slots.device)
         self.alive[slot] = True
         self.layer_id[slot] = {LAYER_L1: 1, LAYER_L2: 2, LAYER_L3: 3}[layer]
         self.uses[slot] = 0
@@ -558,12 +599,20 @@ class UniversalCodebook(Module):
     ) -> Optional[int]:
         """Trace co-firing minting.  Call once per action emitted by ActionHead.
 
-        Algorithm:
+        Algorithm (anti-noise version):
           1. Append last_action_id to the recent-history ring buffer.
           2. Walk back over `co_fire_window` steps.
-          3. If a contiguous subsequence of length >= 3 has occurred
-             >= co_fire_min_repeats times in history AND no L2 already
-             exists for it, mint as L2.
+          3. Take ONLY the longest tail subsequence of length >= 3 that
+             has occurred >= co_fire_min_repeats times in history AND
+             whose elements are not all identical (e.g. ban [0,0,0,0]).
+          4. If we mint that one, ``return`` immediately — do NOT also mint
+             every shorter sub-pattern of it.  This was the source of
+             prototype noise: previously a single repeating macro caused
+             3..N-1 short slices to all be minted as separate L2's.
+
+        Bug-fix detail: the ``_co_fire_seen`` cache is updated only AFTER a
+        successful mint; otherwise a transient capacity hit would leave a
+        permanent dead key.
         """
         if last_action_id < 0:
             return None
@@ -576,10 +625,15 @@ class UniversalCodebook(Module):
         if len(history) < self.co_fire_window:
             return None
 
-        # try lengths 3..co_fire_window from longest to shortest, prefer big patterns
+        # Only consider the LONGEST viable tail this call.  Shorter slices
+        # of a repeating tail are subsumed by the longer one and minting
+        # them all just creates near-duplicate prototypes (~noise).
         for L in range(self.co_fire_window, 2, -1):
             tail = tuple(history[-L:])
-            # count occurrences of `tail` over the history
+            # Skip tails with no diversity (e.g. [0,0,0,0]).  These are
+            # repeated single-action runs which are not "compounds".
+            if len(set(tail)) <= 1:
+                continue
             if len(history) < L * self.co_fire_min_repeats:
                 continue
             count = 0
@@ -589,13 +643,20 @@ class UniversalCodebook(Module):
                     if count >= self.co_fire_min_repeats:
                         break
             if count >= self.co_fire_min_repeats:
-                key = tail
-                if key in self._co_fire_seen:
-                    continue
-                self._co_fire_seen.add(key)
+                if tail in self._co_fire_seen:
+                    # Already minted this exact pattern; stop searching to
+                    # avoid emitting all shorter sub-slices of it.
+                    return None
                 pid = self.mint_from_trace(list(tail), description="", success=True)
                 if pid >= 0:
+                    # Only persist into the seen-cache after a real mint
+                    # so a transient capacity-hit doesn't poison future
+                    # attempts at the same pattern.
+                    self._co_fire_seen.add(tail)
                     return pid
+                # If mint failed (e.g. capacity), DO NOT cache; let it
+                # retry on a future call.
+                return None
         return None
 
     # ------------------------------------------------------------------ usage / LTP+LTD
@@ -719,9 +780,11 @@ class UniversalCodebook(Module):
 
         # Reset everything except L1 primitives' parameter tensor (we keep
         # L1's slots so any prior gradient state is preserved).
-        for slot in range(self.alive.shape[0]):
-            self.alive[slot] = False
-            self.layer_id[slot] = 0
+        # Vectorised reset — was an O(K) Python loop (slow on 100k slots).
+        self.alive.zero_()
+        self.layer_id.zero_()
+        self.uses.zero_()
+        self.strength.fill_(0.0)
         self.meta.clear()
         self._proto_to_slot.clear()
         self._slot_to_proto.clear()
@@ -756,12 +819,38 @@ class UniversalCodebook(Module):
             pid = int(entry["proto_id"])
             layer = entry.get("layer", LAYER_L3)
             if layer == LAYER_L1:
-                # already re-initialised above; just patch metadata fields
+                # L1 was already slot-allocated above with a fresh random
+                # init.  Restore the saved embedding so a trained codebook
+                # round-trips byte-perfect.  Was: only metadata was
+                # patched, so L1 slot vectors silently drifted on every
+                # reload — visible as ~0.05 max-abs drift on a smoke run.
                 meta = self.meta.get(pid)
-                if meta is not None:
-                    meta.n_uses = int(entry.get("n_uses", 0))
-                    meta.n_success = int(entry.get("n_success", 0))
-                    meta.last_used_at = float(entry.get("last_used_at", meta.last_used_at))
+                if meta is None:
+                    continue
+                slot = self._proto_to_slot.get(pid, pid)
+                emb = entry.get("embedding")
+                if emb is not None and len(emb) == self.hidden:
+                    emb_t = torch.tensor(emb, dtype=torch.float32)
+                    self.slots.data[slot] = emb_t.to(self.slots.dtype).to(self.slots.device)
+                    # rebuild the HNSW entry too, otherwise the index
+                    # still points at the random-init vector.
+                    self._hnsw_mark_deleted(pid)
+                    self._hnsw_add(pid, self.slots.data[slot])
+                meta.n_uses = int(entry.get("n_uses", 0))
+                meta.n_success = int(entry.get("n_success", 0))
+                meta.last_used_at = float(entry.get("last_used_at", meta.last_used_at))
+                meta.hebbian_strength = float(entry.get("hebbian_strength", meta.hebbian_strength))
+                if pid < self.uses.shape[0]:
+                    self.uses[pid] = meta.n_uses
+                    self.strength[pid] = meta.hebbian_strength
+                continue
+            # Reject ID collisions with the L1 reserved range.  A corrupted
+            # JSON could otherwise overwrite a primitive.
+            if pid < len(L1_PRIMITIVES):
+                continue
+            # Skip if this proto_id is already loaded (defensive against
+            # duplicate entries in a corrupted file).
+            if pid in self.meta:
                 continue
             slot = self._allocate_slot()
             if slot < 0:
@@ -769,7 +858,10 @@ class UniversalCodebook(Module):
             emb = torch.tensor(entry["embedding"], dtype=torch.float32)
             if emb.numel() != self.hidden:
                 continue
-            self.slots[slot] = emb
+            # Use .data to avoid bumping the Parameter version counter on
+            # reload (no autograd graph live during load anyway, but keep
+            # invariant).
+            self.slots.data[slot] = emb.to(self.slots.dtype).to(self.slots.device)
             self.alive[slot] = not bool(entry.get("archived", False))
             self.layer_id[slot] = {LAYER_L2: 2, LAYER_L3: 3}.get(layer, 3)
             self.uses[slot] = int(entry.get("n_uses", 0))

@@ -88,6 +88,13 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
 
+def _log(msg: str) -> None:
+    """Module-level log shim. main() rebinds a closure that ALSO appends to
+    log_lines, but evaluate() and the other module-level helpers may run
+    before/after main()'s closure exists, so we always have a safe fallback."""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--out", default=OUT_DIR_DEFAULT)
@@ -113,7 +120,12 @@ def _parse_args() -> argparse.Namespace:
                    help="HF model id for KD teacher (frozen); see HF_ENDPOINT for mirror")
     p.add_argument("--kd-weight", type=float, default=0.7,
                    help="alpha for KD loss; loss = (1-alpha)*ce + alpha*kd")
-    p.add_argument("--kd-every", type=int, default=4)
+    p.add_argument("--kd-every", type=int, default=4,
+                   help="run the (expensive) teacher forward every N steps "
+                        "to amortise its cost; on KD-skip steps we use pure "
+                        "base_loss (NOT (1-alpha)*base_loss) so the LM "
+                        "gradient isn't silently scaled down by 0.3x on 75%% "
+                        "of steps")
     p.add_argument("--kd-temperature", type=float, default=4.0,
                    help="softmax temperature T; KD scaled by T*T")
     p.add_argument("--teacher-fallback-ckpt", default="",
@@ -207,7 +219,10 @@ def sample(model, tokenizer, prompt: str,
     model.eval()
     ids = tokenizer.encode(prompt, add_special_tokens=False)
     if not ids:
-        ids = [tokenizer.eos_token_id or 50256]
+        # eos_token_id is the right anchor for any HF tokenizer (Qwen,
+        # GPT-2, etc); only fall back to 0 if eos is genuinely missing.
+        eos = getattr(tokenizer, "eos_token_id", None)
+        ids = [int(eos) if eos is not None else 0]
     ids = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     max_seq = getattr(model, "max_seq", 256)
     for _ in range(max_new):
@@ -288,21 +303,33 @@ def _teacher_logits(teacher, x: "torch.Tensor") -> "torch.Tensor":
 
 
 def _kd_loss(student_logits, teacher_logits, T: float = 4.0):
-    """Chunked KL(student_logp || teacher_p), avoids OOM on large vocab."""
-    import torch
-    import torch.nn.functional as F
+    """Chunked KL(student_logp || teacher_p), avoids OOM on large vocab.
+
+    Returns a scalar token-mean (over batch * time) scaled by T**2 (Hinton).
+    """
     V = student_logits.size(-1); V_t = teacher_logits.size(-1)
-    if V_t > V: teacher_logits = teacher_logits[..., :V]
-    elif V > V_t: student_logits = student_logits[..., :V_t]
+    # Vocabulary mismatch (e.g., student=Qwen 151643, teacher=GPT-2 50257).
+    # Truncate to common prefix; both vocabs must share a token-id ordering
+    # over [0, min(V,V_t)). Caller is responsible for ensuring this.
+    if V_t > V:
+        teacher_logits = teacher_logits[..., :V]
+    elif V > V_t:
+        student_logits = student_logits[..., :V_t]
     bs = student_logits.size(0); chunk = max(1, bs // 4)
     total = 0.0
+    n_tokens = 0
     for i in range(0, bs, chunk):
-        sl = student_logits[i:i+chunk]; tl = teacher_logits[i:i+chunk].detach()
+        sl = student_logits[i:i + chunk]
+        tl = teacher_logits[i:i + chunk].detach()
         slp = F.log_softmax(sl.float() / T, dim=-1)
         tp = F.softmax(tl.float() / T, dim=-1)
-        total = total + F.kl_div(slp, tp, reduction='sum') / sl.size(0) / sl.size(1)
-    n_chunks = (bs + chunk - 1) // chunk
-    return (total / n_chunks) * (T * T)
+        # Reduce 'sum' then divide by n_tokens at the end -- gives a true
+        # token-mean even when the final chunk is smaller than the rest
+        # (was a bias source in the per-chunk-then-average path).
+        total = total + F.kl_div(slp, tp, reduction='sum')
+        n_tokens += sl.size(0) * sl.size(1)
+    n_tokens = max(n_tokens, 1)
+    return (total / n_tokens) * (T * T)
 
 def main() -> int:
     args = _parse_args()
@@ -570,10 +597,18 @@ def main() -> int:
             base_loss = ce_loss + args.z_loss_weight * z_loss
 
             if teacher is not None and args.kd_weight > 0:
-                with torch.no_grad():
-                    t_logits = _teacher_logits(teacher, x)
-                kd = _kd_loss(logits, t_logits, args.kd_temperature) if (step % args.kd_every == 0) else torch.tensor(0., device=logits.device)
-                loss = (1.0 - args.kd_weight) * base_loss + args.kd_weight * kd
+                # Only run the (expensive) teacher forward on KD-active steps.
+                # On KD-skip steps fall back to pure base_loss without the
+                # (1-α) downweight that would otherwise scale the LM gradient
+                # by 0.3× on 3/4 steps (effectively dropping LR; see review).
+                if step % args.kd_every == 0:
+                    with torch.no_grad():
+                        t_logits = _teacher_logits(teacher, x)
+                    kd = _kd_loss(logits, t_logits, args.kd_temperature)
+                    loss = (1.0 - args.kd_weight) * base_loss + args.kd_weight * kd
+                else:
+                    kd = torch.zeros((), device=logits.device)
+                    loss = base_loss
             else:
                 kd = torch.zeros((), device=logits.device)
                 loss = base_loss

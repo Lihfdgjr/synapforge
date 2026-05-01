@@ -70,10 +70,13 @@ def parse_log(log_path: Path) -> dict | None:
         last_step = int(m.group(1))
         last_ce = float(m.group(2))
     val_ppls = [float(m.group(1)) for m in VAL_PPL_RE.finditer(text)]
+    # Guard against last_ce being valid but 0.0 (which is falsy in
+    # Python). 0.0 ce => exp(0) = 1.0, which is a meaningful ppl, not None.
+    last_train_ppl = math.exp(last_ce) if last_ce is not None else None
     return {
         "last_step": last_step,
         "last_ce": last_ce,
-        "last_train_ppl": math.exp(last_ce) if last_ce else None,
+        "last_train_ppl": last_train_ppl,
         "best_val_ppl": min(val_ppls) if val_ppls else None,
         "n_val_evals": len(val_ppls),
     }
@@ -83,7 +86,10 @@ def decide_phase(state: dict | None) -> int:
     """Return phase id appropriate for current state."""
     if state is None or state.get("last_train_ppl") is None:
         return 0
-    ppl = state.get("best_val_ppl") or state["last_train_ppl"]
+    # Prefer the better of (best_val_ppl, last_train_ppl). Use explicit
+    # None checks -- `or` on a 0.0 ppl would skip the (legitimate) zero.
+    bv = state.get("best_val_ppl")
+    ppl = bv if bv is not None else state["last_train_ppl"]
     p = 0
     for ph in PHASES:
         if ppl <= ph["ppl_max"]:
@@ -119,7 +125,7 @@ def watch_loop(watch_dir: Path, interval: int) -> None:
         now = time.time()
         if phase != last_phase or now - last_ts > 600:
             ppl = state.get("last_train_ppl") if state else None
-            ppl_str = f"{ppl:.1f}" if ppl else "?"
+            ppl_str = f"{ppl:.1f}" if ppl is not None else "?"
             print(f"[phase {time.strftime('%H:%M:%S')}] step={state and state.get('last_step')} "
                   f"ppl={ppl_str} -> phase {phase} ({PHASES[phase]['name']})")
             if phase != last_phase and phase > 0:

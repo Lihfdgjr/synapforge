@@ -6,8 +6,11 @@ and CUDA contexts in v0.1). Just a generator yielding (in, out) tensors.
 
 Pipeline:
   parquet rows (string text)
-    -> GPT-2 BPE encode (transformers.GPT2TokenizerFast, vocab=50257)
-    -> append EOT token (<|endoftext|> = 50256) between docs
+    -> AutoTokenizer encode (any HF-compatible tokenizer; vocab is
+       whatever the tokenizer reports, e.g. 50257 for gpt2 / 151643 for
+       qwen2.5)
+    -> append EOT token between docs (auto-derived from the tokenizer's
+       eos_token_id; no hard-coded 50256)
     -> slide a window of seq_len+1 tokens, batch up B of them
     -> emit (tokens_in[B,T], tokens_out[B,T]) where out = in shifted left by 1.
 
@@ -34,18 +37,26 @@ except ImportError:
     pq = None
 import torch
 
-_TOKENIZER = None
+_TOKENIZER_CACHE: dict[str, object] = {}
 
 
 def _get_tokenizer(name: str = "gpt2"):
-    """Lazy-load tokenizer (any HF AutoTokenizer-compatible); cached."""
-    global _TOKENIZER
-    if _TOKENIZER is None:
-        from transformers import AutoTokenizer
-        _TOKENIZER = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
-        if _TOKENIZER.pad_token_id is None:
-            _TOKENIZER.pad_token = _TOKENIZER.eos_token
-    return _TOKENIZER
+    """Lazy-load tokenizer (any HF AutoTokenizer-compatible); per-name cached.
+
+    Cached PER tokenizer name -- the previous single-global cache returned
+    a stale tokenizer when the trainer switched between GPT-2 (vocab=50257)
+    and Qwen (vocab=151643) within the same process, silently mis-tokenising
+    the second stream.
+    """
+    cached = _TOKENIZER_CACHE.get(name)
+    if cached is not None:
+        return cached
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
+    if tok.pad_token_id is None:
+        tok.pad_token = tok.eos_token
+    _TOKENIZER_CACHE[name] = tok
+    return tok
 
 
 class ParquetTokenStream:
@@ -59,8 +70,10 @@ class ParquetTokenStream:
         batch_size: examples per batch B.
         vocab_size: documentation only; tokenizer vocab is authoritative.
         text_column: optional explicit column name; auto-detect if None.
-        eot_id: end-of-text token id used as document separator. 50256 is
-            GPT-2's <|endoftext|>.
+        eot_id: end-of-text token id used as document separator. If None
+            (default) auto-derives from the tokenizer's eos_token_id so
+            we don't accidentally inject GPT-2's 50256 magic into a
+            different vocab (e.g. Qwen).
         loop: if True, loop over files forever (training loop never raises
             StopIteration).
     """
@@ -72,7 +85,7 @@ class ParquetTokenStream:
         batch_size: int = 32,
         vocab_size: int = 50257,
         text_column: str | None = None,
-        eot_id: int = 50256,
+        eot_id: int | None = None,
         loop: bool = True,
         tokenizer_name: str = "gpt2",
     ) -> None:
@@ -83,10 +96,22 @@ class ParquetTokenStream:
         self.batch_size = int(batch_size)
         self.vocab_size = int(vocab_size)
         self.text_column = text_column
-        self.eot_id = int(eot_id)
         self.loop = bool(loop)
         self.tokenizer_name = tokenizer_name
         self._tok = _get_tokenizer(tokenizer_name)
+        # Default EOT to the tokenizer's eos_token_id, NOT the GPT-2 magic
+        # number 50256 -- using a hard-coded id with a Qwen tokenizer would
+        # inject a spurious mid-vocab token between docs and corrupt
+        # training. eot_id can still be passed explicitly to override.
+        if eot_id is None:
+            eos = getattr(self._tok, "eos_token_id", None)
+            if eos is None:
+                # Fall back to GPT-2 magic only if the tokenizer truly has
+                # no eos (vanishingly rare).
+                eos = 50256
+            self.eot_id = int(eos)
+        else:
+            self.eot_id = int(eot_id)
 
     # ---------------------------------------------------------------- internal
 

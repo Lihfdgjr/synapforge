@@ -269,8 +269,14 @@ class WebBrowserEnv:
         if next_hash not in self._seen_hashes:
             rw.page_changed = 1.0
         else:
-            # repeat penalty decays with how recent the repeat is.
-            recent_idx = self._seen_hashes[::-1].index(next_hash)
+            # Repeat penalty decays with how recent the repeat is.  Walk
+            # backwards from the tail to find the most-recent match
+            # without allocating a reversed copy each step.
+            recent_idx = 0
+            for j in range(len(self._seen_hashes) - 1, -1, -1):
+                if self._seen_hashes[j] == next_hash:
+                    recent_idx = len(self._seen_hashes) - 1 - j
+                    break
             rw.page_repeat = -max(0.05, 0.5 / (1 + recent_idx))
         # progress
         page_text = self._page_text()
@@ -290,10 +296,18 @@ class WebBrowserEnv:
         info["scroll"] = self._scroll
         info["reward_breakdown"] = rw.__dict__.copy()
 
-        # 5. done
-        done = (a_type == "done") or (
-            rw.progress_text > 0 and rw.progress_url > 0
-        )
+        # 5. done — terminate when EITHER progress signal fires.  Several
+        # curriculum tasks specify only `target_text_regex` (no URL match),
+        # so `AND` would have made them un-completable.  Tasks with both
+        # criteria still get the AND semantics inside the regex check (URL
+        # has to also match for `progress_url` to be > 0), so any-of is the
+        # correct OR-of-conditions behaviour.
+        target_progress = 0.0
+        if self.cfg.target_text_regex is not None:
+            target_progress += rw.progress_text
+        if self.cfg.target_url_substr is not None:
+            target_progress += rw.progress_url
+        done = (a_type == "done") or target_progress > 0.0
 
         return next_obs, rw.total(), bool(done), info
 
@@ -434,6 +448,49 @@ class WebBrowserEnv:
         b = img.tobytes()
         t = torch.frombuffer(b, dtype=torch.uint8).clone()
         return t.view(size, size, 3).permute(2, 0, 1).float() / 255.0
+
+
+def _smoke() -> None:  # pragma: no cover - manual run
+    """End-to-end mock-mode smoke for ``python -m synapforge.action.web_env``.
+
+    Exercises reset, click, scroll, type, key, and done — everything an
+    agent loop touches — without requiring Playwright/Chromium.
+    """
+    env = WebBrowserEnv(WebEnvConfig(real=False))
+    obs0 = env.reset("https://www.bing.com")
+    assert tuple(obs0.shape) == (3, 64, 64), f"bad obs shape: {tuple(obs0.shape)}"
+    print(f"[reset] obs shape={tuple(obs0.shape)} url={env._url}")
+
+    actions = [
+        {"type": "scroll", "scroll_dx": 0.0, "scroll_dy": 0.3},
+        {"type": "click", "x": 0.5, "y": 0.5},
+        {"type": "type", "text_id": 2, "text_trigger": True},
+        {"type": "key", "key": "enter"},
+        {"type": "wait"},
+        {"type": "done"},
+    ]
+    total_r = 0.0
+    for i, a in enumerate(actions):
+        obs, r, done, info = env.step(a)
+        total_r += float(r)
+        print(
+            f"[step {i}] type={a['type']:<8s} url={info.get('url', '?')[:40]:<40s} "
+            f"r={r:+.2f} done={done}"
+        )
+        if done:
+            break
+    env.close()
+    print(f"[done] total_reward={total_r:+.2f}")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--smoke", action="store_true", help="run mock-env smoke")
+    args = p.parse_args()
+    if args.smoke or True:  # treat default invocation as --smoke
+        _smoke()
 
 
 __all__ = [

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Callable, Deque, Iterable, List, Optional, Tuple
 
@@ -57,6 +57,10 @@ class SynthConfig:
     auto_prune: bool = True
     success_strength_boost: float = 0.7
     failure_strength_boost: float = 0.4
+    # LRU caps for the dedup caches.  Without these the per-text and
+    # per-trace dicts grow unbounded over a long session and leak RAM.
+    text_cache_max: int = 4096
+    trace_cache_max: int = 4096
 
 
 # ---------------------------------------------------------------------------
@@ -95,10 +99,25 @@ class SkillSynthesizer:
         self.cfg = cfg or SynthConfig()
         # rate-limit ring buffer (timestamps of recent user mints)
         self._user_mint_ts: Deque[float] = deque(maxlen=self.cfg.user_mints_per_minute * 4)
-        # description -> proto_id cache so identical text is cheap
-        self._text_cache: dict = {}
+        # description -> proto_id cache so identical text is cheap.
+        # OrderedDict gives us a cheap LRU when we manually move_to_end.
+        self._text_cache: "OrderedDict[str, int]" = OrderedDict()
         # demo trace -> proto_id cache (idempotent demonstration)
-        self._trace_cache: dict = {}
+        self._trace_cache: "OrderedDict[tuple, int]" = OrderedDict()
+
+    def _cache_put(self, cache: "OrderedDict", key, value, max_size: int) -> None:
+        """LRU insert.  Evicts oldest when over capacity."""
+        if key in cache:
+            cache.move_to_end(key)
+        cache[key] = value
+        while len(cache) > max_size:
+            cache.popitem(last=False)
+
+    def _cache_touch(self, cache: "OrderedDict", key):
+        if key in cache:
+            cache.move_to_end(key)
+            return cache[key]
+        return None
 
     # ------------------------------------------------------------------ user path
 
@@ -117,10 +136,10 @@ class SkillSynthesizer:
             return -1
 
         # Cheap caches first.
-        if text in self._text_cache:
-            pid = self._text_cache[text]
-            self.codebook.activate(pid, reward=0.4 * urgency)
-            return pid
+        cached = self._cache_touch(self._text_cache, text)
+        if cached is not None:
+            self.codebook.activate(cached, reward=0.4 * urgency)
+            return cached
 
         emb = self.embed_fn(text)
         if emb.numel() != self.codebook.hidden:
@@ -131,7 +150,7 @@ class SkillSynthesizer:
         if hits and hits[0][2] >= self.cfg.dedup_threshold:
             pid = hits[0][0]
             self.codebook.activate(pid, reward=0.5 * urgency)
-            self._text_cache[text] = pid
+            self._cache_put(self._text_cache, text, pid, self.cfg.text_cache_max)
             if self.skill_log is not None:
                 self.skill_log.log_activate(pid, reward=0.5 * urgency)
             return pid
@@ -147,7 +166,7 @@ class SkillSynthesizer:
 
         pid = self.codebook.mint_from_text(text, bump_dup_threshold=self.cfg.dedup_threshold)
         if pid >= 0:
-            self._text_cache[text] = pid
+            self._cache_put(self._text_cache, text, pid, self.cfg.text_cache_max)
             if self.skill_log is not None:
                 self.skill_log.log_mint(pid, LAYER_L3, text, extra={
                     "source": "user",
@@ -172,16 +191,19 @@ class SkillSynthesizer:
             return -1
         seq = list(action_trace)[: self.cfg.trace_max_len]
 
-        cache_key = (tuple(seq), bool(description))
-        if cache_key in self._trace_cache:
-            pid = self._trace_cache[cache_key]
-            self.codebook.activate(pid, reward=reward if success else -abs(reward))
-            return pid
+        # Distinguish caches by *full* description so two different labels
+        # for the same trace get two different prototypes (was: cache key
+        # only used `bool(description)` and ignored which description).
+        cache_key = (tuple(seq), description or "")
+        cached = self._cache_touch(self._trace_cache, cache_key)
+        if cached is not None:
+            self.codebook.activate(cached, reward=reward if success else -abs(reward))
+            return cached
 
         pid = self.codebook.mint_from_trace(seq, description=description, success=success)
         if pid < 0:
             return pid
-        self._trace_cache[cache_key] = pid
+        self._cache_put(self._trace_cache, cache_key, pid, self.cfg.trace_cache_max)
 
         if self.skill_log is not None:
             self.skill_log.log_mint(

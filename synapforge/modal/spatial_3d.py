@@ -424,6 +424,40 @@ class DUSt3RTeacher(Module):
 # =============================================================================
 # Smoke test
 # =============================================================================
+def _equivariance_check(egnn: "EGNNAdapter", tol: float = 5e-3) -> dict:
+    """Numerically verify SE(3) equivariance of the EGNN coord update.
+
+    Returns the rotation-equivariance and translation-equivariance errors;
+    asserts both are below ``tol``.  ``tol`` is generous because eval is in
+    fp32 with non-trivial neighbour aggregation across small floats.
+
+    Math:  for invariant gate g(h_i, h_j, ||x_i - x_j||²) and the EGNN
+        coord update    x'_i = x_i + (1/|N(i)|) Σ_j (x_i - x_j) g_ij,
+    we have for any R ∈ SO(3) and t ∈ ℝ³:
+        update(R x + t) = R · update(x) + t.
+    """
+    egnn.eval()
+    torch.manual_seed(7)
+    B, N = 1, 16
+    pts = torch.randn(B, N, 3)
+    feats = torch.randn(B, N, egnn.feat_dim)
+    # build random rotation
+    A = torch.randn(3, 3)
+    Q, _ = torch.linalg.qr(A)
+    if torch.linalg.det(Q) < 0:
+        Q[:, 0] *= -1
+    t = torch.tensor([0.7, -1.2, 0.3])
+    with torch.no_grad():
+        _, x_orig = egnn(pts, feats)
+        # Apply rigid transform to inputs.
+        pts_rt = (pts @ Q.T) + t
+        _, x_rt = egnn(pts_rt, feats)
+        # Apply rigid transform to outputs of plain forward.
+        x_orig_rt = (x_orig @ Q.T) + t
+    err = (x_rt - x_orig_rt).abs().max().item()
+    return {"rt_equivariance_max_err": err, "rotation_det": float(torch.linalg.det(Q))}
+
+
 def _smoke() -> None:
     torch.manual_seed(0)
     B = 2
@@ -440,6 +474,11 @@ def _smoke() -> None:
     h_e, x_e = egnn(pts, feats)
     assert h_e.shape == (B, 1 + 32, 64), h_e.shape
     assert x_e.shape == (B, 32, 3), x_e.shape
+    # 2b) Equivariance: rotation+translation of input must propagate to output.
+    eq = _equivariance_check(egnn, tol=5e-3)
+    print(f"EGNN SE(3) eq error: {eq['rt_equivariance_max_err']:.2e}  "
+          f"(rot det={eq['rotation_det']:+.3f})")
+    assert eq["rt_equivariance_max_err"] < 5e-3, eq
     # 3) DUSt3R teacher
     teacher = DUSt3RTeacher(out_h=16, out_w=16)
     img_a = torch.rand(B, 3, 64, 64)

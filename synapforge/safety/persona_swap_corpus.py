@@ -13,9 +13,11 @@ Persona-swap is the umbrella attack family that subsumes:
   - Jailbroken / Unfiltered / Uncensored / Uncle Tom variants
   - Fictional/roleplay framings ("you are character X who has no rules")
 
-Coverage = (200 personas) × (50 attack templates) × bilingual (zh+en) =
-~10K jailbreak prompts. The DPO red corpus must overrepresent this class
-because it dominates the in-the-wild distribution.
+Coverage = (~105 personas) × (50 attack templates) × bilingual (zh+en) =
+~5250 jailbreak prompts at default settings. (PERSONA_FAMILIES below holds
+105 unique personas as of this revision; pass --n-personas N to over-cycle
+or sub-sample.) The DPO red corpus must overrepresent this class because it
+dominates the in-the-wild distribution.
 
 Output: synapforge/safety/persona_swap_red.jsonl
 Each entry: {"prompt": str, "attack_type": str, "persona": str,
@@ -25,7 +27,7 @@ Each entry: {"prompt": str, "attack_type": str, "persona": str,
 Usage:
     python -m synapforge.safety.persona_swap_corpus \
         --out synapforge/safety/persona_swap_red.jsonl \
-        --n-personas 200 --n-templates 50
+        --n-personas 105 --n-templates 50
 """
 
 from __future__ import annotations
@@ -394,16 +396,33 @@ def _expected_blue(family: str) -> str:
 
 
 def generate_corpus(
-    n_personas: int = 200,
+    n_personas: int = 105,
     n_templates: int = 50,
     seed: int = 42,
 ) -> Iterable[PersonaSwapEntry]:
-    """Deterministic generator. Yields PersonaSwapEntry."""
+    """Deterministic generator. Yields PersonaSwapEntry.
+
+    Note: PERSONA_FAMILIES currently holds 105 unique personas. Asking for
+    n_personas > 105 cycles the deterministic list with a per-cycle salt so
+    repeated entries don't duplicate prompts byte-for-byte.
+    """
     rng = random.Random(seed)
 
-    personas = _all_personas()
-    if n_personas < len(personas):
-        personas = rng.sample(personas, k=n_personas)
+    base_personas = _all_personas()
+    if n_personas < len(base_personas):
+        personas = rng.sample(base_personas, k=n_personas)
+    elif n_personas > len(base_personas):
+        # Cycle personas with cycle-index suffix so prompts remain distinct.
+        cycles = (n_personas + len(base_personas) - 1) // len(base_personas)
+        personas = []
+        for c in range(cycles):
+            for fam, name in base_personas:
+                # Suffix with a quiet cycle marker so all prompts are unique.
+                tag = name if c == 0 else f"{name} (variant {c})"
+                personas.append((fam, tag))
+        personas = personas[:n_personas]
+    else:
+        personas = list(base_personas)
 
     templates = list(ATTACK_TEMPLATES)
     if n_templates < len(templates):
@@ -445,7 +464,9 @@ def cli() -> None:
         default=Path(__file__).resolve().parent / "persona_swap_red.jsonl",
         help="Output JSONL path",
     )
-    ap.add_argument("--n-personas", type=int, default=200)
+    ap.add_argument("--n-personas", type=int, default=105,
+                    help="Total personas (defaults to all 105 unique). "
+                         "Pass <105 to subsample, >105 to cycle with variant suffix.")
     ap.add_argument("--n-templates", type=int, default=50)
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()

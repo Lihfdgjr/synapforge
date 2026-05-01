@@ -59,28 +59,33 @@ def _load_problems(local_path: Optional[str], n: Optional[int]) -> List[Dict[str
 # ---------------------------------------------------------------- answer parsing
 
 _ANS_RE   = re.compile(r"####\s*(-?\d+(?:\.\d+)?)")
-_LAST_INT = re.compile(r"(-?\d+(?:\.\d+)?)")
+# Word-bounded so identifier suffixes like "var2" or "x42" are not picked up
+# as numeric answers.  Allows leading minus and an optional decimal tail.
+_LAST_INT = re.compile(r"(?<![A-Za-z_])(-?\d+(?:\.\d+)?)(?![A-Za-z_])")
 
 
 def parse_answer(text: str) -> Optional[str]:
     """Pull the model's final numeric answer.
 
     Prefer `#### N` syntax; otherwise fall back to the last bare number in the
-    completion (which is what Llama2 / Mistral usually emit).
+    completion (which is what Llama2 / Mistral usually emit).  Commas are
+    stripped first so "1,234" is recognised as 1234.
     """
+    text = (text or "").replace(",", "")
     m = _ANS_RE.search(text)
     if m:
         return _normalize(m.group(1))
-    nums = _LAST_INT.findall(text.replace(",", ""))
+    nums = _LAST_INT.findall(text)
     return _normalize(nums[-1]) if nums else None
 
 
 def parse_gold(answer_field: str) -> Optional[str]:
     """GSM8K's `answer` field looks like '...rationale...\\n#### 18'."""
-    m = _ANS_RE.search(answer_field or "")
+    af = (answer_field or "").replace(",", "")
+    m = _ANS_RE.search(af)
     if m:
         return _normalize(m.group(1))
-    nums = _LAST_INT.findall((answer_field or "").replace(",", ""))
+    nums = _LAST_INT.findall(af)
     return _normalize(nums[-1]) if nums else None
 
 
