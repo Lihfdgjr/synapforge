@@ -438,6 +438,61 @@ class PLIFCell(nn.Module):
             )
         return s_seq, v
 
+    # -- homeostatic threshold control (P1) ------------------------------
+    #
+    # Both methods mutate ``self.threshold`` under ``torch.no_grad()`` so
+    # autograd never sees the change. They are pure hyperparameter
+    # adjustment outside the surrogate-gradient path: the threshold
+    # parameter still learns normally via backward through the
+    # ``v - threshold`` autograd graph in :func:`spike`. The trainer is
+    # expected to call them on a low-frequency cadence (e.g. every 50/100
+    # steps, see ``train_100m_kd.py``).
+
+    def clamp_threshold(self, min_val: float = 0.005, max_val: float = 0.5) -> None:
+        """Clamp ``self.threshold`` in-place to ``[min_val, max_val]``.
+
+        Defensive bound to prevent unbounded threshold drift during long
+        runs (Run 1 April 2026 ce 5.72→8.46 word-salad divergence and Run
+        2 May 1 dead-10/10 spike rate were both rooted in unclamped drift
+        through the input distribution). Off the autograd path so it does
+        NOT interfere with learning the threshold parameter via the
+        surrogate gradient.
+        """
+        with torch.no_grad():
+            self.threshold.clamp_(float(min_val), float(max_val))
+
+    def homeostatic_step(
+        self,
+        observed_rate: float,
+        target_rate: float = 0.10,
+        gain: float = 0.005,
+    ) -> None:
+        """Spike-rate-targeted threshold homeostasis.
+
+        Drives the per-channel mean spike rate toward ``target_rate``:
+        - If ``observed_rate < target_rate * 0.5`` (very dead),
+          ``threshold *= (1 - gain)`` (lower the bar, more spikes).
+        - If ``observed_rate > target_rate * 2.0`` (saturated),
+          ``threshold *= (1 + gain)`` (raise the bar, fewer spikes).
+        - Otherwise no-op.
+
+        This is a coarse control loop intended to stop *partial* PLIF
+        death — the previous trainer-side ``auto-revive`` only fired when
+        all cells were dead, missing the long tail where some channels
+        had drifted high while the model still trained. After applying
+        the step, callers should bound the result with
+        :meth:`clamp_threshold` (kept separate so the bound is checked
+        defensively even when no homeostasis fires that step).
+        """
+        target = float(target_rate)
+        gain_f = float(gain)
+        rate = float(observed_rate)
+        with torch.no_grad():
+            if rate < target * 0.5:
+                self.threshold.mul_(1.0 - gain_f)
+            elif rate > target * 2.0:
+                self.threshold.mul_(1.0 + gain_f)
+
     def extra_repr(self) -> str:
         sr = self.surrogate if isinstance(self.surrogate, str) else self.surrogate.__name__
         return (

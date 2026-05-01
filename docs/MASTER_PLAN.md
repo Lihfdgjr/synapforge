@@ -138,13 +138,29 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 
 ## 6. Open problems (live list — UPDATE AS YOU LEARN)
 
-### P1. Run 1 word-salad divergence at step 5000 — REAL ROOT CAUSE
-- **Symptom**: ce 5.72 → 8.46 between step 4500–5000. Output: high-freq token salad.
+### P1. Run 1 word-salad divergence at step 5000 — RESOLVED 2026-05-01
+- **Symptom**: Run 1 (April) ce 5.72 → 8.46 between step 4500–5000, high-freq token
+  salad. Run 2 (May 1) had dead 10/10 spike rate from step 250 → 13250 (entire run) —
+  threshold drifted *up* past the input distribution and never came back.
 - **Diagnosis (Agent 1+2 on 2026-04-30)**: PLIF threshold drift unclamped + wrong PLIFCell
   variant (RC leaky-to-steady) that never fires with threshold=0.3 on tanh-bounded input.
-- **Fix applied**: `model_100m.py` plif_threshold 0.3 → 0.05, tau 1.5 → 2.5. Spike rate
-  rose 0.020 → 0.335 verified.
-- **Open**: should we EMA-clamp threshold during training to prevent re-drift?
+  Trainer's prior `auto-revive` (`step >= 1000 and step % 200 == 0 and n_dead == len(rates)`)
+  only kicked in when ALL cells were dead, so partial death never triggered.
+- **Fix applied**: 4-part patch landed 2026-05-01 (commit `P1: PLIF homeostatic threshold
+  control + EMA clamp`):
+  1. `synapforge/surrogate.py` — PLIFCell gained `clamp_threshold(min_val=0.005,
+     max_val=0.5)` and `homeostatic_step(observed_rate, target_rate=0.10, gain=0.005)`.
+     Both run under `torch.no_grad()` so they are OFF the autograd path — the threshold
+     parameter still learns normally via the surrogate gradient through `v - threshold`.
+  2. `train_100m_kd.py:732+` — replaced the all-dead `[PLIF-REVIVE]` block with the
+     stronger schedule: `homeostatic_step` every 50 steps (gain=0.01), `clamp_threshold`
+     every 100 steps. Logs print before/after threshold mean only when a change fires.
+  3. New flag `--no-plif-homeostasis` (default OFF, i.e. homeostasis ON) for A/B disabling.
+  4. `tests/integration/test_plif_homeostasis.py` (6 tests, all CPU): toy 2-block model
+     drives threshold from 0.5 → <0.10 under sustained 0% spike rate, clamp enforces
+     min/max, in-band rates are no-ops, methods don't pollute autograd state.
+- **Earlier mitigations preserved**: `model_100m.py` plif_threshold 0.3 → 0.05, tau 1.5
+  → 2.5 (spike rate rose 0.020 → 0.335).
 
 ### P2. KD OOM at vocab=151k bs=128
 - **Symptom**: 18.51 GiB intermediate alloc on KL.

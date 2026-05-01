@@ -42,7 +42,7 @@ if "/workspace" not in sys.path:
 
 import synapforge as sf  # noqa: E402
 from synapforge.surrogate import PLIFCell  # noqa: E402
-from synapforge.data import ParquetTokenStream  # noqa: E402
+from synapforge.data import ParquetTokenStream, split_val_stream  # noqa: E402
 from synapforge.huggingface_adapter import adv_warmstart  # noqa: E402
 from synapforge.model_100m import build_synapforge_100m  # noqa: E402
 from synapforge.optim import build_optimizer  # noqa: E402
@@ -181,6 +181,12 @@ def _parse_args() -> argparse.Namespace:
                         "trajectory unchanged unless this flag is on)")
     p.add_argument("--self-learn-k", type=int, default=8,
                    help="K = number of hardest val examples to probe per eval")
+    p.add_argument("--ttt-val-fraction", type=float, default=0.8,
+                   help="P3 (MASTER_PLAN.md §6): fraction of val chunks "
+                        "routed to the TTT side. The remaining (1 - frac) "
+                        "goes to a holdout side that --self-learn-ttt "
+                        "NEVER sees, so its ppl is the leak-free signal "
+                        "phase_manager gates on. Default 0.8 (4:1 split).")
     p.add_argument("--curiosity-weight", type=float, default=0.0,
                    help="weight of 6-signal curiosity loss; 0 = disabled. "
                         "Recommended ~0.05 once base ppl<250 (Phase 1)")
@@ -197,6 +203,14 @@ def _parse_args() -> argparse.Namespace:
                         "~5s per eval cycle on A100; never crashes the trainer.")
     p.add_argument("--no-honest-eval", action="store_false", dest="honest_eval",
                    help="disable the honest-eval hook")
+    # P1: PLIF homeostatic threshold control (default ON).
+    p.add_argument("--no-plif-homeostasis", action="store_true", default=False,
+                   help="disable PLIF threshold homeostasis (P1). When ON "
+                        "(default), the trainer calls "
+                        "PLIFCell.homeostatic_step every 50 steps and "
+                        "clamp_threshold every 100 steps to prevent "
+                        "threshold drift past the input distribution. "
+                        "Set this flag to A/B-disable for diagnosis.")
     return p.parse_args()
 
 
@@ -499,6 +513,16 @@ def main() -> int:
     val_ds = ParquetTokenStream(VAL_GLOB, seq_len=SEQ_LEN, tokenizer_name="/workspace/teachers/qwen2.5-0.5b",
                                 batch_size=args.batch_size, loop=False)
     print(f"val stream:   {val_ds!r}")
+    # P3 (MASTER_PLAN.md §6): split val into TTT-side (touched by
+    # --self-learn-ttt inner step) and holdout-side (NEVER touched by
+    # TTT). The holdout ppl is the honest, leak-free signal that
+    # phase_manager gates on. See tests/integration/test_ttt_val_split.py.
+    val_ds_ttt, val_ds_holdout = split_val_stream(
+        val_ds, ttt_fraction=args.ttt_val_fraction, denom=5,
+    )
+    _log(f"val split: ttt_fraction={args.ttt_val_fraction:.2f} "
+         f"(ttt rows mod 5 in {sorted(val_ds_ttt.keep_indices)}, "
+         f"holdout rows mod 5 in {sorted(val_ds_holdout.keep_indices)})")
 
     from synapforge.huggingface_adapter import load_tokenizer
     tok = load_tokenizer("/workspace/teachers/qwen2.5-0.5b")
@@ -587,8 +611,13 @@ def main() -> int:
         _log(f"[mixin] mixins import failed; continuing without: {exc}")
 
     # ---------------- training ----------------
+    # P3: track BOTH val_ppl_ttt (set TTT trains on; drops artificially
+    # after TTT inner step) and val_ppl_holdout (set TTT never sees;
+    # honest signal phase_manager gates on). ``ppl_eval`` retained as
+    # alias of holdout for legacy parsers/tooling.
     metrics = {"step": [], "loss": [], "step_ms": [], "tok_per_s": [],
-               "ppl_eval": {}, "samples": {}}
+               "ppl_eval": {}, "ppl_eval_ttt": {}, "ppl_eval_holdout": {},
+               "samples": {}}
     t0 = time.time()
     last_log_t = t0
     cum_tok = 0
@@ -726,16 +755,43 @@ def main() -> int:
                         f"  [WARN] spike rate {rate_mean:.3f} drifted {direction} "
                         f"of target {args.spike_target:.3f} (|delta|>0.05)"
                     )
-                # Auto-revive dead PLIF: if every cell is silent for 1000+ steps,
-                # the leaky-to-steady form has settled below threshold for all
-                # channels. Scale threshold down 10% per check until rate>=0.01.
-                # Bounded by LearnableThreshold min_val=1e-3 spirit.
-                if step >= 1000 and step % 200 == 0 and n_dead == len(rates):
-                    with torch.no_grad():
+                # P1: PLIF homeostatic threshold control.
+                # Run 1 (April) ce 5.72->8.46 word-salad and Run 2 (May 1)
+                # dead-10/10 spike rate were both rooted in unbounded
+                # threshold drift past the input distribution. The legacy
+                # all-dead auto-revive only fired in the worst case --
+                # partial death never triggered. Replaced with:
+                #   * every 50 steps: homeostatic_step toward spike_target
+                #   * every 100 steps: clamp_threshold defensively bounds
+                #     drift to [0.005, 0.5].
+                # Both run under torch.no_grad in PLIFCell methods so the
+                # surrogate-gradient path is untouched.
+                if not args.no_plif_homeostasis:
+                    if step % 50 == 0:
+                        thr_before = float(plif_cells[0].threshold.mean())
                         for m in plif_cells:
-                            m.threshold.mul_(0.9).clamp_(min=5e-3)
-                    new_thr = float(plif_cells[0].threshold.mean())
-                    _log(f"  [PLIF-REVIVE] all cells dead; thr×0.9 -> mean={new_thr:.4f}")
+                            m.homeostatic_step(
+                                rate_mean,
+                                target_rate=args.spike_target,
+                                gain=0.01,
+                            )
+                        thr_after = float(plif_cells[0].threshold.mean())
+                        if abs(thr_after - thr_before) > 1e-6:
+                            _log(
+                                f"  [PLIF-REVIVE] homeostatic step "
+                                f"rate={rate_mean:.3f} -> thr "
+                                f"{thr_before:.4f} -> {thr_after:.4f}"
+                            )
+                    if step % 100 == 0:
+                        thr_before = float(plif_cells[0].threshold.mean())
+                        for m in plif_cells:
+                            m.clamp_threshold(0.005, 0.5)
+                        thr_after = float(plif_cells[0].threshold.mean())
+                        if abs(thr_after - thr_before) > 1e-6:
+                            _log(
+                                f"  [PLIF-REVIVE] clamp [0.005, 0.5] thr "
+                                f"{thr_before:.4f} -> {thr_after:.4f}"
+                            )
 
         if step % SAVE_EVERY == 0:
             ckpt_path = os.path.join(out_dir, f"step_{step:06d}.pt")
