@@ -155,32 +155,44 @@ def test_ckpt_config_roundtrip(tmp_path, torch_or_skip):
     )
 
 
-def test_legacy_ckpt_no_config_falls_back(tmp_path, torch_or_skip):
+def test_legacy_ckpt_no_config_falls_back(tmp_path, torch_or_skip, monkeypatch):
     """A ckpt without "config" must still load (backwards-compat for Run 2's
     rental ckpts written before P12 was resolved). Loader uses its
-    hardcoded fallback and emits a warning, but does NOT crash."""
+    hardcoded fallback and emits a warning, but does NOT crash.
+
+    To keep the test CI-friendly we monkeypatch ``_FALLBACK_CFG`` to a tiny
+    shape (vocab=1000, d=32, n_layers=2) -- the production fallback values
+    (vocab=151936, d=512, n_layers=10) build a 78M-parameter model whose
+    state_dict serialization is a few hundred MB and trips disk-pressure
+    flakes when other tests run in parallel.
+    """
     torch = torch_or_skip
     from synapforge.model_100m import SynapForge100M
-    from synapforge.demo.chat_demo import _FALLBACK_CFG
+    from synapforge.demo import chat_demo as _chat_demo
 
-    # Build a model that matches the FALLBACK shape so loading produces a
-    # functional model (legacy rental ckpts were trained with these exact
-    # dims). vocab=151936 d=512 is too big for CI; shrink to a fallback
-    # subset by overriding _FALLBACK_CFG via dim-matched ckpt instead.
-    # Concretely: write a ckpt whose state_dict shapes happen to match the
-    # fallback. We use a tiny model with the fallback shape modulo vocab/d
-    # by writing only a partial state_dict — load_state_dict(strict=False)
-    # will accept it, and the warning path fires for >5 missing keys.
+    # Tiny override of the fallback so we don't allocate a 78M-param model.
+    # We patch the module-level constant; the loader copies it via
+    # `dict(_FALLBACK_CFG)` so the patch is picked up freshly each call.
+    tiny_fallback = {
+        "vocab": 1000, "d": 32, "n_layers": 2, "loop_depth": 1,
+        "max_seq": 16, "ffn_ratio": 4.0, "sparsity": 0.5,
+        "dropout": 0.0, "tie_lm_head": True,
+    }
+    monkeypatch.setattr(_chat_demo, "_FALLBACK_CFG", tiny_fallback)
+
+    # Build a tiny ckpt that matches the patched fallback shape on the
+    # backbone but uses n_layers=1 (one fewer than fallback) so the loader
+    # has missing keys when it tries to populate a 2-layer model.
     legacy = SynapForge100M(
-        vocab=int(_FALLBACK_CFG["vocab"]),
-        d=int(_FALLBACK_CFG["d"]),
-        n_layers=1,  # smaller than fallback's 10, to trigger >5 missing
-        loop_depth=int(_FALLBACK_CFG["loop_depth"]),
-        max_seq=int(_FALLBACK_CFG["max_seq"]),
-        ffn_ratio=float(_FALLBACK_CFG["ffn_ratio"]),
-        sparsity=float(_FALLBACK_CFG["sparsity"]),
-        dropout=float(_FALLBACK_CFG["dropout"]),
-        tie_lm_head=bool(_FALLBACK_CFG["tie_lm_head"]),
+        vocab=tiny_fallback["vocab"],
+        d=tiny_fallback["d"],
+        n_layers=1,  # fewer than fallback's 2 → >5 missing keys for layer 1
+        loop_depth=tiny_fallback["loop_depth"],
+        max_seq=tiny_fallback["max_seq"],
+        ffn_ratio=tiny_fallback["ffn_ratio"],
+        sparsity=tiny_fallback["sparsity"],
+        dropout=tiny_fallback["dropout"],
+        tie_lm_head=tiny_fallback["tie_lm_head"],
     )
 
     ckpt_path = tmp_path / "legacy.pt"
@@ -194,12 +206,10 @@ def test_legacy_ckpt_no_config_falls_back(tmp_path, torch_or_skip):
         ckpt_path, torch,
     )
 
-    # Loader used the fallback (because no config was present).
+    # Loader used the (patched) fallback because no config was present.
     assert had_cfg is False
-    assert loaded_cfg["d"] == _FALLBACK_CFG["d"]
-    assert loaded_cfg["n_layers"] == _FALLBACK_CFG["n_layers"]
-    # The legacy ckpt only has 1 layer, the fallback model has 10; the
-    # missing count must be >0 (proves strict=False did NOT silently
-    # accept a perfectly-matched ckpt). Number of unexpected keys is 0
-    # because legacy has fewer params, not more.
+    assert loaded_cfg["d"] == tiny_fallback["d"]
+    assert loaded_cfg["n_layers"] == tiny_fallback["n_layers"]
+    # Legacy ckpt has 1 layer, fallback model has 2 → missing > 0. This
+    # proves strict=False would NOT silently accept a smaller ckpt.
     assert len(missing) > 0
