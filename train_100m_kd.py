@@ -80,7 +80,9 @@ LOG_EVERY = 10
 
 BATCH_SIZE = 32
 SEQ_LEN = 256
-LR = 3e-4
+LR = 1e-4  # 2026-05-01: 3e-4 was too aggressive — Run 3b VAL ppl exploded
+           #             422 -> 4071 by step 5500.  1e-4 is the proven phase 0
+           #             rate per Anthropic Tulu 3 / SmolLM2 recipes.
 WEIGHT_DECAY = 0.05
 GRAD_CLIP = 1.0
 
