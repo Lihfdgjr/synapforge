@@ -417,51 +417,15 @@ def _sha16(p: Path) -> str:
         return "io-error"
 
 
-def _is_plan_c_ckpt(ckpt: Path) -> bool:
-    """Detect a Plan C (Qwen+LoRA) ckpt by reading the saved metadata.
-
-    Plan C ckpts are produced by ``scripts/train_qwen_lora.py`` and carry a
-    top-level ``framework`` key ("peft" or "inline") plus a ``lora`` block
-    listing rank/alpha/targets. SynapForge100M ckpts don't have these.
-    """
-    try:
-        import torch  # type: ignore
-        head = torch.load(ckpt, map_location="cpu", weights_only=False)
-    except Exception:
-        return False
-    if not isinstance(head, dict):
-        return False
-    return head.get("framework") in {"peft", "inline"} and "lora" in head
-
-
 def _load_real_generator(ckpt: Path, tokenizer_path: str, max_new: int,
                          temperature: float, device: str):
     """Return a (prompt: str) -> str closure.
 
-    Routes to the right loader based on ckpt metadata:
-      - Plan C (Qwen + LoRA, ``framework`` field) → ``qwen_lora_chat_repl``
-      - SynapForge100M native ckpt → ``chat_repl``
+    Loads SynapForge100M (Synap-1) native ckpt only. Qwen-LoRA path was
+    removed 2026-05-01: a transformer-base fallback would invalidate the
+    LNN+SNN architecture claim and the paper. See docs/ANTI_LORA.md.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-    if _is_plan_c_ckpt(ckpt):
-        # Plan C: Qwen base + LoRA adapter
-        from qwen_lora_chat_repl import (  # type: ignore
-            generate_chat as qwen_generate,
-            load_qwen_lora,
-        )
-        adapter_dir = str(ckpt.parent)  # final.pt's parent has adapter/, merged.pt
-        model, tok, dev = load_qwen_lora(adapter_dir, tokenizer_path, device)
-
-        def _gen_qwen(p: str) -> str:
-            try:
-                return qwen_generate(model, tok, p, max_new=max_new,
-                                     temperature=temperature, device=dev)
-            except Exception as exc:
-                return f"<gen-error: {type(exc).__name__}: {exc}>"
-
-        return _gen_qwen
-
     # Native SynapForge100M path
     from chat_repl import generate as chat_generate, load_model, load_tokenizer  # type: ignore
 

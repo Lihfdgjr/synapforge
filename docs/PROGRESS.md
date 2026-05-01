@@ -103,11 +103,11 @@ See [MONITOR_AND_CPU_JOBS](MONITOR_AND_CPU_JOBS.md).
 
 Today's main-branch landings, oldest -> newest:
 
-- `978debc` — PLIF revive + LR rescue + Plan C LoRA Qwen 0.5B insurance
+- `978debc` — PLIF revive + LR rescue (Plan C LoRA insurance: deleted later 2026-05-01, see ANTI_LORA.md)
 - `7e1c236` — P11: vocab 151643 -> 151936 normalized + phase flags + 50M context plan
 - `cb571f9` — P15+P16+P17: tests/ collection + 10 legacy trainers to legacy/ + .bak removal
 - `2a77df9` -> `33f636a` — P12: persist ckpt config + warn on shape drift in chat_demo
-- `024e6d7` — P5: harden Plan C LoRA + runbook for rental insurance demo
+- `024e6d7` — ~~P5: harden Plan C LoRA + runbook~~ (DELETED 2026-05-01, see ANTI_LORA.md)
 - `9fb3d04` — P18: web_actuator MVP (DOM + ActionHead + Playwright)
 - `74e650b` — P20+P21: long-context validation harness (50M latency + monotonic A/B)
 - `2d8bb24` — disk-full incident recovery: Run 3 launch + ckpt cleanup + reinit_plif
@@ -165,15 +165,15 @@ ssh -p 41614 root@117.74.66.77 'sha256sum /workspace/runs/v24h_qwen3/step_004000
 # diff should be empty
 ```
 
-### M3 — 8 h elapsed and val ppl > 150 (consider Plan C)
+### M3 — 8 h elapsed and val ppl > 150 (downsize Synap, NEVER Plan C)
 **Trigger**: wall clock 8 h since Run 3b launch AND `val_ppl > 150`.
-**Action** ([PLAN_C_RUNBOOK](PLAN_C_RUNBOOK.md)):
+**Action** (see [ANTI_LORA.md](ANTI_LORA.md) — no transformer / LoRA fallback):
 ```bash
-# Plan C: LoRA on Qwen2.5-0.5B as insurance demo
 ssh -p 41614 root@117.74.66.77
-cd /workspace/synapforge
-python scripts/train_qwen_lora.py --base Qwen/Qwen2.5-0.5B --data /workspace/data/alpaca_zh_qwen_tokenized.parquet --out /workspace/runs/plan_c_lora --steps 2000
-# Synap-1 keeps training; Plan C runs in parallel as fallback
+# Option A: spawn a SMALLER Synap-1 (30M-50M LNN+SNN) on the SAME rental
+# (split GPU mem; or kill current trainer if it's not converging anyway).
+# Option B: pivot demo focus to mechanism-level (NeuroMCP / R-fold / STDP)
+# instead of live chat. Synap-1 stays the only architecture in the story.
 ```
 
 ### M4 — PLIF spike rate > 0/10 at step 4000 (revive succeeded)

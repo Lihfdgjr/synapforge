@@ -209,29 +209,21 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Status**: not yet observed in training. Mitigation TBD (clamp curiosity reward, or
   schedule curiosity to ramp up only as KD weight ramps down).
 
-### P5. Plan C LoRA Qwen — runbook done + CPU launch script ready, run pending operator decision
-- **Risk**: insurance demo was theoretical. If 100M training fails phase 3, no fallback.
-- **Status (2026-05-01, rev 2)**: trainer hardened — `--print-only` flag added, peft+inline
-  LoRA fallback both verified on smoke, unified `final.pt` ckpt now saved with `{model,
-  config, framework, lora, vocab}` payload (matches §6 P12 contract), `--lora-r/--lora-alpha/
-  --output-dir` aliases match rental orchestration scripts, `chat_eval_gate.py` auto-detects
-  Plan C ckpts via `framework` field and routes to `qwen_lora_chat_repl` loader. Local
-  smoke verified: `python scripts/train_qwen_lora.py --smoke --print-only` and
-  `--smoke` (5 steps, no GPU/peft/qwen weights needed). See `docs/PLAN_C_RUNBOOK.md`.
-- **CPU insurance path added 2026-05-01 rev 2**: GPU on rental is 100% occupied by
-  Synap-1 trainer. `scripts/launch_plan_c_cpu.sh` (NEW, ~120 LOC) wraps `train_qwen_lora.py`
-  with `CUDA_VISIBLE_DEVICES=""`, `taskset -c 8-13` (cores 0-7 reserved for GPU
-  dataloader), `nice -n 19 ionice -c 3`, `OMP/MKL_NUM_THREADS=6`, `setsid+disown` so MCP
-  shell exit doesn't kill it. Pre-flight checks for parquet / Qwen base / no-clobber-final.pt.
-  Realistic ETA: **4-6 hours per 200 LoRA steps** on Xeon (Skylake-X / Ice Lake);
-  up to 12 hours on older Haswell-era. See `docs/PLAN_C_CPU_NOTES.md` for ETA breakdown,
-  decision tree (when to launch / abandon / escalate to GPU / junk-bin), acceptance criteria.
-- **Action**: ≤ 1 hour LoRA real run on rental (GPU path, 30 min on A800) — runbook has
-  4 steps (print-only sanity → smoke → 200-step real → chat_eval_gate ≥ 0.6) plus a
-  fix-and-rerun decision tree. CPU insurance path takes 4-6 h, runs in parallel to
-  Synap-1 GPU trainer. Operator decides when to fire `launch_plan_c_cpu.sh` (default:
-  if Synap-1 hasn't tripped phase 1 in 8h). Once `pass_rate >= 0.6` and triple-backup
-  picks up `final.pt`, mark P5 RESOLVED.
+### P5. Plan C LoRA Qwen — DELETED 2026-05-01 (architecture-claim violation)
+- **Decision**: 2026-05-01, **all Plan C / Qwen-LoRA code removed**. Reason: a
+  transformer-base + LoRA-adapter "insurance demo" would invalidate the LNN+SNN
+  architecture claim and make the paper unsubmittable to NeurIPS / ICLR / ICML.
+  See `docs/ANTI_LORA.md` for the full strategic argument.
+- **Files deleted**: `scripts/{launch_plan_c_cpu.sh,train_qwen_lora.py,
+  qwen_lora_chat_repl.py}`, `synapforge/demo/qwen_lora_demo.py`,
+  `docs/{PLAN_C_RUNBOOK.md,PLAN_C_QWEN_LORA.md,PLAN_C_CPU_NOTES.md}`. Plus the
+  `qwenchat` subcommand removed from `synapforge/demo/cli.py` and the
+  `_is_plan_c_ckpt` route removed from `scripts/chat_eval_gate.py`.
+- **Replacement insurance path** (still pure Synap-1 / LNN+SNN):
+  - **Option A**: 30M-50M Synap-1 (smaller param count, shorter run)
+  - **Option B**: replay healthy v4.x ckpt via `chat_recorded.json` with honest disclosure
+  - **Option C**: pivot demo focus from live chat to mechanism-level (NeuroMCP / R-fold / STDP)
+- **Status**: RESOLVED-by-deletion. `docs/ANTI_LORA.md` is the load-bearing doc.
 
 ### P6. NeuroMCP density saturation at ~28% — RESOLVED 2026-05-01
 - **Status**: empirically observed in v4.1 runs. Not a bug — might be the natural sparsity.
@@ -615,7 +607,7 @@ ssh -p 41614 root@117.74.66.77 \
 - **2026-05-01**: Triton_block backend mandatory. gpu_dense at 6.7k tok/s wastes 90% of A800.
   Memory: `feedback_triton_backend_required.md`.
 - **2026-04-30**: Vocab pivoted GPT-2 50257 → Qwen 151936. Bilingual + better tokenizer.
-- **2026-04-30**: Plan C (LoRA Qwen 0.5B) added as insurance. Documented `PLAN_C_QWEN_LORA.md`.
+- **2026-04-30**: ~~Plan C (LoRA Qwen 0.5B) added as insurance~~ → **DELETED 2026-05-01** (architecture-claim violation; see `ANTI_LORA.md`).
 - **2026-04-26**: NeuroMCP universal codebook L1/L2/L3 hierarchy + atomic skill log v2.
 - **2026-04-26**: STDP `if self.training:` gate removed (`bio/stdp_fast.py:121`) —
   forward-only Hebbian inference unlocked.
