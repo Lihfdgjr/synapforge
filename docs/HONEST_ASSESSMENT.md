@@ -48,18 +48,32 @@ What works, what doesn't, what's untested. 2026-04-30.
   no actual poison injection test
 - Shadow LoRA merge every 4h: code path exists, never triggered in real run
 
-**R-fold algebraic CfC closed-form (2026-05-01 honest update):**
-- The 167× claim is **inflated** for our gated CfC. It only holds for ungated
-  linear S4. Real numbers (agent synthesis, N=512 B=32 A100):
-  - R=8 Coconut latent loop → **2.7× free** (3 squarings vs 8 sequential)
-  - R=64 → 9× single-fold but +5-12% ppl drift
-  - R=1024 → 85× single-fold but **fictional**: gate drift drops NIAH 8%+
-  - R=1024 chunked (L=16 re-anchor) → 3-4× at near-sequential quality
-- Implementation now lives at `synapforge/cells/rfold.py` (`cfc_rfold` +
-  `cfc_rfold_chunked`). Forces fp32 internally (bf16 catastrophic at R>16),
-  ridge 1e-6 on `(I-M)` solve for skip-gate stability.
-- Honest investor pitch: "k=8 closed-form fold gives 2.7× free, zero quality
-  loss, zero extra params." Don't quote 167×.
+**R-fold algebraic CfC closed-form (2026-05-01 honest update + empirical):**
+
+*Math correctness (verified on CPU via `scripts/verify_rfold.py`):*
+- R=1 fold matches sequential to **1.55e-6** (linearization exact at h_0)
+- R=8 single-fold drift **0.32%** (well under the agent-predicted 0.3-0.8% ppl)
+- chunk=2 shrinks R=8 error 10× (9.2e-3 → 9.2e-4) — chunked re-anchor works
+
+*Speed (empirical, CPU Win11 i7-class, no GPU):*
+- N=64 R=16: 1.73× (only configuration where CPU fold wins)
+- N=128 R=8: **0.60× (slower than sequential)**
+- N=256 R=8: **0.18× (5× slower)**
+- N=512 R=8: **0.03× (33× slower)** — `torch.linalg.solve` overhead dominates
+
+The 167× was always GPU+cuBLAS+batched-bmm-on-A100. The fold's win region is
+**GPU + N≥512 + small R**, not CPU. On CPU the fold is a regression for any
+realistic hidden size. Agent's 2.7× at R=8 N=512 needs A100 to materialize.
+
+*Implementation discipline (`synapforge/cells/rfold.py`):*
+- fp32 forced internally (bf16 catastrophic at R>16)
+- Ridge `1e-6` on `(I-M)` solve for skip-gate stability
+- Forward only — autograd works through `torch.linalg.solve` but expensive
+
+*Honest investor pitch*: "k=8 closed-form algebraic fold, math verified
+on CPU (R=1 exact to 1.5e-6, R=8 drift 0.3%), GPU speedup pending A100
+benchmark." Don't quote 167× or 2.7× without measuring on the actual
+target hardware.
 
 **Research-grade "neuromorphic" claims unverified:**
 - Energy advantage from PLIF spike rates: never measured on actual neuromorphic h/w
