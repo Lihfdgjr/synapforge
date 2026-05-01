@@ -227,12 +227,26 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Open**: should we add a watchdog that restarts the trainer if it dies during MCP
   reconnect?
 
-### P9. Investor demo claim parity (data sources)
+### P9. Investor demo claim parity (data sources) — smoke test ready, runs in CI ≤5min
 - **Status**: 4 download scripts written (pretrain/sft/multimodal/eval) but not yet
   fully executed end-to-end on rental.
 - **Risk**: claim "EN+ZH" hinges on alpaca-zh + Chinese pretrain mix actually being on disk.
 - **Action**: a smoke run that actually downloads → mixes → trains 50 steps must be in CI
   before pitch.
+- **Fix applied (2026-05-01)**: E2E smoke test wired —
+  `tests/integration/test_data_pipeline_smoke.sh` runs the full chain
+  `synth_chinese_pretrain.py --n 200` → `mix_pretrain_corpora.py --corpora <synth>`
+  → `train_100m_kd.py --steps 50 --backend gpu_dense` on a 1.5M-param tiny model.
+  Asserts: (a) ckpt `step_000050.pt` exists, (b) ckpt has the P12 `config` dict
+  with the exact d/n_layers/vocab/max_seq passed on the CLI, (c) `train.log`
+  contains a `step 50 loss=...` line, (d) ce decreases over the 50 steps.
+  Cleans up tmp dir on PASS, leaves it on FAIL for inspection. Runtime
+  budget ≤5min on CPU. Trainer gained CLI overrides for data globs, tokenizer,
+  save/eval/log cadence, and architecture (vocab/d/n_layers/loop_depth/
+  ffn_ratio/sparsity/lr/seq_len) plus a `--no-warmstart` flag so the smoke is
+  hermetic. `mix_pretrain_corpora.py` gained a `--corpora <p1>,<p2>,...` flag
+  for direct parquet inputs (no per-corpus directory layout required).
+  Shortcut: `bash scripts/data-smoke.sh`.
 
 ### P10. README + docs lag the code — RESOLVED 2026-05-01
 - **Symptom**: ~41 docs in `docs/` and several pre-date major refactors
