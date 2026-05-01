@@ -45,6 +45,7 @@ from .graph import GraphEmbed
 from .image import ImagePatchEmbed
 from .point_cloud import PointCloudEmbed
 from .screen import ScreenPatchEmbed
+from .spatial_3d import DUSt3RTeacher, EGNNAdapter, PluckerRayEmbed
 from .time_series import TimeSeriesEmbed
 from .unified import ModalityMarkers, UnifiedEmbed
 from .video import VideoPatchEmbed
@@ -60,4 +61,8 @@ __all__ = [
     "BioSignalEmbed",
     "UnifiedEmbed",
     "ModalityMarkers",
+    # 3D world understanding (Task #236).
+    "PluckerRayEmbed",
+    "EGNNAdapter",
+    "DUSt3RTeacher",
 ]

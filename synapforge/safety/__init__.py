@@ -30,6 +30,7 @@ from .red_team_corpus import (
     ATTACK_CATEGORIES,
     RedTeamPrompts,
     sample_attack_prompt,
+    sample_refusal_template,
 )
 from .red_blue import RedBlueSelfPlay, BLUE_SYSTEM_PROMPT, RED_SYSTEM_PROMPT
 from .constitutional import (
@@ -38,11 +39,24 @@ from .constitutional import (
 )
 from .judge import AIJudge
 from .dpo import DPOTrainer, DPOPair
+from .persona_swap_corpus import (
+    PersonaSwapEntry,
+    generate_corpus as generate_persona_swap_corpus,
+    write_jsonl as write_persona_swap_jsonl,
+)
+from .eval_harness import (
+    SafetyEvalConfig,
+    evaluate_safety,
+    hh_preference_accuracy,
+    mmlu_regression,
+    persona_robustness,
+)
 
 __all__ = [
     "ATTACK_CATEGORIES",
     "RedTeamPrompts",
     "sample_attack_prompt",
+    "sample_refusal_template",
     "RedBlueSelfPlay",
     "BLUE_SYSTEM_PROMPT",
     "RED_SYSTEM_PROMPT",
@@ -51,4 +65,12 @@ __all__ = [
     "AIJudge",
     "DPOTrainer",
     "DPOPair",
+    "PersonaSwapEntry",
+    "generate_persona_swap_corpus",
+    "write_persona_swap_jsonl",
+    "SafetyEvalConfig",
+    "evaluate_safety",
+    "hh_preference_accuracy",
+    "mmlu_regression",
+    "persona_robustness",
 ]
