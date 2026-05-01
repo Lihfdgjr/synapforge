@@ -229,10 +229,53 @@ contributes another +10-20% as the student converges and KD-every
 climbs from 4 to 8/16). At bs=80, total RAM cost of the prefetch
 queue is ~20 MiB pinned (4 batches x bs=80 x seq=256 x 8B x 2).
 
+## Quality knobs
+
+These trade compute or stability for quality (not throughput). Off by
+default — opt-in once you've validated the trade on your run.
+
+### LM head spectral norm (T2.6 / P28 z-loss drift)
+
+| `--lm-head-spectral-norm` | Status | Notes |
+|---------------------------|--------|-------|
+| off (default)             | safe   | LM head weight evolves freely under Adam; observed `log Z` (z-loss term) drifts roughly linearly with step count even though the regularizer fights it. |
+| on                        | opt-in | Wraps the LM projection with `torch.nn.utils.spectral_norm`. When `tie_lm_head=True` (the default), the wrap goes on `tok_embed` so the shared weight is reparameterised via power iteration; when untied, the wrap goes on `lm_head` directly. The forward path uses `weight = weight_orig / sigma_top`, so `||logits|| <= ||x||` is bounded and `log Z` stops drifting. |
+
+Trade-offs:
+* **Forward overhead**: one power-iteration step per forward pass
+  (a single mat-vec on the embedding-shaped matrix). Measured ≤ 1%
+  on similar tied-embedding models.
+* **bf16 quirks**: power-iteration buffers `weight_u` / `weight_v`
+  inherit the parameter dtype, so under `.bfloat16()` they stay
+  bf16. The forward path still produces finite logits (the
+  numerical test in `tests/integration/test_lm_head_spectral_norm.py`
+  pins this); long-horizon gradient direction can drift
+  vs. fp32 power-iter, which is the reason the flag is opt-in.
+* **Checkpoint compatibility**: turning the flag on adds three
+  state-dict keys (`weight_orig`, `weight_u`, `weight_v`) on the
+  wrapped module. Existing best_*.pt checkpoints that were trained
+  WITHOUT spectral_norm will not have these keys; load them with
+  `strict=False` first, then enable the flag, or fold the
+  reparametrisation in offline.
+
+When to flip on: `log Z` (z-loss) growing linearly past step ~5000
+without flattening. The PaLM/Gemma `--z-loss-weight 1e-4`
+regularizer alone may be insufficient at long horizons; spectral_norm
+provides a hard cap rather than a soft pull.
+
+```bash
+python3 -u train_100m_kd.py \
+  ...the-recommended-A800-combo... \
+  --lm-head-spectral-norm
+```
+
 ## See also
 
 * `tests/integration/test_sparse_z_loss.py` -- numerical proof that
   top-2048 vs full logsumexp differs by <1e-4 nats at vocab 151k.
+* `tests/integration/test_lm_head_spectral_norm.py` -- artifacts +
+  forward smoke for tied/untied/bf16 paths under the T2.6 spectral
+  norm flag.
 * `tests/integration/test_perf_knobs_compose.py` -- argparse smoke for
   v1 + v2 knobs (`_adaptive_kd_every` schedule pinned, fused-backward
   stub raises).

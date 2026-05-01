@@ -264,7 +264,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T2.5: spike-rate-target loss term`.
 
 ## T2.6 — LM head spectral norm
-- [ ] **Status**: pending (addresses P28 z-loss drift)
+- [x] (23:48 74e3b7d, LM head spectral norm flag — tied→tok_embed, untied→lm_head, 4/4 tests pass)
+- ~~**Status**: pending (addresses P28 z-loss drift)~~
 - **Goal**: bound LM head Lipschitz to prevent z-loss linear growth.
 - **Steps** (Agent: general-purpose):
   1. `nn.utils.spectral_norm(self.lm_head)` if not tied; if tied, apply to `tok_embed`
