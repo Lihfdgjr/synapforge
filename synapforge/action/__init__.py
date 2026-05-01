@@ -57,6 +57,24 @@ from .compositional_codebook import (
     CoFiringDetector,
     HierarchicalCodebook,
 )
+from .universal_codebook import (
+    L1_PRIMITIVES,
+    LAYER_L1,
+    LAYER_L2,
+    LAYER_L3,
+    PrototypeMeta,
+    UniversalCodebook,
+    default_text_encoder,
+)
+from .skill_log_v2 import (
+    HistoryEvent,
+    SCHEMA_VERSION,
+)
+from .skill_log_v2 import SkillLog as SkillLogV2
+from .skill_synthesizer import (
+    SkillSynthesizer,
+    SynthConfig,
+)
 
 __all__ = [
     # head.py
@@ -96,4 +114,19 @@ __all__ = [
     "TemporalAttentionPooler",
     "CoFiringDetector",
     "HierarchicalCodebook",
+    # universal_codebook.py (NEW — open-ended lifelong tool space)
+    "UniversalCodebook",
+    "PrototypeMeta",
+    "L1_PRIMITIVES",
+    "LAYER_L1",
+    "LAYER_L2",
+    "LAYER_L3",
+    "default_text_encoder",
+    # skill_log_v2.py (NEW — atomic, rotated, idempotent persistence)
+    "SkillLogV2",
+    "HistoryEvent",
+    "SCHEMA_VERSION",
+    # skill_synthesizer.py (NEW — high-level mint API + dedup + LTD pass)
+    "SkillSynthesizer",
+    "SynthConfig",
 ]
