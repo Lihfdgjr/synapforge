@@ -22,9 +22,13 @@
 #     -- \
 #     --teacher Qwen/Qwen2.5-0.5B \
 #     --backend triton_block \
-#     --batch-size 64 \
+#     --batch-size 80 \
+#     --z-loss-topk 2048 \
 #     --kd-every 4 \
 #     --phase-aware
+#
+# A800-80GB sweet-spot (2026-05-01): bs=80 + sparse z-loss top-K 2048 +
+# kd-every=4. See docs/PERF_KNOBS.md for the full table.
 #
 # Anything after a literal `--` is passed verbatim to train_100m_kd.py.
 

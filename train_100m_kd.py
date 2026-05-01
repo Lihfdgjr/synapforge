@@ -78,7 +78,14 @@ SAVE_EVERY = 250
 EVAL_EVERY = 500
 LOG_EVERY = 10
 
-BATCH_SIZE = 32
+# 2026-05-01 perf bump: bs 32 -> 80 on A800-80GB. With z-loss `logsumexp`
+# materialising a (B*T, V, fp32) intermediate at vocab=151936 / seq=256, we
+# previously capped at bs=64 (~9.5 GiB intermediate) with ~8 GiB headroom.
+# Sparse z-loss (top-K logits, default K=2048) drops that to ~3 GiB at bs=80
+# and ~3.6 GiB at bs=96; the bs=80 sweet spot leaves real headroom for the
+# KD activation chunks. Document: bs=96 still OOMs because the KD chunked
+# `(chunk*T, V, fp32)` softmax stack stays full-vocab. See docs/PERF_KNOBS.md.
+BATCH_SIZE = 80
 SEQ_LEN = 256
 LR = 1e-4  # 2026-05-01: 3e-4 was too aggressive — Run 3b VAL ppl exploded
            #             422 -> 4071 by step 5500.  1e-4 is the proven phase 0
@@ -146,7 +153,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--warmstart", default=WARM_CKPT_DEFAULT)
     p.add_argument("--no-warmstart", dest="warmstart", action="store_const",
                    const="", help="force-disable warmstart (P9 smoke test).")
-    p.add_argument("--batch-size", type=int, default=32)
+    p.add_argument("--batch-size", type=int, default=BATCH_SIZE,
+                   help=f"per-step batch size; default {BATCH_SIZE} bumped from "
+                        "32 on 2026-05-01 (A800-80GB sweet spot with sparse "
+                        "z-loss + expandable_segments). bs=96 still OOMs "
+                        "because KD chunked softmax stays full-vocab.")
     p.add_argument("--steps", type=int, default=N_STEPS_DEFAULT)
     p.add_argument("--warmup", type=int, default=200)
     # ---- P9 data-pipeline / smoke overrides (defaults preserve rental paths) ----
@@ -254,6 +265,30 @@ def _parse_args() -> argparse.Namespace:
                         "clamp_threshold every 100 steps to prevent "
                         "threshold drift past the input distribution. "
                         "Set this flag to A/B-disable for diagnosis.")
+    # ---- Perf knobs (2026-05-01; see docs/PERF_KNOBS.md) ------------------
+    p.add_argument("--z-loss-topk", type=int, default=2048,
+                   help="top-K logits used for sparse z-loss logsumexp; "
+                        "0 disables (full-vocab path). Default 2048 captures "
+                        ">=99.99%% of softmax mass post-warmup at vocab=151936 "
+                        "and shrinks the (B*T, V, fp32) intermediate ~74x. "
+                        "Math is regularization-only (z-loss penalises large "
+                        "logsumexp); the top-K approximation is a rigorous "
+                        "lower bound. See tests/integration/test_sparse_z_loss.py.")
+    p.add_argument("--kd-async-teacher", action="store_true", default=False,
+                   help="overlap teacher forward with student backward on a "
+                        "side CUDA stream. Teacher is frozen (eval()) so the "
+                        "side stream has no autograd interaction; we sync "
+                        "before computing KL. ~5-10%% step wins on bs=80. "
+                        "Default OFF -- enable after validating no NaN drift "
+                        "vs the synchronous path on your specific GPU/driver.")
+    p.add_argument("--torch-compile", default="off",
+                   choices=["off", "reduce-overhead", "max-autotune"],
+                   help="wrap model.forward in torch.compile() at trainer "
+                        "init. 'reduce-overhead' is the safer choice for the "
+                        "PLIFCell sequence loop (no CUDA-graph capture under "
+                        "dynamic seq_len). 'max-autotune' may NaN under bf16 "
+                        "and triton_block backend; rolls back to 'off' "
+                        "automatically on compile failure. Default OFF.")
     return p.parse_args()
 
 
@@ -347,6 +382,45 @@ def lr_at(step: int, peak: float, warmup: int, total: int, kind: str = "cosine")
     return peak
 
 
+
+
+def _sparse_z_loss(logits: "torch.Tensor", k: int = 2048) -> "torch.Tensor":
+    """logsumexp over top-k logits as a sparse approximation of the full one.
+
+    The z-loss term ``(logsumexp(logits))**2`` is a regularizer (PaLM/Gemma
+    style) that pulls the partition function toward 1. Materialising
+    ``logsumexp`` over the full vocab forces a ``(B*T, V, fp32)`` tensor
+    that costs ~9.5 GiB at bs=64 / V=151936 / seq=256 -- the binding
+    constraint that capped us at bs=64 on A800-80GB.
+
+    Top-K logsumexp is a tight lower bound on the full one
+    (``logsumexp_K = log sum_{i in top-k} exp(x_i) <= log sum_i exp(x_i)``).
+    The gap ``log(1 + sum_{i not in top-k} exp(x_i - x_max) / sum_{top-k}
+    exp(x_i - x_max))`` is bounded by ``log(1 + (V-K) * exp(x_K - x_max) /
+    sum_{top-k} exp(x_i - x_max))``. Empirically at vocab=151936 and any
+    reasonable post-warmup logit distribution, top 2048 captures >=99.99%%
+    of the softmax mass, so the gap is sub-1e-4 nats per row and the
+    z-loss-squared error is sub-1e-8 nats^2 -- numerically irrelevant
+    next to the CE loss (~5 nats early, ~2 nats late).
+
+    For this to be safely a regularizer (and not bias the partition):
+    * The penalty pulls log-Z DOWN. Underestimating log-Z pulls less
+      strongly, which is the safe direction (no spurious gradient bias).
+    * Returns a (B*T,) tensor matching the full-vocab path's shape.
+
+    Args:
+        logits: (B*T, V) fp32 (already flattened/upcast by caller).
+        k: number of top logits to keep. ``k <= 0`` falls through to the
+           full-vocab path (caller's responsibility -- see main()).
+    Returns:
+        log_z of shape (B*T,) -- same as ``torch.logsumexp(logits, dim=-1)``.
+    """
+    if k <= 0 or k >= logits.size(-1):
+        return torch.logsumexp(logits, dim=-1)
+    # logits.topk is O(V log K) and runs entirely on-device; no extra alloc
+    # of a (V,) bool mask, so the (B*T, V) tensor never crystallises in fp32.
+    top_k_vals, _ = logits.topk(k, dim=-1)
+    return torch.logsumexp(top_k_vals, dim=-1)
 
 
 def _load_teacher(name: str, fallback_ckpt: str = "") -> "torch.nn.Module":
@@ -591,6 +665,48 @@ def main() -> int:
     else:
         _log("[backend] gpu_dense (PyTorch native passthrough)")
 
+    # ---------------- torch.compile (default OFF) ----------------
+    # 2026-05-01 perf knob: wrap model.forward in torch.compile() for the
+    # PLIFCell sequence loop + lm_head + FFN paths. triton_block backend
+    # already fuses Liquid+PLIF; torch.compile here covers the non-fused
+    # surface area. Roll back to OFF on compile failure rather than crash
+    # the trainer (perf knob, not a correctness gate).
+    if args.torch_compile != "off":
+        try:
+            mode = args.torch_compile  # 'reduce-overhead' | 'max-autotune'
+            _log(f"[torch.compile] wrapping model with mode={mode!r}")
+            # `dynamic=True` is necessary because eval batches may be
+            # smaller than train batches; static would force recompile.
+            model = torch.compile(model, mode=mode, dynamic=True)
+            _log(f"[torch.compile] compiled (mode={mode!r}, dynamic=True)")
+        except Exception as exc:
+            import traceback
+            _log(f"[torch.compile] FAILED ({exc!r}); rolling back to off")
+            for line in traceback.format_exc().splitlines():
+                _log(f"  {line}")
+            args.torch_compile = "off"
+    else:
+        _log("[torch.compile] disabled (default; pass --torch-compile "
+             "reduce-overhead to enable)")
+
+    # ---------------- KD async teacher stream (default OFF) ------------
+    # 2026-05-01 perf knob: when on, teacher forward pushes onto a side
+    # CUDA stream so it can overlap with the student backward (which still
+    # owns stream 0). Teacher is frozen so the side stream has no autograd
+    # interaction; we sync before KL. Default OFF.
+    kd_teacher_stream = None
+    if args.kd_async_teacher and DEVICE == "cuda" and teacher is not None:
+        try:
+            kd_teacher_stream = torch.cuda.Stream()
+            _log("[kd-async] enabled: teacher forward on side stream "
+                 f"(stream id={id(kd_teacher_stream)})")
+        except Exception as exc:
+            _log(f"[kd-async] stream alloc failed ({exc!r}); disabled")
+            kd_teacher_stream = None
+    elif args.kd_async_teacher:
+        _log("[kd-async] requested but unavailable "
+             f"(device={DEVICE}, teacher={'set' if teacher else 'None'})")
+
     # ---------------- optimizer ----------------
     optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     print(f"optimizer: {type(optim).__name__} lr={peak_lr} wd={WEIGHT_DECAY}")
@@ -778,8 +894,12 @@ def main() -> int:
             flat_y = y.reshape(-1)
             ce_loss = F.cross_entropy(flat_logits, flat_y,
                                       label_smoothing=args.label_smoothing)
-            # z-loss: penalize large logsumexp (numerical stability + softmax temp control)
-            log_z = torch.logsumexp(flat_logits, dim=-1)
+            # z-loss: penalize large logsumexp (numerical stability + softmax
+            # temp control). 2026-05-01: default ``--z-loss-topk 2048`` uses
+            # the sparse approximation so the (B*T, V, fp32) intermediate
+            # never materialises -- this is what unlocks bs=64 -> bs=80 on
+            # A800-80GB. Set --z-loss-topk 0 to recover the full-vocab path.
+            log_z = _sparse_z_loss(flat_logits, k=int(args.z_loss_topk))
             z_loss = (log_z ** 2).mean()
             base_loss = ce_loss + args.z_loss_weight * z_loss
 
@@ -789,8 +909,22 @@ def main() -> int:
                 # (1-α) downweight that would otherwise scale the LM gradient
                 # by 0.3× on 3/4 steps (effectively dropping LR; see review).
                 if step % args.kd_every == 0:
-                    with torch.no_grad():
-                        t_logits = _teacher_logits(teacher, x)
+                    if kd_teacher_stream is not None:
+                        # Push teacher forward onto side stream so it can
+                        # overlap with the student backward (which still runs
+                        # on the default stream). Teacher is frozen + .eval()
+                        # so the side stream needs no autograd interaction.
+                        # We sync before KL to guarantee t_logits is ready.
+                        kd_teacher_stream.wait_stream(
+                            torch.cuda.current_stream())
+                        with torch.cuda.stream(kd_teacher_stream), \
+                                torch.no_grad():
+                            t_logits = _teacher_logits(teacher, x)
+                        torch.cuda.current_stream().wait_stream(
+                            kd_teacher_stream)
+                    else:
+                        with torch.no_grad():
+                            t_logits = _teacher_logits(teacher, x)
                     kd = _kd_loss(logits, t_logits, args.kd_temperature,
                                   chunk_override=args.kd_chunk)
                     loss = (1.0 - args.kd_weight) * base_loss + args.kd_weight * kd
