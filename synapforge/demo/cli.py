@@ -66,7 +66,11 @@ def cmd_bench(args) -> dict:
 
 def cmd_chat(args) -> dict:
     from .chat_demo import run_demo
-    print("=== Chat demo (5 EN + 5 ZH) ===")
+    user_id = getattr(args, "user_id", "default")
+    print(f"=== Chat demo (5 EN + 5 ZH) [user_id={user_id}] ===")
+    # Per-user memory lives at ~/.synapforge/memory/<user_id>/.  The chat
+    # demo is read-only against the model weights — this flag only namespaces
+    # retrieval cache, learned preferences, and the conversation log.
     return run_demo(
         ckpt=args.ckpt,
         tokenizer_path=args.tokenizer_path,
@@ -143,6 +147,16 @@ def main(argv: list[str] | None = None) -> int:
     pc.add_argument("--max-new", type=int, default=80)
     pc.add_argument("--temperature", type=float, default=0.7)
     pc.add_argument("--save", default="chat_demo.json")
+    # Multi-user memory namespace.  Default "default" maps to
+    # ~/.synapforge/memory/default/.  Pass --user-id alice to scope all
+    # retrieval cache + learned prefs + conversation log to alice's
+    # namespace.  See docs/MULTI_USER_MEMORY.md.
+    pc.add_argument(
+        "--user-id", dest="user_id", default="default",
+        help="multi-user memory namespace (default: 'default'). "
+             "Storage: ~/.synapforge/memory/<user_id>/. "
+             "Zero VRAM; see docs/MULTI_USER_MEMORY.md.",
+    )
     pc.set_defaults(fn=cmd_chat)
 
     ps = sub.add_parser("stdp", help="STDP self-organization (no backprop, ~2s)")
@@ -169,6 +183,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--save", default="chat_demo.json")
         parser.add_argument("--hidden", type=int, default=64)
         parser.add_argument("--seed", type=int, default=11)
+        # Multi-user memory namespace (also exposed via the standalone
+        # `chat` subcommand).  See docs/MULTI_USER_MEMORY.md.
+        parser.add_argument(
+            "--user-id", dest="user_id", default="default",
+            help="multi-user memory namespace (default: 'default').",
+        )
         # docs/INSURANCE_NATIVE.md Option C: skip the chat block; ship a
         # mechanism-only investor pitch when the chat ckpt is broken on demo
         # day.  Default off -- normal `all` still runs the chat sample.

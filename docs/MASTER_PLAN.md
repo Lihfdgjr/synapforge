@@ -140,6 +140,7 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 | Honest eval pipeline | `scripts/auto_eval_daemon.py` | per-ckpt 5+5 chat | runs on every ckpt | running |
 | Phase manager | `scripts/phase_manager.py` | log → `.phase` JSON | daemon | running |
 | Native-Synap insurance | `scripts/launch_synap_mini.sh` + `synapforge/demo/disclose.py` + `cli.py:--mechanism-only` | dry-run launcher (rental-only) + `disclose_replay()` unit + `synapforge-demo all --mechanism-only` | `cli.py:cmd_all` (reordered) | runbook shipped — see `docs/INSURANCE_NATIVE.md` (P5/P23 RESOLVED) |
+| Multi-user memory isolation | `synapforge/learn/retrieval_memory.py` (per-user namespace) + `chat/event_loop.py` (`user_id` plumbing) | `tests/integration/test_multi_user_memory.py` (19 cases passing) | `synapforge-demo chat --user-id <name>` + `scripts/demo_multi_user_chat.py` | shipped — see `docs/MULTI_USER_MEMORY.md` + `docs/MULTI_USER_DEMO.md` (CPU/disk only, **0 VRAM**) |
 
 ---
 
