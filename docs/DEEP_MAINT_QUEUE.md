@@ -603,7 +603,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps** (Agent: general-purpose): for each historical OOM / divergence root-cause (Adam stale momentum / data ordering / KD softmax / bs=80), open a GitHub Issue with title + commit link + status (resolved).
 
 ## T6.5 — CHANGELOG auto-append per phase transition
-- [x] (02:16, PENDING_HASH, changelog_helper.py + phase relauncher wire-in (PAR_SKIP_CHANGELOG opt-out) + 6 tests pass)
+- [x] (02:16, 9198997, changelog_helper.py + phase relauncher wire-in (PAR_SKIP_CHANGELOG opt-out) + 6 tests pass)
 - **Steps**: when phase manager fires, append `## Phase N reached at HH:MM (val ppl X, step N, ckpt path)` to `CHANGELOG.md`.
 
 ## T6.6 — Tweet draft per milestone
