@@ -225,28 +225,32 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Fix**: Either delete + update `INVESTOR.md` honesty section, or add 1-step smoke test.
 - **Severity**: nice-to-have / honesty.
 
-### P15. `tests/` collects from two roots — `synapforge/test_*.py` inside the package
+### P15. `tests/` collects from two roots — RESOLVED 2026-05-01
 - **Symptom**: 15 `test_*.py` files inside `synapforge/` package + a separate `tests/` dir.
   Pytest collects both. On a torch-less box collection of `synapforge/test_distributed_smoke.py`
   raises ImportError immediately.
-- **Fix**: `conftest.py` add `collect_ignore_glob = ["synapforge/test_*.py"]` OR rename to
-  `_smoke.py`.
-- **Severity**: pre-pitch-required (investor running pytest sees noise).
+- **Fix applied**: repo-root `conftest.py` adds `collect_ignore_glob = ["synapforge/test_*.py"]`.
+  In-package smoke scripts remain runnable manually via `python -m synapforge.test_xyz`.
+  Reversible — delete `conftest.py` to restore prior collection behavior.
 
-### P16. 12 trainer entry points, README ambiguous
-- **Symptom**: top-level has `train_100m.py`, `train_100m_kd.py`, `train_100m_sft.py`,
+### P16. 12 trainer entry points, README ambiguous — RESOLVED 2026-05-01
+- **Symptom**: top-level had `train_100m.py`, `train_100m_kd.py`, `train_100m_sft.py`,
   `train_3d.py`, `train_full_modal.py`, `train_multimodal.py`, `train_v15_full.py`,
   `train_v16_unified.py`, `train_v18_full_self.py`, `synapforge/train.py`,
   `train_native_unified.py`, `train_v42_universal.py`. Plus `.bak` files (P17).
-- **Fix**: README "How to train" names `train_100m_kd.py` canonical for phase 0/1,
-  `train_100m_sft.py` for phase 3. Move others to `legacy/`.
-- **Severity**: pre-pitch-required.
+- **Fix applied**: 10 legacy trainers `git mv`-ed to `legacy/` (history preserved):
+  `train_100m.py`, `train_3d.py`, `train_full_modal.py`, `train_multimodal.py`,
+  `train_v15_full.py`, `train_v16_unified.py`, `train_v18_full_self.py`,
+  `train_native_unified.py`, `train_v42_universal.py`, `synapforge_train.py`
+  (was `synapforge/train.py`). `legacy/README.md` lists each with its replacement.
+  Repo-root `train_100m_kd.py` (phase 0/1 pretrain + KD) and `train_100m_sft.py`
+  (phase 3 instruction-tune) are now the only canonical entries; README "How to
+  train" rewritten to point at them and reference §3 phase gates.
 
-### P17. `.bak` files committed in source tree
+### P17. `.bak` files committed in source tree — RESOLVED 2026-05-01
 - **Symptom**: `synapforge/train_100m.py.bak`, `synapforge/__init__.py.bak_pre_action`,
   `synapforge/cells/synapse.py.bak_pre_mfu_opt1`.
-- **Fix**: `git rm` them; history has the rollback point.
-- **Severity**: nice-to-have.
+- **Fix applied**: all 3 `git rm`-ed. Rollback points remain in git history.
 
 ### P18. `web_actuator.py` claimed but missing
 - **Symptom**: MASTER_PLAN.md §5 row "Computer-use" claims `synapforge/action/web_actuator.py`.

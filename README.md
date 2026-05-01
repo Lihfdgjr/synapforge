@@ -150,15 +150,22 @@ and chat kernel deployment, see [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ### 1. Train a 375M LNN+SNN from scratch (1×A100 80GB, ~7h)
 
+**Canonical**: `train_100m_kd.py` (phase 0/1 pretrain + KD), `train_100m_sft.py`
+(phase 3 instruction-tune). All other `train_*.py` files have been moved to
+`legacy/` for historical reference — see `legacy/README.md`.
+
 ```bash
-python -m synapforge.train_v42_universal \
+# Phase 0/1: pretrain + KD distillation
+python train_100m_kd.py \
   --warmstart /path/to/v41_best.pt \
   --teacher-path Qwen/Qwen2.5-0.5B \
   --steps 60000 --batch-size 8 --seq-len 1024 \
-  --grad-accum 2 --lr 2e-4 --kd-weight 0.3 \
-  --neuromcp-enabled \
-  --skill-log /path/to/skill_log.json
+  --grad-accum 2 --lr 2e-4 --kd-weight 0.3
 ```
+
+For phase 3 instruction-tune (after pretrain plateaus, ppl ≤ 60), run
+`python train_100m_sft.py --warmstart <best_kd_ckpt>` — see
+`docs/MASTER_PLAN.md` §3 for the full phase gate recipe.
 
 What you should see:
 - step 0: ce ≈ 4.0 (warmstart honored, NOT random)
@@ -321,7 +328,8 @@ retrieval. See [docs/CONTINUAL_LEARNING.md](docs/CONTINUAL_LEARNING.md).
 ```
 synapforge/
 ├── model_chat_600m.py          # 375M base: HybridBlock × 14, RoPE, Qwen vocab
-├── train_v42_universal.py      # v4.2 trainer: CE + KD + STDP + entropy bonus
+│                               # (canonical trainer is `train_100m_kd.py` at repo root;
+│                               #  legacy trainers live in `legacy/`)
 │
 ├── action/                     # NeuroMCP — token-free tool use
 │   ├── skill_log.py            #   JSON persistent prototypes (LTP/LTD)
