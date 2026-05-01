@@ -163,9 +163,14 @@ def mel_spectrogram(
     waveform: np.ndarray, n_mels: int = N_MELS,
     n_fft: int = N_FFT, hop_length: int = HOP_LENGTH,
 ) -> np.ndarray:
-    """Compute log-mel-spectrogram. Shape (n_mels, n_frames).
+    """Compute log-mel-spectrogram. Shape ``(n_mels, N_FRAMES)``.
 
     Pipeline: |STFT|^2 -> mel filterbank -> log10(eps + .) -> caller quant.
+
+    Truncation: center-padded STFT yields ``1 + (n_samples + n_fft) //
+    hop_length`` frames, i.e. one extra boundary frame. We truncate to
+    ``N_FRAMES`` (= ``N_SAMPLES // hop_length`` = 100) so the byte-patch
+    consumer downstream gets a fixed 8000-byte contract per row.
     """
     spec_mag = stft_magnitude(waveform, n_fft=n_fft, hop_length=hop_length)
     power = spec_mag ** 2
@@ -173,6 +178,9 @@ def mel_spectrogram(
     mel_power = fb @ power  # (n_mels, n_frames)
     # Slight floor for log; matches librosa's amin=1e-10.
     log_mel = np.log10(np.maximum(mel_power, 1e-10))
+    # Truncate the trailing center-pad boundary frame: librosa-equivalent
+    # STFT emits 101 frames for a 16 K-sample input; we want exactly 100.
+    log_mel = log_mel[:, :N_FRAMES]
     return log_mel.astype(np.float32)
 
 
