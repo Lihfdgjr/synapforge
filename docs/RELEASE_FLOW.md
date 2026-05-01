@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to tests/test_release_pipeline.py -->
 # RELEASE_FLOW — pretrain → SFT → chat eval → investor release in 24h
 
 This is the "press one button, get an investor-shippable artifact" pipeline.

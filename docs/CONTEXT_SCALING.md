@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory/coconut_summarizer.py, synapforge/memory/faiss_pq_index.py -->
 # Context Length Scaling — A100 80GB Physical Limits
 
 How far can a 375M LNN+SNN actually reach on a single A100 80GB?

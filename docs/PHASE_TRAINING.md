@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to scripts/cache_modal.py -->
 # Phased training -- when to flip on each opt-in component
 
 The 100M LNN+SNN model (`SynapForge100M`: 10x HybridBlock with CfC +

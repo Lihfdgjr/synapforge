@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/data.py -->
 # Trainer + 4 Silent-Killer Review (2026-05-01)
 
 Review scope: `train_100m_kd.py`, `train_100m_sft.py`, `synapforge/data.py`,

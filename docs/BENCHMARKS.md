@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/bench/NEWBENCH.py -->
 # Paper-Grade Benchmarks
 
 This harness lives at `synapforge/bench/` and ships six static benchmarks, each

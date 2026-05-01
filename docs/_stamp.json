@@ -1,0 +1,207 @@
+{
+  "docs/3D.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "89e4a8e28f360f55aabeca3e8a8bbea37c348e6a",
+    "verifier": "agent_p10"
+  },
+  "docs/3D_PLAN.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "9442f19b1f283972000556fcd723adc9999f071d",
+    "verifier": "agent_p10"
+  },
+  "docs/ARCHITECTURE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "89e4a8e28f360f55aabeca3e8a8bbea37c348e6a",
+    "verifier": "agent_p10"
+  },
+  "docs/AUTO_EVAL.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "80d8c3b81665da112232ad909834d01e8b444c88",
+    "verifier": "agent_p10"
+  },
+  "docs/BACKUP.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "f8194a084248377d5c680bdb5bab4c1cc62080f2",
+    "verifier": "agent_p10"
+  },
+  "docs/BENCHMARKS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "9442f19b1f283972000556fcd723adc9999f071d",
+    "verifier": "agent_p10"
+  },
+  "docs/CHAT_PROTOCOL.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "8fce009afc9ff4820b90f57a612d0d237cdca5c0",
+    "verifier": "agent_p10"
+  },
+  "docs/CONTEXT_SCALING.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "3e4081d5b541ad4f29abc99caff71d81dc8a4341",
+    "verifier": "agent_p10"
+  },
+  "docs/CONTINUAL_LEARNING.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "80d8c3b81665da112232ad909834d01e8b444c88",
+    "verifier": "agent_p10"
+  },
+  "docs/DATA_SOURCES.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "7a3ff09fd12b2d4a3e5b9c674a071bd29e5a25d2",
+    "verifier": "agent_p10"
+  },
+  "docs/EVAL_DATA.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "d15b800a1341544713d304616061a8573c931314",
+    "verifier": "agent_p10"
+  },
+  "docs/HONEST_ASSESSMENT.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "5e6130bad7acc9aaad1570d6fe5ee9abb1cf176c",
+    "verifier": "agent_p10"
+  },
+  "docs/INDEX.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "d15b800a1341544713d304616061a8573c931314",
+    "verifier": "agent_p10"
+  },
+  "docs/INTEGRATION_TESTS.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "1bc08efc0eb2bdccc7240b4bee3779afd6ff2fd7",
+    "verifier": "agent_p10"
+  },
+  "docs/INVESTOR.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "7e1c2366cb05eadd1db785092feb499888bbd9f2",
+    "verifier": "agent_p10"
+  },
+  "docs/MASTER_PLAN.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "f05125767ea4816c844c34a893336ca418936043",
+    "verifier": "agent_p10"
+  },
+  "docs/MONOTONIC_QUALITY.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "bc800415632ca3033c4d81f14a0e58c5fd3f5761",
+    "verifier": "agent_p10"
+  },
+  "docs/MULTIMODAL_DATA.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "d15b800a1341544713d304616061a8573c931314",
+    "verifier": "agent_p10"
+  },
+  "docs/MULTIMODAL_TRAINING.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "6017c869d76e1f1ff366da91688207367d85519d",
+    "verifier": "agent_p10"
+  },
+  "docs/NEURAL_COMPUTER_USE.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "2a77df9eed839efdd6d4bf68236f7188af2ad66e",
+    "verifier": "agent_p10"
+  },
+  "docs/NEUROMCP_UNIVERSAL.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "6017c869d76e1f1ff366da91688207367d85519d",
+    "verifier": "agent_p10"
+  },
+  "docs/PARALLELISM.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "91ce8071d6b9f9a829c64da03b53eea291dfd7f0",
+    "verifier": "agent_p10"
+  },
+  "docs/PARETO_OPTIMIZATION.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "2673783336b17b2cc2256c58c9e3c8c529297686",
+    "verifier": "agent_p10"
+  },
+  "docs/PHASE_TRAINING.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "cec04ed5c8e203728ba559807647f8c73b7e950c",
+    "verifier": "agent_p10"
+  },
+  "docs/PLAN_C_QWEN_LORA.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "978debc53fa2192c2b8f430ffedb61e3fc3ce99e",
+    "verifier": "agent_p10"
+  },
+  "docs/PLAN_C_RUNBOOK.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "024e6d7926aa2ca04fd28356667bb6aa8bb29c91",
+    "verifier": "agent_p10"
+  },
+  "docs/PRETRAIN_DATA.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "d15b800a1341544713d304616061a8573c931314",
+    "verifier": "agent_p10"
+  },
+  "docs/PROFILING.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "1bc08efc0eb2bdccc7240b4bee3779afd6ff2fd7",
+    "verifier": "agent_p10"
+  },
+  "docs/QUICKSTART.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "cec04ed5c8e203728ba559807647f8c73b7e950c",
+    "verifier": "agent_p10"
+  },
+  "docs/RELEASE_FLOW.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "7a3ff09fd12b2d4a3e5b9c674a071bd29e5a25d2",
+    "verifier": "agent_p10"
+  },
+  "docs/RELIABILITY.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "cec04ed5c8e203728ba559807647f8c73b7e950c",
+    "verifier": "agent_p10"
+  },
+  "docs/RENTAL_RECOVERY.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "80d8c3b81665da112232ad909834d01e8b444c88",
+    "verifier": "agent_p10"
+  },
+  "docs/REVIEW_DEMO.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "7a3ff09fd12b2d4a3e5b9c674a071bd29e5a25d2",
+    "verifier": "agent_p10"
+  },
+  "docs/REVIEW_NEUROMCP.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "29bb1d4227de2ae8c3408293e42d3528cedc7dee",
+    "verifier": "agent_p10"
+  },
+  "docs/REVIEW_TRAINER.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "29bb1d4227de2ae8c3408293e42d3528cedc7dee",
+    "verifier": "agent_p10"
+  },
+  "docs/RFOLD_PAPER.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "9442f19b1f283972000556fcd723adc9999f071d",
+    "verifier": "agent_p10"
+  },
+  "docs/ROADMAP.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "2673783336b17b2cc2256c58c9e3c8c529297686",
+    "verifier": "agent_p10"
+  },
+  "docs/SAFETY.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "89e4a8e28f360f55aabeca3e8a8bbea37c348e6a",
+    "verifier": "agent_p10"
+  },
+  "docs/SAFETY_PLAN.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "9442f19b1f283972000556fcd723adc9999f071d",
+    "verifier": "agent_p10"
+  },
+  "docs/SFT_DATA.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "d15b800a1341544713d304616061a8573c931314",
+    "verifier": "agent_p10"
+  },
+  "docs/quantize.md": {
+    "last_verified_date": "2026-05-01",
+    "last_verified_sha": "6a2f5856f3e4e8206ed5bec7d8f98a5e08463b7b",
+    "verifier": "agent_p10"
+  }
+}

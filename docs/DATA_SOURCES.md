@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/scripts/sync_to_mohuanfang.sh -->
 # Data Sources
 
 Single-page reference for every external dataset SynapForge depends on:

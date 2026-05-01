@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
 **Updated**: 2026-05-01 (revision 2: + agent audit P11-P21, vocab fix, 50M context O10-O11)
@@ -214,11 +215,28 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Action**: a smoke run that actually downloads → mixes → trains 50 steps must be in CI
   before pitch.
 
-### P10. README + docs lag the code
-- **Status**: ~30 docs in `docs/` but several are stale (e.g., `MULTIMODAL_TRAINING.md`
-  predates byte-patch refactor).
-- **Action**: doc-sync agent on next push, or add a per-doc `_stamp.json` so we know what
-  was last verified.
+### P10. README + docs lag the code — RESOLVED 2026-05-01
+- **Symptom**: ~41 docs in `docs/` and several pre-date major refactors
+  (e.g. `MULTIMODAL_TRAINING.md` predates byte-patch refactor; `INVESTOR.md`
+  recently had a vocab number wrong). No way to detect future stale docs.
+- **Fix applied**: Lightweight doc-stamp instrumentation (NOT content cleanup).
+  - `docs/_stamp.json` (NEW): per-doc `{last_verified_sha, last_verified_date, verifier}`.
+    Bootstrapped 2026-05-01 with each doc's last-modify sha + verifier `agent_p10`.
+  - `scripts/check_doc_stamps.py` (NEW, ~280 LOC): compares doc-modify-sha against
+    stamp; greps the doc for backtick-quoted file paths / `synapforge/foo.py` /
+    markdown links / `:func:` Sphinx roles; flags when a referenced code file was
+    modified after `last_verified_date` (MAYBE STALE) or no longer exists (STALE).
+    Outputs a markdown table; exit 0 = clean, exit 1 = at least one STALE.
+    `--update-stamps` bumps sha for auto-fresh docs only — never auto-flips
+    MAYBE STALE → fresh. Pure Python; no `find`/`xargs`.
+  - `tests/integration/test_doc_stamps.py` (NEW): 6 tests (`pytest.mark.docs`)
+    that assert the script returns 0 or 1 with a parseable 3-column markdown
+    table. Doesn't fail CI for STALE — only for unparseable output.
+  - First run flagged **9 STALE docs** (refs to deleted files: `train_v42_universal.py`,
+    `synapforge/memory.py`, etc.). Each STALE doc got a one-line
+    `<!-- DOC_STAMP: STALE since 2026-05-01; check refs to ... -->` annotation
+    at the top — content NOT rewritten.
+- **Run** the checker any time: `python scripts/check_doc_stamps.py`.
 
 ### P11. Vocab 151643 vs 151936 mismatch — RESOLVED 2026-05-01
 - **Symptom**: 7 code sites hardcoded 151643 (real Qwen tokenizer vocab); 5 doc sites said 151936

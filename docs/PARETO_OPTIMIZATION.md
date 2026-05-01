@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/train_v42_universal.py -->
 # Pareto Optimization — Accuracy ↑ + Memory ↓
 
 Per agent synthesis 2026-05-01, the joint accuracy-up + memory-down frontier

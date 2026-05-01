@@ -1,3 +1,4 @@
+<!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/train_v42_universal.py -->
 # Backup Strategy — never lose another training run
 
 After the 2026-04-30 v4.1 disaster (7 hours of training lost when the

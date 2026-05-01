@@ -94,6 +94,7 @@ markers = [
     "slow: long-running validation (>= 10 min). Skipped by default; opt in with `pytest -m slow`.",
     "gpu: requires CUDA GPU (typically >= 70 GB for 1M+ context). Skipped on CPU-only boxes.",
     "needs_playwright: requires playwright; auto-skipped when not installed.",
+    "docs: documentation hygiene checks (e.g. tests/integration/test_doc_stamps.py).",
 ]
 
 
