@@ -72,6 +72,9 @@ def push_mohuanfang_full(watch_dir: Path, run_name: str) -> bool:
     except Exception as e:
         _log(f"  mohuanfang mkdir fail: {e}")
         return False
+    # rsync -a is already incremental (skip same mtime+size). --inplace
+    # patches in place (same dest path each cycle, no temp files), so a
+    # stable file isn't re-uploaded.
     cmd = [
         "rsync", "-a", "--partial", "--inplace", "--timeout=300",
         "--info=stats0",
@@ -91,13 +94,37 @@ def push_mohuanfang_full(watch_dir: Path, run_name: str) -> bool:
         return False
 
 
+_GH_PUSHED_CACHE: dict[str, str] = {}  # path -> sha256[:16]
+
+
 def push_github_top_best(watch_dir: Path, run_name: str, max_assets: int = 3) -> bool:
-    """Push top-K best_*.pt to a single GitHub Release (size limits, free public)."""
+    """Push top-K best_*.pt to a single GitHub Release (size limits, free public).
+
+    Dedup: skip files whose sha256[:16] hasn't changed since last successful
+    push. Avoids re-uploading 600MB ckpts every cycle when they haven't moved.
+    """
     if not os.environ.get("GH_TOKEN"):
         return False
     bests = sorted(watch_dir.glob("best*.pt"), key=lambda p: p.stat().st_mtime, reverse=True)[:max_assets]
     if not bests:
         return False
+    # dedup
+    cache_file = watch_dir / ".backup_gh_cache.json"
+    cache: dict[str, str] = {}
+    if cache_file.exists():
+        try:
+            cache = json.loads(cache_file.read_text())
+        except Exception:
+            cache = {}
+    fresh = []
+    for p in bests:
+        s = _sha256_short(p)
+        if cache.get(p.name) != s:
+            fresh.append(p)
+            cache[p.name] = s
+    if not fresh:
+        _log(f"  github skip: {len(bests)} files unchanged since last push")
+        return True  # treat as success — content is already there
     tag = f"auto-{run_name}-{time.strftime('%Y%m%d')}"
     title = f"auto-backup {run_name} {time.strftime('%Y-%m-%d')}"
     notes = "\n".join(
@@ -105,21 +132,23 @@ def push_github_top_best(watch_dir: Path, run_name: str, max_assets: int = 3) ->
         for p in bests
     )
     create = subprocess.run(
-        ["gh", "release", "create", tag, *[str(p) for p in bests],
+        ["gh", "release", "create", tag, *[str(p) for p in fresh],
          "--title", title, "--notes", notes,
          "--repo", "Lihfdgjr/synapforge"],
         capture_output=True, timeout=1200,
     )
     if create.returncode == 0:
-        _log(f"  github OK new release {tag} ({len(bests)} assets)")
+        _log(f"  github OK new release {tag} ({len(fresh)} fresh assets, {len(bests)-len(fresh)} skipped)")
+        cache_file.write_text(json.dumps(cache))
         return True
     upload = subprocess.run(
-        ["gh", "release", "upload", tag, *[str(p) for p in bests],
+        ["gh", "release", "upload", tag, *[str(p) for p in fresh],
          "--clobber", "--repo", "Lihfdgjr/synapforge"],
         capture_output=True, timeout=1200,
     )
     if upload.returncode == 0:
-        _log(f"  github OK upload to {tag}")
+        _log(f"  github OK upload {len(fresh)} to {tag} ({len(bests)-len(fresh)} skipped)")
+        cache_file.write_text(json.dumps(cache))
         return True
     _log(f"  github FAIL: {(create.stderr or upload.stderr).decode()[:200]}")
     return False
