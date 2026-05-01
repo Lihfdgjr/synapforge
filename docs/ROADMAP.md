@@ -2,6 +2,20 @@
 
 8-week plan to ship a working chat model + 1 paper draft + 1 backup paper queued.
 
+**Per-phase baseline parity targets** (see [BASELINE_COMPARISON.md](BASELINE_COMPARISON.md)
+for the 11-baseline comparison and rationale):
+
+| Phase | Window | MMLU target | HellaSwag target | GSM8K target | Streaming gate |
+|-------|--------|-------------|------------------|--------------|----------------|
+| Week 0-1 | now | >= 29 (chance + 4pp) | >= 32 (beat GPT-Neo-125M) | NR | n/a |
+| Week 3-4 | post-multimodal | >= 30 (match SmolLM2-360M) | >= 35 (beat Mamba-130M) | NR | NIAH 100K passes |
+| Week 6-8 | post-SFT + RL | >= 32 | >= 40 | >= 5% | WikiText ppl drift <5% at L=100K |
+
+Static MMLU above 32 is **not** a target (would imply we beat Mamba-130M and
+Pythia-410M on MMLU, which is ambitious for 100M; we explicitly stop at "no
+worse than chance + 6pp" on the static axis and lean on the streaming /
+continual-learning columns for the differentiation story).
+
 ## Week 0 (now): fix v4.2, restart training
 
 | Day | Task | Outcome |

@@ -112,13 +112,18 @@ checkpoint goes to (a) `mohuanfang.com:/home/liu/synapforge_backup/`,
 
 ## Honest competitive comparison
 
+The full 11-baseline comparison table — Mamba-130M, RWKV-169M, Pythia-160M /
+410M, GPT-Neo-125M, SmolLM2-360M / 1.7B, TinyLlama-1.1B, Qwen2.5-0.5B / 1.5B —
+with citations and a per-cell win/lose/tie tally lives in
+**[BASELINE_COMPARISON.md](BASELINE_COMPARISON.md)**.
+
+Headline cells:
+
 | | SynapForge 100M | SmolLM2-360M | TinyLlama-1.1B | Qwen2.5-0.5B |
 |--|--|--|--|--|
 | Parameters | 100M | 360M | 1.1B | 500M |
-| MMLU (5-shot) | not yet measured | 30.4 | 25.5 | ~46 |
-| GSM8K (8-shot) | not yet measured | 27 | 2 | ~36 |
-| HellaSwag | not yet measured | 53 | 60 | ~46 |
-| Energy/token (relative) | **~0.05** (sparse spikes) | 1.0 | 1.0 | 1.0 |
+| MMLU (5-shot) | ~30 target [training] | 30.4 | 25.5 | 47.5 |
+| Energy/token (relative) | **~0.05** (sparse spikes, aspirational; see BASELINE_COMPARISON §3) | 1.0 | 1.0 | 1.0 |
 | Inference latency at 100K ctx | **linear** (no KV) | quadratic | quadratic | quadratic |
 | Continual learning | **yes, STDP** | catastrophic forgetting | same | same |
 | Tool use | NeuroMCP (no token) | JSON tool-call | same | same |
@@ -127,7 +132,8 @@ checkpoint goes to (a) `mohuanfang.com:/home/liu/synapforge_backup/`,
 **We will lose** at static benchmark parity. SmolLM2 has 3.6× our
 parameters and was trained on 2T+ tokens; we trained on ~10B with
 distillation. **We win** on energy, streaming inference, and the
-ability to keep adapting after deployment.
+ability to keep adapting after deployment. Per-cell tally in
+[BASELINE_COMPARISON.md §6](BASELINE_COMPARISON.md): 7 win / 2 tie / 33 lose.
 
 The thesis only pays if those three axes matter to the deployment.
 If you're shipping a chatbot to GPT-4 quality, transformer wins. If

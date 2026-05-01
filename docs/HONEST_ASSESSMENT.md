@@ -130,6 +130,13 @@ These aren't lies but each has a "but actually..." caveat:
 - **Safety-critical**: no formal guarantees. Output safety stack is written, not battle-tested.
 - **Benchmarking against modern small LMs**: SmolLM2-360M reaches WikiText ppl ~20 with 2T tokens; we're at ppl 50 with 500M tokens. Ours has different optimization target (continual learning + plasticity), but at static eval we lose.
 
+For the canonical "where we lose vs the small-LM landscape" table — Mamba,
+RWKV, Pythia, GPT-Neo, SmolLM2, TinyLlama, Qwen2.5 — with citations and a
+per-cell win/lose tally, see
+**[BASELINE_COMPARISON.md](BASELINE_COMPARISON.md)** §1 and §3. That doc
+is also where the energy-claim gap (`0.05x` aspirational on neuromorphic h/w
+vs `1.1-1.3x` system on A800) is reconciled in §3.
+
 ## What it's good for
 
 - Research playground for non-transformer LM architectures at small scale
