@@ -209,19 +209,29 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **Status**: not yet observed in training. Mitigation TBD (clamp curiosity reward, or
   schedule curiosity to ramp up only as KD weight ramps down).
 
-### P5. Plan C LoRA Qwen — runbook done, real run pending
+### P5. Plan C LoRA Qwen — runbook done + CPU launch script ready, run pending operator decision
 - **Risk**: insurance demo was theoretical. If 100M training fails phase 3, no fallback.
-- **Status (2026-05-01)**: trainer hardened — `--print-only` flag added, peft+inline LoRA
-  fallback both verified on smoke, unified `final.pt` ckpt now saved with `{model, config,
-  framework, lora, vocab}` payload (matches §6 P12 contract), `--lora-r/--lora-alpha/
+- **Status (2026-05-01, rev 2)**: trainer hardened — `--print-only` flag added, peft+inline
+  LoRA fallback both verified on smoke, unified `final.pt` ckpt now saved with `{model,
+  config, framework, lora, vocab}` payload (matches §6 P12 contract), `--lora-r/--lora-alpha/
   --output-dir` aliases match rental orchestration scripts, `chat_eval_gate.py` auto-detects
   Plan C ckpts via `framework` field and routes to `qwen_lora_chat_repl` loader. Local
   smoke verified: `python scripts/train_qwen_lora.py --smoke --print-only` and
   `--smoke` (5 steps, no GPU/peft/qwen weights needed). See `docs/PLAN_C_RUNBOOK.md`.
-- **Action**: ≤ 1 hour LoRA real run on rental — runbook has 4 steps (print-only
-  sanity → smoke → 200-step real → chat_eval_gate ≥ 0.6) plus a fix-and-rerun
-  decision tree. Once `pass_rate >= 0.6` and triple-backup picks up `final.pt`,
-  mark P5 RESOLVED.
+- **CPU insurance path added 2026-05-01 rev 2**: GPU on rental is 100% occupied by
+  Synap-1 trainer. `scripts/launch_plan_c_cpu.sh` (NEW, ~120 LOC) wraps `train_qwen_lora.py`
+  with `CUDA_VISIBLE_DEVICES=""`, `taskset -c 8-13` (cores 0-7 reserved for GPU
+  dataloader), `nice -n 19 ionice -c 3`, `OMP/MKL_NUM_THREADS=6`, `setsid+disown` so MCP
+  shell exit doesn't kill it. Pre-flight checks for parquet / Qwen base / no-clobber-final.pt.
+  Realistic ETA: **4-6 hours per 200 LoRA steps** on Xeon (Skylake-X / Ice Lake);
+  up to 12 hours on older Haswell-era. See `docs/PLAN_C_CPU_NOTES.md` for ETA breakdown,
+  decision tree (when to launch / abandon / escalate to GPU / junk-bin), acceptance criteria.
+- **Action**: ≤ 1 hour LoRA real run on rental (GPU path, 30 min on A800) — runbook has
+  4 steps (print-only sanity → smoke → 200-step real → chat_eval_gate ≥ 0.6) plus a
+  fix-and-rerun decision tree. CPU insurance path takes 4-6 h, runs in parallel to
+  Synap-1 GPU trainer. Operator decides when to fire `launch_plan_c_cpu.sh` (default:
+  if Synap-1 hasn't tripped phase 1 in 8h). Once `pass_rate >= 0.6` and triple-backup
+  picks up `final.pt`, mark P5 RESOLVED.
 
 ### P6. NeuroMCP density saturation at ~28% — RESOLVED 2026-05-01
 - **Status**: empirically observed in v4.1 runs. Not a bug — might be the natural sparsity.
