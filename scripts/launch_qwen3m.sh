@@ -59,30 +59,40 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export OMP_NUM_THREADS=8
 export TOKENIZERS_PARALLELISM=false
 
-# Resolve LATEST step ckpt at launch time. Fail loudly if none.
-LATEST=$(ls -t "${RUN_DIR}"/step_[0-9]*.pt 2>/dev/null | head -1)
-if [[ -z "${LATEST}" ]]; then
-  echo "[launch_qwen3m] ERROR: no step_*.pt in ${RUN_DIR}" >&2
+# 2026-05-02 00:55 -- Run 3l diverged catastrophically (step 5000 val=1864,
+# step 5500 val=2522). Per docs/RUN3L_DIAGNOSIS.md decision matrix, this is
+# Run-3c-class divergence; relaunch at lower LR + longer warmup + lower KD
+# alternation frequency. Warmstart explicitly from step_002000.pt (the last
+# known-good ckpt; step_004000.pt is already on the divergent trajectory at
+# val=569).
+WARMSTART_CKPT="${WARMSTART_CKPT:-${RUN_DIR}/step_002000.pt}"
+if [[ ! -f "${WARMSTART_CKPT}" ]]; then
+  echo "[launch_qwen3m] ERROR: warmstart ckpt missing: ${WARMSTART_CKPT}" >&2
   exit 1
 fi
-echo "[launch_qwen3m] warmstart from: ${LATEST}"
+echo "[launch_qwen3m] warmstart from: ${WARMSTART_CKPT} (last known-good)"
 echo "[launch_qwen3m] log -> ${LOG_FILE}"
 
 # setsid + disown -- survives MCP ssh channel close.
 setsid bash -c "cd '${REPO_DIR}' && exec python3 -u train_100m_kd.py \
-  --warmstart '${LATEST}' \
+  --warmstart '${WARMSTART_CKPT}' \
   --teacher Qwen/Qwen2.5-0.5B \
   --teacher-fallback-ckpt '' \
   --backend triton_block \
   --batch-size 64 \
-  --kd-every 4 \
+  --lr 5e-5 \
+  --warmup 500 \
+  --kd-every 8 \
   --kd-topk 2048 \
+  --shuffle-buffer 10000 \
   --shuffle-seed 411 \
+  --grad-clip 0.5 \
   --spike-target-loss-weight 0.05 \
   --surrogate-anneal-start 10.0 \
   --surrogate-anneal-target 1.0 \
   --surrogate-anneal-steps 5000 \
   --lm-head-spectral-norm \
+  --lr-decay cosine \
   --steps 30000 \
   --out '${RUN_DIR}' \
   --phase-aware \
