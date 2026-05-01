@@ -722,8 +722,32 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: feed 5K novel domain (medical), then test medical Q&A — should improve over baseline.
 
 ## T8.3 — Curriculum learning
-- [ ] **Status**: pending
-- **Steps**: sort training data by Qwen 0.5B perplexity ascending; train easy → hard.
+- [x] (03:10, PENDING_HASH, curriculum sort by ref-model ppl + 4 tests)
+- **Status**: shipped 2026-05-02. ``scripts/curriculum_sort.py`` (~280
+  LOC): reads parquet (``input_ids`` column), runs Qwen 2.5 0.5B (or any
+  HF causal LM via ``--ref-model``), writes a sorted parquet preserving
+  every input column + adding ``ref_ppl`` (fp32) and ``curriculum_idx``
+  (int32, 0=easiest..N-1=hardest). Stable sort -> equal-ppl rows keep
+  original order. ``--smoke`` skips torch entirely (5 mocked rows for
+  CI). Same teacher-candidate fallback as ``collect_kd_data.py``.
+- **Tests**: ``tests/integration/test_curriculum_sort.py`` 9 pass
+  (CPU, no torch). Contract assertions:
+  ``test_smoke`` / ``test_monotonic_after_sort``
+  / ``test_curriculum_idx_zero_to_n`` /
+  ``test_preserves_input_columns`` plus 5 helper unit tests covering
+  the pure-Python sort core, mock ppl_fn, and arg parsing.
+- **Rental run**:
+  ```bash
+  python3 scripts/curriculum_sort.py \
+    --input  /workspace/data/wt103_qwen_tokens.parquet \
+    --output /workspace/data/wt103_curriculum.parquet \
+    --ref-model /workspace/teachers/qwen2.5-0.5b \
+    --device cuda
+  ```
+- **Trainer wire-in**: feed sorted parquet to ``ParquetTokenStream`` with
+  ``--shuffle-buffer 0`` to preserve curriculum order (default 10k
+  shuffle would defeat the ordering). Equal-ppl ties stay grouped.
+- **Commit**: ``auto-T8.3: curriculum learning sort by Qwen 0.5B ppl + tests``.
 
 ## T8.4 — EMA weights at inference
 - [ ] **Status**: pending
