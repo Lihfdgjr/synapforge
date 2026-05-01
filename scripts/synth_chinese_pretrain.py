@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
@@ -196,6 +197,36 @@ def _gen_article(rng: random.Random) -> dict:
     }
 
 
+def _md5_text(s: str) -> str:
+    """MD5 of UTF-8 encoded text -- collision-cheap dup signature."""
+    return hashlib.md5(s.encode("utf-8")).hexdigest()
+
+
+def _dedup_records(
+    records: list, log_every: int = 50_000,
+) -> tuple:
+    """Drop exact-duplicate text rows. Returns (unique_records, n_dropped).
+
+    The template space (10 domains × 15 subtopics × 10 title templates ×
+    10 connectives × 7 sentence templates × random sentence count = ~2e6
+    title combos × paragraph variation) is large enough that a 500K run
+    is statistically dup-free, but we *enforce* it for reproducibility.
+    """
+    seen: set = set()
+    out: list = []
+    dropped = 0
+    for i, rec in enumerate(records):
+        h = _md5_text(rec["text"])
+        if h in seen:
+            dropped += 1
+            continue
+        seen.add(h)
+        out.append(rec)
+        if log_every and i and i % log_every == 0:
+            print(f"[synth] dedup checked {i:,} (dropped={dropped})")
+    return out, dropped
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--out", default="/workspace/data/pretrain/synth_zh/train.parquet")
@@ -204,10 +235,21 @@ def main() -> int:
     ap.add_argument("--max-chars", type=int, default=1500)
     ap.add_argument("--smoke", action="store_true",
                     help="Generate just 100 docs and exit.")
+    ap.add_argument("--dedup", action="store_true", default=True,
+                    help="Drop exact-duplicate rows by MD5(text). Default ON.")
+    ap.add_argument("--no-dedup", dest="dedup", action="store_false",
+                    help="Skip dedup pass (legacy 50K-shipped reproduction).")
+    ap.add_argument("--max-overgen", type=float, default=1.10,
+                    help="Generate up to N * factor rows when --dedup; "
+                         "compensates for the few drops.")
     args = ap.parse_args()
 
     n = 100 if args.smoke else args.n
     rng = random.Random(args.seed)
+
+    # If --dedup, oversample so the post-dedup count meets the target.
+    n_target = n
+    n_gen = int(n * args.max_overgen) if args.dedup else n
 
     if not _HAVE_ARROW:
         # Without pyarrow we still emit a JSONL so the trainer can ingest.
@@ -216,24 +258,41 @@ def main() -> int:
         jp = out_p.with_suffix(".jsonl")
         print(f"[synth] pyarrow missing; writing JSONL fallback -> {jp}",
               file=sys.stderr)
+        records = [_gen_article(rng) for _ in range(n_gen)]
+        n_drop = 0
+        if args.dedup:
+            records, n_drop = _dedup_records(records)
+            records = records[:n_target]
         with open(jp, "w", encoding="utf-8") as f:
-            for i in range(n):
-                rec = _gen_article(rng)
+            for rec in records:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        _write_manifest(args.out, n, args.seed, fallback=True)
+        _write_manifest(args.out, len(records), args.seed,
+                        fallback=True, dedup=args.dedup, n_dropped=n_drop)
         return 0
 
     titles, topics, subtopics, texts, langs = [], [], [], [], []
     t0 = time.time()
-    for i in range(n):
+    seen_hashes: set = set()  # used only when --dedup
+    n_drop = 0
+    i = 0
+    while len(texts) < n_target and i < n_gen * 3:  # safety cap
         rec = _gen_article(rng)
+        if args.dedup:
+            h = _md5_text(rec["text"])
+            if h in seen_hashes:
+                n_drop += 1
+                i += 1
+                continue
+            seen_hashes.add(h)
         titles.append(rec["title"])
         topics.append(rec["topic"])
         subtopics.append(rec["subtopic"])
         texts.append(rec["text"])
         langs.append(rec["lang"])
+        i += 1
         if i and i % 10000 == 0:
-            print(f"[synth] generated {i:,}/{n:,} ({time.time() - t0:.1f}s)")
+            print(f"[synth] generated {i:,} kept={len(texts):,}/{n_target:,} "
+                  f"dropped={n_drop} ({time.time() - t0:.1f}s)")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame({
@@ -244,12 +303,17 @@ def main() -> int:
         "lang": langs,
     })
     pq.write_table(pa.Table.from_pandas(df), args.out)
-    print(f"[synth] wrote {len(df):,} rows -> {args.out}")
-    _write_manifest(args.out, n, args.seed, fallback=False)
+    print(f"[synth] wrote {len(df):,} rows -> {args.out} "
+          f"(dedup={args.dedup} dropped={n_drop})")
+    _write_manifest(args.out, len(df), args.seed,
+                    fallback=False, dedup=args.dedup, n_dropped=n_drop)
     return 0
 
 
-def _write_manifest(out: str, n: int, seed: int, fallback: bool) -> None:
+def _write_manifest(
+    out: str, n: int, seed: int, fallback: bool,
+    dedup: bool = True, n_dropped: int = 0,
+) -> None:
     mfile = str(out) + ".manifest.json"
     Path(mfile).parent.mkdir(parents=True, exist_ok=True)
     with open(mfile, "w", encoding="utf-8") as f:
@@ -258,6 +322,8 @@ def _write_manifest(out: str, n: int, seed: int, fallback: bool) -> None:
             "rows": n,
             "seed": seed,
             "fallback_jsonl": fallback,
+            "dedup": dedup,
+            "n_dropped_dups": n_dropped,
             "topics": list(TOPIC_DOMAINS.keys()),
             "n_subtopics_per_domain": len(next(iter(TOPIC_DOMAINS.values()))),
             "n_title_templates": len(TITLE_TEMPLATES),

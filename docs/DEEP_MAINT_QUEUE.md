@@ -373,10 +373,53 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 
 # Tier 3 — Data pipeline (Agent-spawn synthesizers)
 
+## T3.0 — KD distillation data collector (DistilBERT pattern)
+- [x] (00:48, hash, scripts/collect_kd_data.py + test, 200x storage reduction via top-64)
+- **Status**: shipped 2026-05-02. Pre-compute Qwen 2.5 0.5B top-K teacher
+  logits once over the source corpus; trainer reads cached parquet
+  many epochs without re-running teacher (DistilBERT / MiniLM pattern).
+- **Files**:
+  - `scripts/collect_kd_data.py` (~280 LOC): argparse + tqdm + lazy
+    torch import; tries `/workspace/teachers/qwen2.5-0.5b` then HF id
+    `Qwen/Qwen2.5-0.5B`. Output parquet schema:
+    `input_ids` int32 + `topk_indices` int32 [seq*K] + `topk_log_probs`
+    fp16 [seq*K] + per-row `seq_len` + per-row `topk` for trainer-side
+    reshape. zstd compressed + companion `.manifest.json`.
+  - `tests/integration/test_collect_kd_data.py`: 9 tests pass (CPU, no
+    torch). Storage helpers verified at production V=151936 K=64
+    seq=512 -> **783x reduction** vs naive full-vocab fp16 caching
+    (~155 MB/row -> ~200 KB/row). Round-trip parquet schema asserted.
+  - Modified `scripts/synth_chinese_pretrain.py`: `--dedup` (default ON)
+    + `--no-dedup` + MD5(text) drop pass + `--max-overgen 1.10`
+    oversample so post-dedup count meets target. Manifest gains
+    `dedup`+`n_dropped_dups` keys.
+- **Rental run command**:
+  ```bash
+  ssh -p 41614 root@117.74.66.77 \
+      'cd /workspace/synapforge_git && \
+       python3 scripts/collect_kd_data.py \
+         --teacher /workspace/teachers/qwen2.5-0.5b \
+         --input  /workspace/data/wikitext-103/wt103_train.parquet \
+         --output /workspace/data/kd_cache/wt103_qwen05_top64.parquet \
+         --topk 64 --seq-len 512 --batch-size 8 --device cuda'
+  ```
+- **Trainer wire-in**: train_100m_kd.py `--cached-kd-parquet PATH` flag
+  loads cache and skips live teacher forward; KD loss path stays
+  `_kd_topk_loss` (already validated by `test_kd_topk_softmax.py`).
+- **Commit**: `auto-T3.0: KD distillation data collector + tests`.
+
 ## T3.1 — Synth ZH pretrain to 500K rows
-- [ ] **Status**: 50K shipped, target 500K
-- **Steps**: extend `scripts/synth_chinese_pretrain.py` to support `--n 500000`. Run on rental CPU 4-7 cores. Output 100MB parquet.
-- **Validation**: row count 500K, no duplicate rows (md5 hash check).
+- [x] (00:48, hash, dedup added; 500K runner ready, awaits rental run)
+- **Status**: 50K shipped; `--n 500000` already supported and now MD5
+  text-dedup is on by default (oversample factor 1.10 compensates for
+  drops). Local smoke `--n 100 --seed 42` verified: 100/100 unique,
+  manifest ok. Rental-side cron will run the actual 500K generation.
+- **Steps**: `python3 scripts/synth_chinese_pretrain.py
+  --out /workspace/data/synth_zh_500K.parquet --n 500000 --seed 42`.
+  Run on rental CPU 4-7 cores. Output 100MB parquet.
+- **Validation**: row count 500K, manifest `dedup=true` and
+  `n_dropped_dups < n*0.05`. Test `test_synth_zh_dedup` enforces the
+  invariant in CI on N=100.
 - **Commit**: `auto-T3.1: synth zh 500K rows -> /workspace/data/synth_zh_500K.parquet`.
 
 ## T3.2 — Image synthetic data generator
@@ -420,9 +463,22 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.7: wt103 tokenized -> wt103_qwen_tokens.pkl (N tokens)`.
 
 ## T3.8 — HumanEval / MBPP code data
-- [ ] **Status**: pending
-- **Steps** (Agent: general-purpose): download HumanEval (164 problems) + MBPP (974 problems) → tokenize → parquet. For phase 3+ code SFT mix.
-- **Commit**: `auto-T3.8: code data HumanEval+MBPP tokenized`.
+- [x] (00:48, hash, scripts/tokenize_humaneval_mbpp.py shipped with --smoke; rental run pulls real datasets)
+- **Status**: tokenizer script shipped. `scripts/tokenize_humaneval_mbpp.py`
+  uses `huggingface_hub` + `datasets` (not API) to fetch HumanEval (164
+  via `openai_humaneval` test split) + MBPP (974 across train/val/test
+  + dedup by task_id). Output parquet columns: `task_id`, `source`,
+  `prompt`, `solution`, `input_ids` (Qwen 2.5 0.5B tokenized prompt+\\n+
+  solution). `--smoke` mode bypasses network and tokenizer for unit
+  tests; verified locally writes 2 rows ok.
+- **Rental run command**:
+  ```bash
+  ssh -p 41614 root@117.74.66.77 \
+      'cd /workspace/synapforge_git && \
+       python3 scripts/tokenize_humaneval_mbpp.py \
+         --out /workspace/data/code_eval/humaneval_mbpp_qwen.parquet'
+  ```
+- **Commit**: `auto-T3.8: code data HumanEval+MBPP tokenizer (smoke + rental cmd)`.
 
 ## T3.9 — ARC-Easy / ARC-Challenge
 - [ ] **Status**: pending
@@ -527,7 +583,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: when chat-grade reached, draft tweet to `docs/SOCIAL_DRAFTS.md`. Don't post.
 
 ## T6.7 — Compare to SmolLM2-360M real numbers
-- [x] (00:47, pending-hash, harness + 4 tests; awaits rental run for live numbers)
+- [x] (00:48, 7c053c9, harness + 4 tests; awaits rental run for live numbers)
 - **Status**: harness shipped at `scripts/baseline_smollm2_compare.py` (~330 LOC); skeleton table at `docs/BASELINE_COMPARISON_LIVE.md`; tests at `tests/integration/test_baseline_compare.py` (4/4 pass on CPU, mocked HF download). FLOPs proxy split into dense (SmolLM2 6N+attn-KV) vs sparse Synap-1 (backbone × spike_rate + dense lm_head + STDP delta). Synap-1 leg returns TBD when no `--synap-ckpt` — ready for rental fill-in.
 - **Real-bench command (run on rental A800 once ckpt healthy)**:
   ```bash

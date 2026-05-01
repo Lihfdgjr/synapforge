@@ -41,6 +41,7 @@ from .cells.liquid import LiquidCell
 from .cells.synapse import SparseSynapse
 from .module import Module
 from .surrogate import PLIFCell
+from .thinking.coconut import LatentThinker
 
 
 def _swiglu_ffn(d: int, ratio: float) -> nn.Module:
@@ -165,6 +166,14 @@ class SynapForge100M(Module):
         # projections inside every HybridBlock are BitNet b1.58 ternary
         # QAT layers. PLIF / Synapse / FFN / LM head untouched. Default
         # "none" preserves the historical fp baseline.
+        latent_k: int = 0,
+        # T2.9 / arxiv:2412.06769 — Coconut latent thinking budget. When
+        # ``latent_k > 0``, ``encode()`` runs K extra forward passes after
+        # the normal stack, feeding the last-token hidden back as a
+        # continuous (B, 1, d) input (no token sampling, no embed lookup).
+        # The post-thinking hidden replaces the last position. Default 0
+        # disables latent thinking entirely (zero-overhead, identity
+        # behaviour vs the pre-T2.9 baseline).
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -183,6 +192,9 @@ class SynapForge100M(Module):
                 f"weight_quant_cfc must be 'none' or 'ternary', "
                 f"got {weight_quant_cfc!r}"
             )
+        self.latent_k = int(latent_k)
+        if self.latent_k < 0:
+            raise ValueError(f"latent_k must be >= 0, got {latent_k}")
 
         self.tok_embed = nn.Embedding(vocab, d)
         nn.init.normal_(self.tok_embed.weight, std=0.02)
@@ -246,6 +258,21 @@ class SynapForge100M(Module):
             else:
                 nn.utils.spectral_norm(self.lm_head, name="weight")
 
+        # ---- T2.9 — Coconut latent thinker (default off) ----
+        # We only build the thinking projections when latent_k>0 so the
+        # zero-budget baseline path is bit-identical to pre-T2.9 (no extra
+        # parameters, no extra modules in state_dict). When enabled, the
+        # thinker holds two linear (d,d) projections initialised to identity
+        # so that at step 0 it is a no-op refinement; gradient updates make
+        # it learn a useful "thinking transform". The HybridBlock stack is
+        # reused as the latent step kernel.
+        if self.latent_k > 0:
+            self.latent_thinker: Optional[LatentThinker] = LatentThinker(
+                hidden=self.d, thinking_proj=True
+            )
+        else:
+            self.latent_thinker = None
+
     @torch.no_grad()
     def num_parameters(self, only_trainable: bool = True) -> int:
         return sum(
@@ -265,8 +292,25 @@ class SynapForge100M(Module):
                     x = blk(x)
         return x
 
+    def _latent_block_stack(
+        self, x: torch.Tensor, _state: Optional[torch.Tensor] = None
+    ) -> tuple:
+        """Adapter so ``LatentThinker.think_step`` can drive the block stack.
+
+        ``LatentThinker`` expects a callable taking ``(x, state)`` and
+        returning ``(out, new_state)``. Our blocks are stateless w.r.t. the
+        latent loop (the CfC parallel scan is rerun each step); we just pass
+        ``state`` through unchanged.
+        """
+        return self._run_blocks(x), _state
+
     def encode(self, ids: torch.Tensor) -> torch.Tensor:
-        """Token ids -> (B, T, d) hidden after backbone (post ln_f)."""
+        """Token ids -> (B, T, d) hidden after backbone (post ln_f).
+
+        When ``self.latent_k > 0`` (T2.9 / arxiv:2412.06769) the last-token
+        hidden is then refined by ``latent_k`` extra continuous-thought
+        passes (no token sampling) before ``ln_f``.
+        """
         if ids.dim() != 2:
             raise ValueError(f"expected (B, T), got {tuple(ids.shape)}")
         B, T = ids.shape
@@ -274,6 +318,19 @@ class SynapForge100M(Module):
             raise ValueError(f"seq_len {T} > max_seq {self.max_seq}")
         x = self.tok_embed(ids) + self.pos_embed[:T].unsqueeze(0)
         x = self._run_blocks(x)
+
+        # ---- T2.9 — Coconut latent thinking ----
+        if self.latent_thinker is not None and self.latent_k > 0:
+            # Take the LAST-position hidden as "prefix" for thinking.
+            prefix = x[:, -1, :]  # (B, d)
+            think_h, _ = self.latent_thinker.think(
+                self._latent_block_stack,
+                prefix_hidden=prefix,
+                k=self.latent_k,
+            )
+            # Splice the post-think hidden back into the last position.
+            x = torch.cat([x[:, :-1, :], think_h.unsqueeze(1)], dim=1)
+
         return self.ln_f(x)
 
     def forward_from_z(self, z: torch.Tensor) -> torch.Tensor:
@@ -322,6 +379,7 @@ def build_synapforge_100m(
     live_vocab: int = QWEN25_LIVE_VOCAB,
     lm_head_spectral_norm: bool = False,
     weight_quant_cfc: str = "none",
+    latent_k: int = 0,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
@@ -332,6 +390,7 @@ def build_synapforge_100m(
         live_vocab=live_vocab,
         lm_head_spectral_norm=lm_head_spectral_norm,
         weight_quant_cfc=weight_quant_cfc,
+        latent_k=latent_k,
     )
 
 

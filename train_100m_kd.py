@@ -275,6 +275,15 @@ def _parse_args() -> argparse.Namespace:
                         "therefore the z-loss term -- cannot grow "
                         "unboundedly during long training. Default OFF "
                         "(opt-in; see docs/PERF_KNOBS.md and T2.6 / P28).")
+    # T2.9 / arxiv:2412.06769 — Coconut latent thinking budget.
+    p.add_argument("--latent-k", type=int, default=0,
+                   dest="latent_k",
+                   help="Coconut latent thinking steps (k). When > 0, the "
+                        "model runs k extra forward passes on the last-token "
+                        "hidden as a continuous-thought vector (no token "
+                        "sampling) before ln_f. Default 0 disables (zero "
+                        "overhead, identity behaviour vs pre-T2.9). Recipe "
+                        "from arxiv:2412.06769 / DEEP_MAINT_QUEUE.md T2.9.")
     p.add_argument("--lr-min", type=float, default=1e-5)
     p.add_argument("--skip-spike", action="store_true", default=True)
     p.add_argument("--z-loss-weight", type=float, default=1e-4,
@@ -865,6 +874,7 @@ def main() -> int:
         freeze_vocab_tail=bool(args.freeze_vocab_tail),
         lm_head_spectral_norm=bool(args.lm_head_spectral_norm),
         weight_quant_cfc=str(args.quant_cfc_weights),
+        latent_k=int(args.latent_k),
     )
     n_params = model.num_parameters()
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
@@ -880,6 +890,14 @@ def main() -> int:
               f"{n_tern} TernaryLinear layers wired (delta_proj + b_proj)")
     plif_cells = [m for m in model.modules() if isinstance(m, PLIFCell)]
     print(f"plif cells found: {len(plif_cells)}")
+    if int(args.latent_k) > 0:
+        # T2.9 / arxiv:2412.06769 — log Coconut latent thinking is live so
+        # post-mortems can confirm the flag took effect (the LatentThinker
+        # adds 2 (d,d) Linear layers to state_dict; no overhead when k==0).
+        print(f"[coconut] latent thinking enabled: k={args.latent_k} "
+              f"(arxiv:2412.06769)")
+    else:
+        print("[coconut] latent thinking disabled (k=0, default)")
 
     # ---------------- warm-start ----------------
     if warm_ckpt and os.path.exists(warm_ckpt):
