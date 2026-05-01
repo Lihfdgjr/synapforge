@@ -1378,6 +1378,25 @@ def main() -> int:
                         _log(f"[mixin] curiosity step {step} skipped: {exc}")
                         cur_aux = torch.zeros((), device=logits.device)
 
+            # T2.5: spike-rate-target auxiliary loss (graph-attached).
+            # MUST run inside inner loop, BEFORE backward, while graph alive.
+            spike_target_loss = torch.zeros((), device=logits.device)
+            if args.spike_target_loss_weight > 0 and plif_cells:
+                low = float(args.spike_target_loss_low)
+                high = float(args.spike_target_loss_high)
+                terms = []
+                for m in plif_cells:
+                    rate = m.last_spike_rate()
+                    if rate.dim() > 0:
+                        rate = rate.squeeze()
+                    rate = rate.float()
+                    over = (rate - high).clamp(min=0.0).pow(2)
+                    under = (low - rate).clamp(min=0.0).pow(2)
+                    terms.append(over + under)
+                if terms:
+                    spike_target_loss = torch.stack(terms).sum()
+                    loss = loss + args.spike_target_loss_weight * spike_target_loss
+
             # T2.7: scale loss so the accumulated gradient over N micro-
             # batches equals the gradient bs_eff=batch_size*N would produce
             # in one big batch. backward() runs N times per global step,
@@ -1403,43 +1422,9 @@ def main() -> int:
             # Truly nothing this step -- exit outer loop.
             break
 
-            # ---- T2.5: spike-rate-target auxiliary loss ----
-            # P25 (PLIF dead 10/10) is rooted in PLIF spike rate
-            # collapsing to 0 because the surrogate gradient through
-            # ``v - threshold`` decays as 1/x^2 (ATan) and goes silent
-            # once the membrane drifts far below threshold. The
-            # threshold-homeostasis path is no_grad and corrects the
-            # bias direction but cannot push the sharp surrogate back
-            # into the active band on its own. This term adds a
-            # graph-attached penalty that backprops through
-            # ``last_spike_rate()`` (live tensor) into the surrogate
-            # gradient -> ``threshold`` and ``log_tau``, so the
-            # parameters move toward a band where the surrogate stays
-            # awake. Default weight 0.001 keeps it subordinate to the
-            # LM signal but still nudges live training.
-            spike_target_loss = torch.zeros((), device=logits.device)
-            if (
-                args.spike_target_loss_weight > 0
-                and plif_cells
-            ):
-                low = float(args.spike_target_loss_low)
-                high = float(args.spike_target_loss_high)
-                terms = []
-                for m in plif_cells:
-                    rate = m.last_spike_rate()  # live, autograd-attached
-                    if rate.dim() > 0:
-                        rate = rate.squeeze()
-                    rate = rate.float()
-                    # quadratic outside [low, high], zero inside:
-                    over = (rate - high).clamp(min=0.0).pow(2)
-                    under = (low - rate).clamp(min=0.0).pow(2)
-                    terms.append(over + under)
-                if terms:
-                    spike_target_loss = torch.stack(terms).sum()
-                    loss = loss + args.spike_target_loss_weight * spike_target_loss
-
-        optim.zero_grad(set_to_none=True)
-        loss.backward()
+        # P30 fix: zero_grad ran before the inner accum loop (line ~1245);
+        # backward ran inside the inner loop (T2.7 grad-accum + T2.5 spike
+        # target merged in). Just clip + step here.
         if GRAD_CLIP > 0:
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad],
