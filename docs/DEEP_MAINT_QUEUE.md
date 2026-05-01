@@ -503,9 +503,31 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T3.8: code data HumanEval+MBPP tokenizer (smoke + rental cmd)`.
 
 ## T3.9 — ARC-Easy / ARC-Challenge
-- [ ] **Status**: pending
-- **Steps**: download ARC-Easy (5197) + ARC-Challenge (2590) → tokenize → parquet.
-- **Commit**: `auto-T3.9: ARC tokenized for reasoning eval`.
+- [x] (02:52, PENDING_HASH, ARC tokenizer + 4 tests)
+- **Status**: tokenizer script shipped. `scripts/tokenize_arc.py` (~280 LOC)
+  fetches ARC-Easy + ARC-Challenge train+validation via
+  `datasets.load_dataset("allenai/ai2_arc", "ARC-Easy"/"ARC-Challenge")`,
+  formats each example as a multiple-choice prompt
+  (`Question: ...\nA. ...\nB. ...\nC. ...\nD. ...\nAnswer:`),
+  tokenizes both prompt-only and prompt+letter (x4) for log-likelihood
+  scoring with Qwen 2.5 0.5B (`/workspace/teachers/qwen2.5-0.5b` ->
+  `Qwen/Qwen2.5-0.5B`). Parquet columns: `task` (Easy|Challenge),
+  `split`, `id`, `question`, `choices`, `answerKey`, `answer_idx`,
+  `prompt_input_ids`, `prompt_plus_answer_ids` (list of 4 sequences).
+  Companion `.manifest.json` with kind=`arc_tokenized` + tasks/splits.
+  `--smoke` emits 5 hand-rolled rows (2 Easy + 3 Challenge incl. one
+  with numeric "1234" labels) without network or tokenizer; tests at
+  `tests/integration/test_tokenize_arc.py` — 4/4 PASS in 1.21s on CPU
+  (smoke_writes_parquet / format_prompt_with_4_choices /
+  extract_answer_letter / smoke_5_examples_count).
+- **Rental run command**:
+  ```bash
+  ssh -p 41614 root@117.74.66.77 \
+      'cd /workspace/synapforge_git && \
+       python3 scripts/tokenize_arc.py \
+         --out /workspace/data/reasoning/arc_qwen.parquet'
+  ```
+- **Commit**: `auto-T3.9: ARC-Easy + ARC-Challenge tokenizer + tests`.
 
 ## T3.10 — SWE-bench mini subset
 - [ ] **Status**: pending
