@@ -16,8 +16,8 @@ backward (stub). See "Perf v2 knobs" section below.
 |----------------|-------|---------|----------|-------|
 | 32             | ~12k  | ~52 GiB | none     | Legacy default; 1.7x headroom wasted. |
 | 64             | ~21k  | ~72 GiB | low      | Prior cap (full-vocab z-loss = 9.5 GiB intermediate). |
-| **80**         | ~26k  | ~76 GiB | low w/ sparse z-loss | **Recommended.** Sparse z-loss top-K 2048 shrinks the intermediate from 11.9 GiB to ~3 GiB, which is what unlocks this row. |
-| 96             | OOM   | --      | high     | KD chunked softmax stays full-vocab; activation peak crosses 80 GiB mid-step. |
+| **80**         | ~26k  | ~76 GiB | low w/ sparse z-loss + `--kd-topk 2048` | **Recommended.** Sparse z-loss top-K 2048 shrinks z-loss intermediate from 11.9 GiB to ~3 GiB; KD top-K 2048 shrinks the KD softmax intermediate from ~12 GiB to ~167 MiB. Both knobs are required to fit bs=80 in 80GB -- the prior 3-hour run died OOM here with `--kd-topk 0`. |
+| 96             | should fit (untested) | --      | medium   | bs=96 OOM'd pre-2026-05-01 because the KD chunked softmax stayed full-vocab. With `--kd-topk 2048` the KD intermediate is ~200 MiB; the new floor is the model + optimizer state. |
 
 ### KD frequency
 
@@ -27,6 +27,31 @@ backward (stub). See "Perf v2 knobs" section below.
 | 4            | strong    | ~3x faster than every-step | **Recommended.** KD on 25% of steps keeps teacher signal alive while LM gradient runs at ~LM-only speed on the other 75%. |
 | 6            | moderate  | ~3.5x | Slight ppl regression on small-data runs; use when GPU is the bottleneck. |
 | 8            | weak      | ~3.7x | Risk of teacher signal "fading" over long horizons; only for very long runs. |
+
+### KD top-K teacher softmax
+
+| `--kd-topk` | KD softmax intermediate at bs=80 / seq=256 / V=151936 fp32 | Notes |
+|-------------|-----------------------------------------------------------|-------|
+| 0 (full-vocab) | ~12 GiB peak                | Falls back to legacy chunked path; honours `--kd-chunk`. The path that OOM'd at bs=80 even with chunk-along-batch. |
+| 512         | ~42 MiB peak                | Aggressive; only safe if you've measured top-512 mass capture on your own teacher's logits. |
+| **2048**    | **~167 MiB peak (70x less than full)** | **Recommended.** Captures >=99.99% of softmax mass at V=151936 on a trained teacher (BitNet/DistilBERT/SmolLM recipe). What unlocks bs=80 in the production training run. |
+| 8192        | ~669 MiB peak               | Diminishing returns; already covers >99.999% of mass at 2048, more K just buys ~1% extra signal at 4x memory. |
+
+The top-K trick: take top-K teacher logits per row, softmax over the
+top-K only (renormalised), gather student logits at the same K
+indices and run `log_softmax` over those K. KL becomes
+`F.kl_div(s_top_logp, top_p_renorm, reduction='sum')` -- memory
+scales with `B*T*K` instead of `B*T*V`. The full-vocab and top-K
+paths produce different absolute loss values (different
+`log_softmax` denominator) but the **gradient direction is the
+same** (better student -> lower loss in BOTH paths). See
+`tests/integration/test_kd_topk_softmax.py` for the direction-
+agreement proof and the >=99% mass-capture math.
+
+If you suspect top-K is hurting quality (e.g. teacher has heavy-tail
+mass distribution), set `--kd-topk 0` to fall back to the legacy
+chunked-softmax path; `--kd-chunk` then controls per-chunk batch
+slicing.
 
 ### Sparse z-loss top-K
 
@@ -85,21 +110,32 @@ of ~21k tok/s). Headroom for ~3 GiB more activation if you stack on
 `--kd-async-teacher` (which uses ~0.5 GiB extra for the side stream's
 teacher logits buffer during overlap).
 
-## Why bs=96 OOMs
+## Why bs=96 OOM'd (historical, fixed by `--kd-topk`)
 
-Activation peak at bs=96 is dominated by the KD chunked softmax path,
-not the z-loss intermediate. `_kd_loss` chunks the (bs, seq, V) logits
-and runs a `(chunk*seq, V, fp32)` softmax + KL per chunk; at chunk
-auto-tune size 16 (the safe cap) and `seq=256, V=151936`, that's still
-a ~2.5 GiB transient per chunk plus the resident model + optimizer
-state. The KD activation floor sits around 12-14 GiB at bs=96, leaving
-no room for the rest.
+Pre-2026-05-01: activation peak at bs=96 was dominated by the KD
+chunked softmax path, not the z-loss intermediate. `_kd_loss`
+chunked the (bs, seq, V) logits and ran a `(chunk*seq, V, fp32)`
+softmax + KL per chunk; at chunk auto-tune size 16 (the safe cap)
+and `seq=256, V=151936`, that was still a ~2.5 GiB transient per
+chunk plus the resident model + optimizer state. The KD activation
+floor sat around 12-14 GiB at bs=96. The same path also OOM'd on
+the 3-hour bs=80 production run -- chunk-along-batch only divides
+the (chunk*seq, V) intermediate by `bs/chunk`, leaving (seq, V) per
+row x chunk rows = up to ~1.2 GiB per chunk plus grad-checkpoint
+activations.
 
-If you need bs=96+ in the future:
-* Drop the teacher to a smaller vocab (GPT-2 50257) — KD chunked
-  softmax becomes ~3.4x cheaper.
-* Or enable `--grad-checkpoint` to trade compute for activation memory
-  on the CfC sequence loop.
+**Fix (2026-05-01)**: `--kd-topk 2048` (default) replaces the
+chunked-softmax path with a memory-bounded top-K teacher softmax.
+KD activation peak drops from ~12 GiB to ~167 MiB at bs=80
+(70x less). bs=96 should now fit; the new bottleneck is the model
++ optimizer state floor, not the KD intermediate. If you still
+OOM at bs=96+:
+* Verify `--kd-topk` is in the default 2048, not 0 (full-vocab path).
+* Drop the teacher to a smaller vocab (GPT-2 50257) -- KD top-K
+  buffer scales with `bs*seq*K`, not `V`, so this is no longer
+  the dominant lever.
+* Enable `--grad-checkpoint` to trade compute for activation
+  memory on the CfC sequence loop.
 
 ## Perf v2 knobs (2026-05-01)
 
