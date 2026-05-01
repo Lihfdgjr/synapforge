@@ -236,6 +236,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--grad-clip", type=float, default=0.5)
     p.add_argument("--grad-checkpoint", action="store_true", default=False,
                    help="trade compute for memory; use when B>=96 OOMs")
+    p.add_argument("--grad-accum-steps", type=int, default=1,
+                   help="T2.7: accumulate gradients over N micro-batches "
+                        "before optim.step(). bs_eff = batch_size * N. "
+                        "Default 1 = no accumulation (back-compat). N=2 "
+                        "@ bs=64 yields bs_eff=128 with bs=64 VRAM "
+                        "(workaround for bs=80 OOM).")
     p.add_argument("--lr-min", type=float, default=1e-5)
     p.add_argument("--skip-spike", action="store_true", default=True)
     p.add_argument("--z-loss-weight", type=float, default=1e-4,
@@ -1136,120 +1142,181 @@ def main() -> int:
         except Exception as exc:
             _log(f"[triton-fused-backward] import failed: {exc}; falling back")
 
+    # T2.7: gradient accumulation. accum_steps>=1 micro-batches per optim
+    # step. Loss is divided by accum_steps so the accumulated grad equals
+    # the gradient that bs_eff = batch_size * accum_steps would produce in
+    # a single big batch. optim.step() / zero_grad() run once per global
+    # step; data, autocast, KD, mixins all run per micro-batch.
+    accum_steps = max(1, int(getattr(args, "grad_accum_steps", 1)))
+    if accum_steps > 1:
+        _log(f"[grad-accum] {accum_steps} micro-batches/step "
+             f"-> bs_eff = {args.batch_size * accum_steps} "
+             f"(VRAM stays at bs={args.batch_size})")
+
     for step in range(1, n_steps + 1):
         cur_lr = lr_at(step, peak_lr, args.warmup, n_steps, args.lr_decay)
         for pg in optim.param_groups:
             pg["lr"] = cur_lr
         t_step = time.time()
-        try:
-            x, y = next(train_it)
-        except StopIteration:
-            _log(f"data exhausted at step {step}")
-            break
-        x = x.to(DEVICE, non_blocking=True)
-        y = y.to(DEVICE, non_blocking=True)
+        # Per-step loss-component accumulators. We log the *mean* across the
+        # N micro-batches so the values are comparable to the bs=accum_steps*B
+        # equivalent single-batch run. (Sum-and-divide because each
+        # micro-batch's loss is already pre-divided by accum_steps before
+        # backward; for logging we want the un-scaled mean.)
+        accum_total_loss = 0.0
+        accum_ce = 0.0
+        accum_kd = 0.0
+        accum_z = 0.0
+        accum_modal_aux = 0.0
+        accum_cur_aux = 0.0
+        data_exhausted = False
 
-        with torch.amp.autocast(device_type=DEVICE, dtype=DTYPE,
-                                enabled=DEVICE == "cuda"):
-            # When a mixin needs the hidden state, take the encode -> head
-            # path so we can pass `text_hidden` into the mixin without a
-            # second forward. Default path (no mixin) is unchanged.
-            need_hidden = (modal_mixin is not None
-                           or curiosity_mixin is not None)
-            if need_hidden:
-                text_hidden = model.encode(x)              # (B, T, d)
-                logits = F.linear(text_hidden, model.tok_embed.weight) \
-                    if model.tie_lm_head else model.lm_head(text_hidden)
-            else:
-                text_hidden = None
-                logits = model(x)
-            flat_logits = logits.reshape(-1, logits.size(-1)).float()
-            flat_y = y.reshape(-1)
-            ce_loss = F.cross_entropy(flat_logits, flat_y,
-                                      label_smoothing=args.label_smoothing)
-            # z-loss: penalize large logsumexp (numerical stability + softmax
-            # temp control). 2026-05-01: default ``--z-loss-topk 2048`` uses
-            # the sparse approximation so the (B*T, V, fp32) intermediate
-            # never materialises -- this is what unlocks bs=64 -> bs=80 on
-            # A800-80GB. Set --z-loss-topk 0 to recover the full-vocab path.
-            log_z = _sparse_z_loss(flat_logits, k=int(args.z_loss_topk))
-            z_loss = (log_z ** 2).mean()
-            base_loss = ce_loss + args.z_loss_weight * z_loss
+        # ---- gradient accumulation inner loop ----
+        # zero_grad ONCE per global step, before the inner loop. Each inner
+        # iter calls .backward() which adds into .grad in place.
+        optim.zero_grad(set_to_none=True)
+        for _accum_iter in range(accum_steps):
+            try:
+                x, y = next(train_it)
+            except StopIteration:
+                _log(f"data exhausted at step {step} "
+                     f"(accum_iter={_accum_iter}/{accum_steps})")
+                data_exhausted = True
+                break
+            x = x.to(DEVICE, non_blocking=True)
+            y = y.to(DEVICE, non_blocking=True)
 
-            if teacher is not None and args.kd_weight > 0:
-                # Only run the (expensive) teacher forward on KD-active steps.
-                # On KD-skip steps fall back to pure base_loss without the
-                # (1-α) downweight that would otherwise scale the LM gradient
-                # by 0.3× on 3/4 steps (effectively dropping LR; see review).
-                # ``effective_kd_every`` == ``args.kd_every`` unless
-                # --kd-every-adaptive is on, in which case it's
-                # auto-tuned from the student-teacher CE gap (see
-                # ``_adaptive_kd_every`` and the post-step update below).
-                if step % effective_kd_every == 0:
-                    if kd_teacher_stream is not None:
-                        # Push teacher forward onto side stream so it can
-                        # overlap with the student backward (which still runs
-                        # on the default stream). Teacher is frozen + .eval()
-                        # so the side stream needs no autograd interaction.
-                        # We sync before KL to guarantee t_logits is ready.
-                        kd_teacher_stream.wait_stream(
-                            torch.cuda.current_stream())
-                        with torch.cuda.stream(kd_teacher_stream), \
-                                torch.no_grad():
-                            t_logits = _teacher_logits(teacher, x)
-                        torch.cuda.current_stream().wait_stream(
-                            kd_teacher_stream)
+            with torch.amp.autocast(device_type=DEVICE, dtype=DTYPE,
+                                    enabled=DEVICE == "cuda"):
+                # When a mixin needs the hidden state, take the encode -> head
+                # path so we can pass `text_hidden` into the mixin without a
+                # second forward. Default path (no mixin) is unchanged.
+                need_hidden = (modal_mixin is not None
+                               or curiosity_mixin is not None)
+                if need_hidden:
+                    text_hidden = model.encode(x)              # (B, T, d)
+                    logits = F.linear(text_hidden, model.tok_embed.weight) \
+                        if model.tie_lm_head else model.lm_head(text_hidden)
+                else:
+                    text_hidden = None
+                    logits = model(x)
+                flat_logits = logits.reshape(-1, logits.size(-1)).float()
+                flat_y = y.reshape(-1)
+                ce_loss = F.cross_entropy(flat_logits, flat_y,
+                                          label_smoothing=args.label_smoothing)
+                # z-loss: penalize large logsumexp (numerical stability +
+                # softmax temp control). 2026-05-01: default ``--z-loss-topk
+                # 2048`` uses the sparse approximation so the
+                # (B*T, V, fp32) intermediate never materialises -- this is
+                # what unlocks bs=64 -> bs=80 on A800-80GB. Set
+                # --z-loss-topk 0 to recover the full-vocab path.
+                log_z = _sparse_z_loss(flat_logits, k=int(args.z_loss_topk))
+                z_loss = (log_z ** 2).mean()
+                base_loss = ce_loss + args.z_loss_weight * z_loss
+
+                if teacher is not None and args.kd_weight > 0:
+                    # Only run the (expensive) teacher forward on KD-active
+                    # steps. On KD-skip steps fall back to pure base_loss
+                    # without the (1-α) downweight that would otherwise scale
+                    # the LM gradient by 0.3× on 3/4 steps (effectively
+                    # dropping LR; see review).
+                    # ``effective_kd_every`` == ``args.kd_every`` unless
+                    # --kd-every-adaptive is on, in which case it's
+                    # auto-tuned from the student-teacher CE gap (see
+                    # ``_adaptive_kd_every`` and the post-step update below).
+                    if step % effective_kd_every == 0:
+                        if kd_teacher_stream is not None:
+                            # Push teacher forward onto side stream so it
+                            # can overlap with the student backward (which
+                            # still runs on the default stream). Teacher is
+                            # frozen + .eval() so the side stream needs no
+                            # autograd interaction. We sync before KL to
+                            # guarantee t_logits is ready.
+                            kd_teacher_stream.wait_stream(
+                                torch.cuda.current_stream())
+                            with torch.cuda.stream(kd_teacher_stream), \
+                                    torch.no_grad():
+                                t_logits = _teacher_logits(teacher, x)
+                            torch.cuda.current_stream().wait_stream(
+                                kd_teacher_stream)
+                        else:
+                            with torch.no_grad():
+                                t_logits = _teacher_logits(teacher, x)
+                        kd = _kd_loss(logits, t_logits, args.kd_temperature,
+                                      chunk_override=args.kd_chunk,
+                                      topk=args.kd_topk)
+                        loss = (1.0 - args.kd_weight) * base_loss \
+                            + args.kd_weight * kd
                     else:
-                        with torch.no_grad():
-                            t_logits = _teacher_logits(teacher, x)
-                    kd = _kd_loss(logits, t_logits, args.kd_temperature,
-                                  chunk_override=args.kd_chunk,
-                                  topk=args.kd_topk)
-                    loss = (1.0 - args.kd_weight) * base_loss + args.kd_weight * kd
+                        kd = torch.zeros((), device=logits.device)
+                        loss = base_loss
+                        # ---- adaptive --kd-every: track CE on KD-OFF
+                        # steps ---- We sample CE from KD-OFF steps only so
+                        # the gap measure isn't artificially pulled down by
+                        # the KD loss itself. ``ce_loss.item()`` triggers a
+                        # host-sync but only on KD-OFF steps, which already
+                        # pay no teacher-forward cost.
+                        if args.kd_every_adaptive:
+                            kd_off_ce_window.append(
+                                float(ce_loss.detach().item()))
+                            if len(kd_off_ce_window) > KD_ADAPT_WINDOW:
+                                kd_off_ce_window = (
+                                    kd_off_ce_window[-KD_ADAPT_WINDOW:])
                 else:
                     kd = torch.zeros((), device=logits.device)
                     loss = base_loss
-                    # ---- adaptive --kd-every: track CE on KD-OFF steps ----
-                    # We sample CE from KD-OFF steps only so the gap measure
-                    # isn't artificially pulled down by the KD loss itself.
-                    # ``ce_loss.item()`` triggers a host-sync but only on KD-
-                    # OFF steps, which already pay no teacher-forward cost.
-                    if args.kd_every_adaptive:
-                        kd_off_ce_window.append(float(ce_loss.detach().item()))
-                        if len(kd_off_ce_window) > KD_ADAPT_WINDOW:
-                            kd_off_ce_window = kd_off_ce_window[-KD_ADAPT_WINDOW:]
-            else:
-                kd = torch.zeros((), device=logits.device)
-                loss = base_loss
 
-            # ---- opt-in mixin contributions (default OFF) ----
-            modal_aux = torch.zeros((), device=logits.device)
-            cur_aux = torch.zeros((), device=logits.device)
-            if modal_mixin is not None and text_hidden is not None:
-                try:
-                    modal_aux = modal_mixin.contrastive_loss(text_hidden)
-                    loss = loss + modal_aux
-                except Exception as exc:
-                    _log(f"[mixin] modal step {step} skipped: {exc}")
-                    modal_aux = torch.zeros((), device=logits.device)
-            if curiosity_mixin is not None and text_hidden is not None:
-                try:
-                    # use timestep t and t+1 as h_prev, h_next for ICM
-                    h_prev = text_hidden[:, :-1].contiguous()
-                    h_next = text_hidden[:, 1:].contiguous()
-                    cur_state = {
-                        "h_prev": h_prev,
-                        "h_next": h_next,
-                        "plif_modules": plif_cells,
-                    }
-                    cur_aux = curiosity_mixin.curiosity_loss(cur_state)
-                    loss = loss + args.curiosity_weight * cur_aux
-                except Exception as exc:
-                    _log(f"[mixin] curiosity step {step} skipped: {exc}")
-                    cur_aux = torch.zeros((), device=logits.device)
+                # ---- opt-in mixin contributions (default OFF) ----
+                modal_aux = torch.zeros((), device=logits.device)
+                cur_aux = torch.zeros((), device=logits.device)
+                if modal_mixin is not None and text_hidden is not None:
+                    try:
+                        modal_aux = modal_mixin.contrastive_loss(text_hidden)
+                        loss = loss + modal_aux
+                    except Exception as exc:
+                        _log(f"[mixin] modal step {step} skipped: {exc}")
+                        modal_aux = torch.zeros((), device=logits.device)
+                if curiosity_mixin is not None and text_hidden is not None:
+                    try:
+                        # use timestep t and t+1 as h_prev, h_next for ICM
+                        h_prev = text_hidden[:, :-1].contiguous()
+                        h_next = text_hidden[:, 1:].contiguous()
+                        cur_state = {
+                            "h_prev": h_prev,
+                            "h_next": h_next,
+                            "plif_modules": plif_cells,
+                        }
+                        cur_aux = curiosity_mixin.curiosity_loss(cur_state)
+                        loss = loss + args.curiosity_weight * cur_aux
+                    except Exception as exc:
+                        _log(f"[mixin] curiosity step {step} skipped: {exc}")
+                        cur_aux = torch.zeros((), device=logits.device)
 
-        optim.zero_grad(set_to_none=True)
-        loss.backward()
+            # T2.7: scale loss so the accumulated gradient over N micro-
+            # batches equals the gradient bs_eff=batch_size*N would produce
+            # in one big batch. backward() runs N times per global step,
+            # zero_grad runs once before the inner loop, optim.step()
+            # runs once after. accum_steps=1 leaves behaviour unchanged.
+            (loss / float(accum_steps)).backward()
+
+            # Track raw (un-scaled) loss components for logging. We sum
+            # then divide by accum_steps_done so the logged value equals
+            # the un-divided per-batch mean (comparable to bs=B*N runs).
+            accum_total_loss += float(loss.detach().item())
+            accum_ce += float(ce_loss.detach().item())
+            accum_kd += float(kd.detach().item())
+            accum_z += float(z_loss.detach().item())
+            accum_modal_aux += float(modal_aux.detach().item())
+            accum_cur_aux += float(cur_aux.detach().item())
+
+        # Compute the number of micro-batches actually run this step
+        # (StopIteration mid-accum partial step). We still optim.step on
+        # whatever grad we have so we don't waste the partial.
+        accum_done = max(1, _accum_iter + (0 if data_exhausted else 1))
+        if data_exhausted and _accum_iter == 0:
+            # Truly nothing this step -- exit outer loop.
+            break
+
         if GRAD_CLIP > 0:
             torch.nn.utils.clip_grad_norm_(
                 [p for p in model.parameters() if p.requires_grad],
@@ -1260,7 +1327,20 @@ def main() -> int:
         if DEVICE == "cuda":
             torch.cuda.synchronize()
         step_ms = (time.time() - t_step) * 1000.0
-        cum_tok += args.batch_size * seq_len
+        # T2.7: count tokens across all completed micro-batches this step.
+        # When accum_steps=1, accum_done=1 (back-compat).
+        cum_tok += args.batch_size * seq_len * accum_done
+
+        # Per-step mean loss components (raw, un-divided) for logging.
+        # These mirror what bs=B*N would log in a single big batch.
+        # Underscore-prefixed to avoid shadowing inner ``mean_ce`` used by
+        # the kd-every-adaptive branch below.
+        _step_loss = accum_total_loss / accum_done
+        _step_ce = accum_ce / accum_done
+        _step_kd = accum_kd / accum_done
+        _step_z = accum_z / accum_done
+        _step_modal_aux = accum_modal_aux / accum_done
+        _step_cur_aux = accum_cur_aux / accum_done
 
         # ---- adaptive --kd-every: recompute schedule every N steps ----
         # Only mutates ``effective_kd_every``; ``args.kd_every`` (the
@@ -1286,7 +1366,7 @@ def main() -> int:
         if step % log_every == 0 or step == 1:
             tok_s = cum_tok / max(time.time() - t0, 1e-6)
             metrics["step"].append(step)
-            metrics["loss"].append(float(loss.item()))
+            metrics["loss"].append(_step_loss)
             metrics["step_ms"].append(step_ms)
             metrics["tok_per_s"].append(tok_s)
             mem_str = (
@@ -1295,12 +1375,17 @@ def main() -> int:
             )
             mixin_str = ""
             if modal_mixin is not None:
-                mixin_str += f" modal={float(modal_aux.detach()):.4f}"
+                mixin_str += f" modal={_step_modal_aux:.4f}"
             if curiosity_mixin is not None:
-                mixin_str += f" cur={float(cur_aux.detach()):.4f}"
-            _log(f"step {step:5d} loss={loss.item():.4f} ce={ce_loss.item():.3f} "
-                 f"kd={kd.item():.3f} z={z_loss.item():.3f} lr={cur_lr:.5f} "
-                 f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}{mixin_str}")
+                mixin_str += f" cur={_step_cur_aux:.4f}"
+            accum_str = (
+                f" accum={accum_done}/{accum_steps}"
+                if accum_steps > 1 else ""
+            )
+            _log(f"step {step:5d} loss={_step_loss:.4f} ce={_step_ce:.3f} "
+                 f"kd={_step_kd:.3f} z={_step_z:.3f} lr={cur_lr:.5f} "
+                 f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}"
+                 f"{mem_str}{mixin_str}{accum_str}")
             if step % 50 == 0 and plif_cells:
                 rates = [m.last_spike_rate.item() for m in plif_cells]
                 rate_min, rate_max = min(rates), max(rates)
