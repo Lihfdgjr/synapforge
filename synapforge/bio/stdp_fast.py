@@ -118,7 +118,13 @@ class STDPFastWeight(Module):
 
         # Plasticity update (no-grad).  Update buffers in-place after
         # computing readout so autograd version checks see consistent W.
-        if self.training:
+        # 2026-05-01: removed `self.training` gate. STDP is now active at
+        # inference too — forward-only Hebbian rule on synapses gives
+        # in-context learning at the weight level. See docs/MONOTONIC_QUALITY.md.
+        # Override via env var SYNAPFORGE_STDP_INFERENCE={off,on,decay}.
+        import os as _os
+        _stdp_mode = _os.environ.get("SYNAPFORGE_STDP_INFERENCE", "on")
+        if self.training or _stdp_mode in ("on", "decay"):
             with torch.no_grad():
                 pre = k.detach().mean(dim=0)   # [D]
                 post = v.detach().mean(dim=0)  # [D]
@@ -134,7 +140,23 @@ class STDPFastWeight(Module):
                 ltd = self.a_minus * torch.outer(self.post_trace, pre)
                 self.W.add_(ltp - ltd)
                 self.W.clamp_(-self.clip, self.clip)
+                if _stdp_mode == "decay":
+                    # decay W toward zero between docs (per-doc consolidation tick)
+                    self.W.mul_(0.999)
         return out
+
+    def reset_doc_state(self) -> None:
+        """Call between documents to clear accumulated plasticity.
+
+        At inference, ChunkedStateCarry per-chunk reset is the natural
+        consolidation tick — beyond ~1M tokens W saturates, so reset
+        between docs prevents collapse and lets each doc get a fresh
+        in-context training run.
+        """
+        with torch.no_grad():
+            self.pre_trace.zero_()
+            self.post_trace.zero_()
+            self.W.zero_()
 
     def extra_repr(self) -> str:
         return (

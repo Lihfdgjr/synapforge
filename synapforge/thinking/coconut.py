@@ -146,6 +146,42 @@ class CurriculumScheduler:
         return k
 
 
+def adaptive_k(
+    context_len: int,
+    retrieval_confidence: float,
+    alpha: float = 1.0,
+    beta: float = 4.0,
+    k_min: int = 1,
+    k_max: int = 8,
+) -> int:
+    """Confidence-scaled Coconut thinking depth.
+
+    More context + lower retrieval confidence → deeper thinking.
+    Less context or strong retrieval → shallow thinking, save compute.
+
+    Formula (per agent synthesis 2026-05-01):
+        k = clip(round(α·log₂(ctx_len) + β·(1 − conf)), k_min, k_max)
+
+    Examples:
+        ctx=1K,   conf=0.9 → α·10 + β·0.1 = 10.4  → clip 8
+        ctx=1K,   conf=0.3 → α·10 + β·0.7 = 12.8  → clip 8
+        ctx=100K, conf=0.9 → α·17 + β·0.1 = 17.4  → clip 8
+        ctx=100,  conf=0.9 → α·6.6 + β·0.1 = 7.0  → 7
+        ctx=100,  conf=0.7 → α·6.6 + β·0.3 = 7.8  → 8
+        ctx=8,    conf=0.95 → α·3 + β·0.05 = 3.2  → 3
+
+    Default α=1, β=4 is biased toward "think deep when retrieval missed."
+    For paper-level claim of monotonic context scaling:
+        - Short ctx: confidence high (model knows few facts well) → k=1-2
+        - Long ctx: more retrieval misses possible → k=8 deep think
+    """
+    import math
+
+    score = alpha * math.log2(max(context_len, 2)) + beta * (1.0 - retrieval_confidence)
+    k = int(round(score))
+    return max(k_min, min(k_max, k))
+
+
 class PauseTokenInjector:
     """Goyal et al 2310.02226: inject <pause> tokens before answer.
 
