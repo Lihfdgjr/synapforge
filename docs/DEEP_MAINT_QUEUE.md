@@ -562,7 +562,8 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 # Tier 6 — Investor / paper artifacts
 
 ## T6.1 — Demo video script
-- [ ] **Status**: pending
+- [x] (01:46, pending-hash, 3-min screencast script with bash + voiceover for each scene)
+- ~~**Status**: pending~~
 - **Steps**: write `docs/DEMO_VIDEO_SCRIPT.md` 3-min screencast outline:
   - 0:00 pitch (`synapforge-demo pitch`)
   - 0:30 NeuroMCP button
