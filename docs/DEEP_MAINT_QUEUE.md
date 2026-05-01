@@ -88,7 +88,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 # Tier 1 — Quality validation (do ASAP when ckpt available)
 
 ## T1.1 — Real chat sample on latest ckpt
-- [x] (00:36, fixed CLI; awaits rental ckpt run) **Status**: chat_demo CLI shipped (T1 prompts, --device, --verbose, module.-strip, JSON {ckpt,step,samples:[{lang,prompt,response}]}); 8/8 smoke tests pass on CPU; live ckpt run still pending on rental.
+- [x] (00:36, 8212917, fixed CLI; awaits rental ckpt run) **Status**: chat_demo CLI shipped (T1 prompts, --device, --verbose, module.-strip, JSON {ckpt,step,samples:[{lang,prompt,response}]}); 8/8 smoke tests pass on CPU; live ckpt run still pending on rental.
 - **Goal**: validate chat ability per ckpt with verbatim output (NEVER fake).
 - **Trigger**: latest `step_*.pt` mtime > last `CHAT_SAMPLES.md` entry by ≥ 3 hours, AND step ≥ 4000.
 - **Steps**:
