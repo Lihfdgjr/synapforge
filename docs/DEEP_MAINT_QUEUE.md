@@ -550,7 +550,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Steps**: hook in trainer to track `best_val_ppl_holdout` and `cp` to `best_step_*.pt` symlink. Useful for warmstart.
 
 ## T5.5 — Train/val curves matplotlib
-- [x] (01:48, PENDING-HASH, plot script + 4 tests; awaits rental log scp for live PNG)
+- [x] (01:48, 589e339, plot script + 20 tests; awaits rental log scp for live PNG)
 - ~~**Status**: pending~~ **Status**: shipped 2026-05-02 01:48 — plotter at `scripts/plot_train_curves.py` (~270 LOC) parses `step N ce=... kd=... z=... lr=... step_ms=... tok/s=... mem_GB=... [stl=...]` + `VAL step N: val_ppl_ttt=... val_ppl_holdout=...` + `spike: mean=... range=[a, b] dead=D/T sat=S/T` lines via pure regex (no trainer imports). Renders 4 matplotlib subplots (figsize=12x8, dpi=150): (1) train CE vs step, (2) val PPL TTT+holdout overlaid (auto-log-scale on >50x dynamic range), (3) spike rate mean + dead/total via twin-axes, (4) tok/s with rolling-mean overlay when N>=40. Tests at `tests/integration/test_plot_train_curves.py` — 20 cases pass on CPU (Agg backend): regex captures step/val/spike fields, drops orphan spike before any step, handles missing `[stl=...]` field, empty/missing log graceful, default-out-path lands in `docs/CURVES_<run>.png`, real PNG written non-empty (>5KB) with valid PNG magic bytes. Awaits rental scp for live `train_run3l.log` -> `docs/CURVES_run3l.png`.
 - **Real-bench command (run after rental log scp)**:
   ```bash
