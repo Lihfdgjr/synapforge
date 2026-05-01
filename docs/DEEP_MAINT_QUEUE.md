@@ -205,7 +205,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: `auto-T1.10: VRAM peak ce=A z=B kd=C total=D GB`.
 
 ## T1.11 — Run 3m launch script + phase-1 autopilot
-- [x] (00:33, 6f215b4, launch_qwen3m.sh + phase autopilot wired with T2.3+T2.5+T2.6 flags)
+- [x] (00:33, 2fac7db, launch_qwen3m.sh + phase autopilot wired with T2.3+T2.5+T2.6 flags)
 - **Status**: shipped 2026-05-02 00:33 — does NOT auto-fire; user invokes
   `bash scripts/launch_qwen3m.sh` on the rental, OR phase autopilot calls
   `python3 scripts/build_next_launch.py --phase 1 --letter n` then runs
