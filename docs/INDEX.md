@@ -4,7 +4,10 @@ This is the single source of truth for navigating the `docs/` tree. Each entry
 below has a one-line summary, the most useful cross-references, and the file's
 last-modified date so you can see at a glance when it was touched.
 
-If you only read one thing first, read **[QUICKSTART](QUICKSTART.md)**.
+If you only read one thing first, read **[MASTER_PLAN](MASTER_PLAN.md)** — the live
+contract between sessions. Update §7 (Active runs) and §6 (Open problems) every session.
+
+If you only want to use it, read **[QUICKSTART](QUICKSTART.md)**.
 If you want the warts-and-all picture, read **[HONEST_ASSESSMENT](HONEST_ASSESSMENT.md)**.
 
 ---

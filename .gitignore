@@ -39,7 +39,7 @@ Thumbs.db
 ckpts/
 checkpoints/
 runs/
-data/
+/data/
 *.parquet
 *.bin
 *.pt
