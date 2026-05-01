@@ -1,4 +1,4 @@
-"""Investor demo CLI: synapforge-demo {button|bench|all}.
+"""Investor demo CLI: synapforge-demo {pitch|button|bench|chat|stdp|all|json}.
 
   $ pip install -e .
   $ synapforge-demo all
@@ -49,6 +49,25 @@ def cmd_bench(args) -> dict:
     return run_demo(quiet=False)
 
 
+def cmd_chat(args) -> dict:
+    from .chat_demo import run_demo
+    print("=== Chat demo (5 EN + 5 ZH) ===")
+    return run_demo(
+        ckpt=args.ckpt,
+        tokenizer_path=args.tokenizer_path,
+        max_new=args.max_new,
+        temperature=args.temperature,
+        save_path=args.save,
+    )
+
+
+def cmd_stdp(args) -> dict:
+    from .stdp_demo import run_demo
+    print("=== STDP self-organization demo ===")
+    return run_demo(n_trials=args.trials, hidden=args.hidden,
+                    batch=args.batch, seed=args.seed)
+
+
 def cmd_pitch(args) -> None:
     print(PITCH)
 
@@ -62,6 +81,12 @@ def cmd_all(args) -> dict:
     print()
     print("-" * 60)
     out["bench"] = cmd_bench(args)
+    print()
+    print("-" * 60)
+    out["stdp"] = cmd_stdp(args)
+    print()
+    print("-" * 60)
+    out["chat"] = cmd_chat(args)
     return out
 
 
@@ -80,14 +105,40 @@ def main(argv: list[str] | None = None) -> int:
     pp = sub.add_parser("pitch", help="Print 30-second investor pitch")
     pp.set_defaults(fn=cmd_pitch)
 
-    pa = sub.add_parser("all", help="Run pitch + button + bench")
-    pa.add_argument("--trials", type=int, default=80)
-    pa.add_argument("--batch", type=int, default=16)
+    pc = sub.add_parser("chat", help="5 EN + 5 ZH prompts (live or recorded)")
+    pc.add_argument("--ckpt", default=None)
+    pc.add_argument("--tokenizer-path", default="Qwen/Qwen2.5-0.5B")
+    pc.add_argument("--max-new", type=int, default=80)
+    pc.add_argument("--temperature", type=float, default=0.7)
+    pc.add_argument("--save", default="chat_demo.json")
+    pc.set_defaults(fn=cmd_chat)
+
+    ps = sub.add_parser("stdp", help="STDP self-organization (no backprop, ~2s)")
+    ps.add_argument("--trials", type=int, default=200)
+    ps.add_argument("--hidden", type=int, default=64)
+    ps.add_argument("--batch", type=int, default=32)
+    ps.add_argument("--seed", type=int, default=11)
+    ps.set_defaults(fn=cmd_stdp)
+
+    def _add_all_args(parser, default_trials):
+        # button + chat + stdp share these names; defaults chosen so
+        # `synapforge-demo all` runs in well under a minute.
+        parser.add_argument("--trials", type=int, default=default_trials)
+        parser.add_argument("--batch", type=int, default=16)
+        parser.add_argument("--ckpt", default=None)
+        parser.add_argument("--tokenizer-path", default="Qwen/Qwen2.5-0.5B")
+        parser.add_argument("--max-new", type=int, default=80)
+        parser.add_argument("--temperature", type=float, default=0.7)
+        parser.add_argument("--save", default="chat_demo.json")
+        parser.add_argument("--hidden", type=int, default=64)
+        parser.add_argument("--seed", type=int, default=11)
+
+    pa = sub.add_parser("all", help="Run pitch + button + bench + stdp + chat")
+    _add_all_args(pa, default_trials=80)
     pa.set_defaults(fn=cmd_all)
 
     pj = sub.add_parser("json", help="Run all demos and dump JSON to stdout")
-    pj.add_argument("--trials", type=int, default=40)
-    pj.add_argument("--batch", type=int, default=16)
+    _add_all_args(pj, default_trials=40)
     pj.set_defaults(fn=lambda a: print(json.dumps(cmd_all(a), indent=2, default=str)))
 
     args = p.parse_args(argv)

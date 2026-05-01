@@ -47,6 +47,23 @@ from synapforge.huggingface_adapter import adv_warmstart  # noqa: E402
 from synapforge.model_100m import build_synapforge_100m  # noqa: E402
 from synapforge.optim import build_optimizer  # noqa: E402
 
+# Phase signal + honest eval (best-effort imports; trainer must not die if
+# these aren't on disk).
+try:
+    from synapforge import phase_signal  # noqa: E402
+except Exception as _exc:  # pragma: no cover
+    phase_signal = None  # type: ignore[assignment]
+    print(f"[trainer] phase_signal unavailable: {_exc!r}", flush=True)
+try:
+    # scripts/ is sibling of train_100m_kd.py; ensure it's on sys.path.
+    _SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts")
+    if _SCRIPTS_DIR not in sys.path:
+        sys.path.insert(0, _SCRIPTS_DIR)
+    from honest_eval_hook import HonestEvalHook  # type: ignore  # noqa: E402
+except Exception as _exc:  # pragma: no cover
+    HonestEvalHook = None  # type: ignore[assignment]
+    print(f"[trainer] honest_eval_hook unavailable: {_exc!r}", flush=True)
+
 # ---------------------------------------------------------------------------
 # defaults
 # ---------------------------------------------------------------------------
@@ -101,6 +118,37 @@ def _parse_args() -> argparse.Namespace:
                    help="softmax temperature T; KD scaled by T*T")
     p.add_argument("--teacher-fallback-ckpt", default="",
                    help="path to a self-distill teacher ckpt (used if HF teacher load fails)")
+    # ---- Phase-gated opt-in components (default OFF, see docs/PHASE_TRAINING.md) ----
+    p.add_argument("--modal-list", default="",
+                   help="comma-separated modalities to enable for contrastive aux "
+                        "(e.g. 'image,audio'); empty = no multimodal aux")
+    p.add_argument("--modal-data-dir", default="",
+                   help="root directory holding pre-tokenised modal samples "
+                        "(image/, audio/ subdirs of *.pt); empty = mixin no-ops")
+    p.add_argument("--modal-alpha", type=float, default=0.05,
+                   help="weight of InfoNCE contrastive aux loss (text vs modal)")
+    p.add_argument("--self-learn-ttt", action="store_true", default=False,
+                   help="at val time, TTT-adapt on top-K high-CE examples and "
+                        "log lift; weights restored after probe (training "
+                        "trajectory unchanged unless this flag is on)")
+    p.add_argument("--self-learn-k", type=int, default=8,
+                   help="K = number of hardest val examples to probe per eval")
+    p.add_argument("--curiosity-weight", type=float, default=0.0,
+                   help="weight of 6-signal curiosity loss; 0 = disabled. "
+                        "Recommended ~0.05 once base ppl<250 (Phase 1)")
+    # ---- Reliability hooks (default-safe) ----
+    p.add_argument("--phase-aware", action="store_true", default=False,
+                   help="poll out_dir/.phase every 100 steps; on phase change "
+                        "save ckpt + sys.exit(101) so an outer relauncher can "
+                        "re-spawn with new flags. Default OFF -- doesn't affect "
+                        "the default --warmstart=... --kd-weight=0.3 launch.")
+    p.add_argument("--honest-eval", action="store_true", default=True,
+                   help="dump 5 EN + 5 ZH chat samples every EVAL_EVERY steps "
+                        "to honest_eval.jsonl (catches 'ppl-going-down but model "
+                        "is word-salad' hallucination). On by default; takes "
+                        "~5s per eval cycle on A100; never crashes the trainer.")
+    p.add_argument("--no-honest-eval", action="store_false", dest="honest_eval",
+                   help="disable the honest-eval hook")
     return p.parse_args()
 
 
@@ -390,6 +438,89 @@ def main() -> int:
     from synapforge.huggingface_adapter import load_tokenizer
     tok = load_tokenizer("/workspace/teachers/qwen2.5-0.5b")
 
+    # ---------------- honest eval hook (default ON, fail-soft) ----------------
+    eval_hook = None
+    if args.honest_eval:
+        if HonestEvalHook is None:
+            _log("[honest-eval] hook unavailable (import failed at startup); skipping")
+        else:
+            try:
+                eval_hook = HonestEvalHook(
+                    model=model,
+                    tokenizer=tok,
+                    out_dir=out_dir,
+                    every_steps=EVAL_EVERY,
+                    max_new_tokens=40,
+                    device=DEVICE,
+                )
+                _log(f"[honest-eval] enabled: every {EVAL_EVERY} steps, "
+                     f"out={eval_hook.jsonl}")
+            except Exception as exc:
+                _log(f"[honest-eval] init failed (continuing without): {exc}")
+                eval_hook = None
+    else:
+        _log("[honest-eval] disabled by --no-honest-eval")
+
+    # ---------------- phase-aware polling state ----------------
+    current_phase_id: int | None = None
+    if args.phase_aware:
+        if phase_signal is None:
+            _log("[phase-aware] phase_signal module unavailable; flag is a no-op")
+        else:
+            initial = phase_signal.read_phase(out_dir)
+            current_phase_id = initial.get("phase_id") if isinstance(initial, dict) else None
+            _log(f"[phase-aware] enabled; initial phase_id={current_phase_id}")
+
+    # ---------------- opt-in mixins (default OFF) ----------------
+    # See docs/PHASE_TRAINING.md for when each phase becomes safe to enable.
+    modal_mixin = None
+    self_learn_mixin = None
+    curiosity_mixin = None
+    try:
+        from synapforge.trainer_mixins import (
+            MultimodalMixin, SelfLearnMixin, CuriosityMixin,
+        )
+        modal_list = tuple(
+            m.strip() for m in args.modal_list.split(",") if m.strip()
+        )
+        if modal_list and args.modal_data_dir:
+            try:
+                modal_mixin = MultimodalMixin(
+                    model, modal_list=modal_list,
+                    modal_data_dir=args.modal_data_dir,
+                    hidden=model.d, alpha=args.modal_alpha,
+                )
+                _log(f"[mixin] MultimodalMixin enabled: {modal_list} "
+                     f"alpha={args.modal_alpha} dir={args.modal_data_dir}")
+            except Exception as exc:
+                _log(f"[mixin] MultimodalMixin DISABLED: {exc}")
+                modal_mixin = None
+        else:
+            _log("[mixin] multimodal: disabled (no --modal-list/--modal-data-dir)")
+        if args.self_learn_ttt:
+            try:
+                self_learn_mixin = SelfLearnMixin(
+                    model, optimizer=optim, k_failures=args.self_learn_k,
+                )
+                _log(f"[mixin] SelfLearnMixin enabled: K={args.self_learn_k} "
+                     f"(eval-time only, weights restored)")
+            except Exception as exc:
+                _log(f"[mixin] SelfLearnMixin DISABLED: {exc}")
+                self_learn_mixin = None
+        else:
+            _log("[mixin] self-learn-ttt: disabled")
+        if args.curiosity_weight > 0:
+            try:
+                curiosity_mixin = CuriosityMixin(model, hidden=model.d)
+                _log(f"[mixin] CuriosityMixin enabled: weight={args.curiosity_weight}")
+            except Exception as exc:
+                _log(f"[mixin] CuriosityMixin DISABLED: {exc}")
+                curiosity_mixin = None
+        else:
+            _log("[mixin] curiosity: disabled (weight=0)")
+    except Exception as exc:
+        _log(f"[mixin] mixins import failed; continuing without: {exc}")
+
     # ---------------- training ----------------
     metrics = {"step": [], "loss": [], "step_ms": [], "tok_per_s": [],
                "ppl_eval": {}, "samples": {}}
@@ -417,7 +548,18 @@ def main() -> int:
 
         with torch.amp.autocast(device_type=DEVICE, dtype=DTYPE,
                                 enabled=DEVICE == "cuda"):
-            logits = model(x)
+            # When a mixin needs the hidden state, take the encode -> head
+            # path so we can pass `text_hidden` into the mixin without a
+            # second forward. Default path (no mixin) is unchanged.
+            need_hidden = (modal_mixin is not None
+                           or curiosity_mixin is not None)
+            if need_hidden:
+                text_hidden = model.encode(x)              # (B, T, d)
+                logits = F.linear(text_hidden, model.tok_embed.weight) \
+                    if model.tie_lm_head else model.lm_head(text_hidden)
+            else:
+                text_hidden = None
+                logits = model(x)
             flat_logits = logits.reshape(-1, logits.size(-1)).float()
             flat_y = y.reshape(-1)
             ce_loss = F.cross_entropy(flat_logits, flat_y,
@@ -435,6 +577,32 @@ def main() -> int:
             else:
                 kd = torch.zeros((), device=logits.device)
                 loss = base_loss
+
+            # ---- opt-in mixin contributions (default OFF) ----
+            modal_aux = torch.zeros((), device=logits.device)
+            cur_aux = torch.zeros((), device=logits.device)
+            if modal_mixin is not None and text_hidden is not None:
+                try:
+                    modal_aux = modal_mixin.contrastive_loss(text_hidden)
+                    loss = loss + modal_aux
+                except Exception as exc:
+                    _log(f"[mixin] modal step {step} skipped: {exc}")
+                    modal_aux = torch.zeros((), device=logits.device)
+            if curiosity_mixin is not None and text_hidden is not None:
+                try:
+                    # use timestep t and t+1 as h_prev, h_next for ICM
+                    h_prev = text_hidden[:, :-1].contiguous()
+                    h_next = text_hidden[:, 1:].contiguous()
+                    cur_state = {
+                        "h_prev": h_prev,
+                        "h_next": h_next,
+                        "plif_modules": plif_cells,
+                    }
+                    cur_aux = curiosity_mixin.curiosity_loss(cur_state)
+                    loss = loss + args.curiosity_weight * cur_aux
+                except Exception as exc:
+                    _log(f"[mixin] curiosity step {step} skipped: {exc}")
+                    cur_aux = torch.zeros((), device=logits.device)
 
         optim.zero_grad(set_to_none=True)
         loss.backward()
@@ -460,9 +628,14 @@ def main() -> int:
                 f" mem_GB={torch.cuda.memory_allocated()/1e9:.2f}"
                 if DEVICE == "cuda" else ""
             )
+            mixin_str = ""
+            if modal_mixin is not None:
+                mixin_str += f" modal={float(modal_aux.detach()):.4f}"
+            if curiosity_mixin is not None:
+                mixin_str += f" cur={float(cur_aux.detach()):.4f}"
             _log(f"step {step:5d} loss={loss.item():.4f} ce={ce_loss.item():.3f} "
                  f"kd={kd.item():.3f} z={z_loss.item():.3f} lr={cur_lr:.5f} "
-                 f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}")
+                 f"step_ms={step_ms:.1f} tok/s={tok_s:.0f}{mem_str}{mixin_str}")
             if step % 50 == 0 and plif_cells:
                 rates = [m.last_spike_rate.item() for m in plif_cells]
                 rate_min, rate_max = min(rates), max(rates)
@@ -494,11 +667,81 @@ def main() -> int:
             }, ckpt_path)
             _log(f"saved ckpt {ckpt_path}")
 
+        # ---- phase-aware polling (default OFF) ----
+        # Cheap: read_phase is a stat + ~1KB read. Done every 100 steps.
+        if (
+            args.phase_aware
+            and phase_signal is not None
+            and step % 100 == 0
+        ):
+            try:
+                payload = phase_signal.consume_phase(out_dir)
+                if payload is not None:
+                    new_id = payload.get("phase_id")
+                    if new_id is not None and new_id != current_phase_id:
+                        _log(f"[phase-aware] phase change "
+                             f"{current_phase_id} -> {new_id}: "
+                             f"{payload.get('phase_name')!r} flags="
+                             f"{payload.get('next_phase_flags')}")
+                        ckpt_path = os.path.join(
+                            out_dir, f"phase_change_step_{step:06d}.pt"
+                        )
+                        try:
+                            torch.save({
+                                "model": model.state_dict(),
+                                "optim_state": optim.state_dict(),
+                                "step": step,
+                                "loss": float(loss.item()),
+                                "n_params": n_params,
+                                "lr": cur_lr,
+                                "phase_id": new_id,
+                                "phase_name": payload.get("phase_name"),
+                            }, ckpt_path)
+                            _log(f"[phase-aware] saved ckpt {ckpt_path}")
+                        except Exception as exc:
+                            _log(f"[phase-aware] ckpt save failed: {exc}")
+                        # Persist final metrics so the relauncher has them.
+                        try:
+                            with open(os.path.join(out_dir, "metrics.json"), "w") as f:
+                                json.dump(metrics, f, indent=2)
+                        except Exception:
+                            pass
+                        _log("[phase-aware] sys.exit(101) -- relauncher should "
+                             "re-spawn with new flags appended")
+                        sys.exit(101)
+            except SystemExit:
+                raise
+            except Exception as exc:
+                _log(f"[phase-aware] poll failed (continuing): {exc}")
+
         if step % EVAL_EVERY == 0 or step == n_steps:
             val_it = iter(val_ds)
             ppl = evaluate(model, val_it, n_batches=16, plif_cells=plif_cells)
             metrics["ppl_eval"][step] = ppl
             _log(f"VAL step {step}: ppl={ppl:.2f}")
+            # Honest eval (default ON, fail-soft). Dumps real chat samples to
+            # honest_eval.jsonl alongside this run -- catches the case where
+            # ppl monotonically decreases but the model emits word-salad.
+            if eval_hook is not None:
+                try:
+                    eval_hook.maybe_eval(step, float(ppl) if ppl is not None else None)
+                except Exception as exc:  # never let eval kill training
+                    _log(f"  [honest-eval] step {step} skipped: {exc}")
+            # Opt-in: probe TTT lift on top-K hardest val examples.
+            if self_learn_mixin is not None:
+                try:
+                    val_it_probe = iter(val_ds)
+                    xv, yv = next(val_it_probe)
+                    xv = xv.to(DEVICE)
+                    yv = yv.to(DEVICE)
+                    rec = self_learn_mixin.adapt_on_failures(xv, yv)
+                    metrics.setdefault("self_learn_lift", {})[step] = rec
+                    _log(f"  [self-learn] k={rec['k']} "
+                         f"ce_before={rec['before']:.3f} "
+                         f"ce_after={rec['after']:.3f} "
+                         f"lift={rec['lift']:+.4f}")
+                except Exception as exc:
+                    _log(f"  [self-learn] probe failed: {exc}")
             samples = []
             for p in sample_prompts:
                 try:
