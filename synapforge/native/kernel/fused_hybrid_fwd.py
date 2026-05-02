@@ -171,7 +171,9 @@ if HAS_TRITON:
             sav_off = pid_b * sav_b_str + t * sav_t_str + d_off * sav_d_str
             out_off = pid_b * out_b_str + t * out_t_str + d_off * out_d_str
 
-            # CfC step: A_t = exp(-delta * decay_a),  h = A_t h_prev + bvec
+            # CfC step: A_t = exp(-delta * decay_a),  h_pre = A_t h_pre_prev + bvec
+            # IMPORTANT: LiquidCell carries h_pre (un-tanh'd) across time;
+            # the tanh is applied AFTER the full scan to produce h_post.
             delta_t = tl.load(delta_ptr + in_off, mask=d_mask, other=0.0).to(tl.float32)
             bvec_t = tl.load(bvec_ptr + in_off, mask=d_mask, other=0.0).to(tl.float32)
             A_t = tl.exp(-delta_t * decay_a)
@@ -181,8 +183,6 @@ if HAS_TRITON:
                 h_pre > 20.0, 1.0,
                 tl.where(h_pre < -20.0, -1.0, _tanh_stable(h_pre)),
             )
-            # Cast to output dtype (h_post_ptr.dtype.element_ty preserves
-            # the caller's bf16/fp16/fp32 choice).
             tl.store(h_post_ptr + out_off, h_post.to(h_post_ptr.dtype.element_ty), mask=d_mask)
 
             # PLIF step: v = decay v_prev + (1-decay) h_post
@@ -196,9 +196,9 @@ if HAS_TRITON:
             v_post = v_pre - s * thr
             tl.store(v_post_ptr + sav_off, v_post, mask=d_mask)
 
-            # Roll carries.
-            h_carry = h_post  # CfC's state IS the post-tanh hidden
-            v_carry = v_post  # PLIF's state IS the post-reset membrane
+            # Roll carries.  CfC carries h_pre (un-tanh'd); PLIF carries v_post.
+            h_carry = h_pre
+            v_carry = v_post
 
     # =========================================================================
     # Helpers (Triton uses `tl.libdevice.tanh` on CUDA but it's missing

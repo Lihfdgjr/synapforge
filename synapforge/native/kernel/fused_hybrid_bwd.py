@@ -290,35 +290,30 @@ if HAS_TRITON:
             d_vpre_d_decay = v_post_tm1 - h_post_t
             glog_tau_acc += gv_pre * d_vpre_d_decay * d_decay_d_logtau
 
-            # ---- accumulate dL/dh_post[t] ----
-            # Sources:
-            #   (a) gh_post_t -- from upstream (CfC's own consumer + SEW
-            #       which the glue folded into gh_post_ptr).
-            #   (b) gh_post_via_plif -- backward through PLIF
-            #       integrator.
-            #   (c) carry from CfC scan (h_post[t] = h_post[t], the
-            #       previous reverse step's gh_carry comes in as
-            #       dL/dh_post[t-1] for the NEXT iteration; not added
-            #       here.  But the carry from the PRIOR reverse step
-            #       (i.e. the next-time-step) already came in as
-            #       gh_post_ptr (NO -- glue is responsible for SEW
-            #       forwarding; carry is for the within-scan recurrence.
-            gh_post_total = gh_post_t + gh_post_via_plif + gh_carry
+            # ---- accumulate dL/dh_post[t] from (a) upstream + (b) PLIF integrator ----
+            # The glue layer has already folded the SEW shortcut and the
+            # downstream gate/syn contribution into ``gh_post_ptr`` before
+            # this kernel runs.  Carry from the CfC scan flows through
+            # h_pre (NOT h_post) because LiquidCell carries h_pre.
+            gh_post_total = gh_post_t + gh_post_via_plif
 
             # ---- back through h_post = tanh(h_pre): ----
-            #     dL/dh_pre = dL/dh_post * (1 - h_post^2)
+            #     dL/dh_pre[t] (from local h_post consumers) = dL/dh_post[t] * (1 - h_post^2)
             tanh_d = 1.0 - h_post_t * h_post_t
-            gh_pre = gh_post_total * tanh_d
+            gh_pre_via_local = gh_post_total * tanh_d
+            # Add the scan carry from h_pre[t+1] -> h_pre[t] (gh_carry was
+            # written by the previous reverse step as gh_pre_carry_next).
+            gh_pre = gh_pre_via_local + gh_carry
 
-            # ---- back through h_pre = A_t * h_post[t-1] + bvec: ----
-            # need h_post[t-1] -- saved or h0
+            # ---- back through h_pre[t] = A_t * h_pre[t-1] + bvec: ----
+            # need h_pre[t-1] -- saved or h0
             if t > 0:
-                h_post_tm1 = tl.load(
-                    h_post_ptr + pid_b * sav_b_str + (t - 1) * sav_t_str + d_off * sav_d_str,
+                h_pre_tm1 = tl.load(
+                    h_pre_ptr + pid_b * sav_b_str + (t - 1) * sav_t_str + d_off * sav_d_str,
                     mask=d_mask, other=0.0,
                 ).to(tl.float32)
             else:
-                h_post_tm1 = tl.load(
+                h_pre_tm1 = tl.load(
                     h0_ptr + pid_b * h0_b_str + d_off * h0_d_str,
                     mask=d_mask, other=0.0,
                 ).to(tl.float32)
@@ -327,10 +322,10 @@ if HAS_TRITON:
             A_t = tl.exp(-delta_t * decay_a)
 
             # Gradients on the bilinear scan:
-            #   dL/dA_t        = gh_pre * h_post[t-1]
-            #   dL/dh_post[t-1]+= gh_pre * A_t       (carry)
-            #   dL/dbvec       = gh_pre
-            gA_t = gh_pre * h_post_tm1
+            #   dL/dA_t          = gh_pre * h_pre[t-1]
+            #   dL/dh_pre[t-1]  += gh_pre * A_t       (carry)
+            #   dL/dbvec         = gh_pre
+            gA_t = gh_pre * h_pre_tm1
             gh_carry_next = gh_pre * A_t
             tl.store(gbvec_ptr + in_off, gh_pre, mask=d_mask)
             # dL/ddelta_t = gA_t * d(A_t)/d(delta) = gA_t * (-decay_a) * A_t
