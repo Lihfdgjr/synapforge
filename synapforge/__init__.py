@@ -322,19 +322,20 @@ __all__ += [
 
 
 # ---------------------------------------------------------------------------
-# Synap-1 named configs (synapforge.configs) - Base 100M / Pro 300M.
+# Synap-1 named configs (synapforge.configs) - Base 100M / Pro 300M / Ultra 500M.
 # Re-exported at top-level so callers can write::
 #
-#     from synapforge import SYNAP1_PRO, build_from_config
-#     model = build_from_config("synap1_pro")
+#     from synapforge import SYNAP1_ULTRA, build_from_config
+#     model = build_from_config("synap1_ultra")
 #
-# The factory builds a `SynapForge100M` (the same class for both sizes -
-# Pro is just bigger d / n_layers / ffn_ratio).
+# The factory builds a `SynapForge100M` (the same class for all sizes -
+# Pro/Ultra are just bigger d / n_layers / ffn_ratio).
 # ---------------------------------------------------------------------------
 from . import configs  # noqa: E402  re-exported as sf.configs.*
 from .configs import (  # noqa: E402
     SYNAP1_BASE,
     SYNAP1_PRO,
+    SYNAP1_ULTRA,
     Synap1Config,
 )
 from .configs import get_config as _get_synap1_config  # noqa: E402
@@ -371,6 +372,7 @@ __all__ += [
     "Synap1Config",
     "SYNAP1_BASE",
     "SYNAP1_PRO",
+    "SYNAP1_ULTRA",
     "build_from_config",
     "list_synap1_configs",
 ]
