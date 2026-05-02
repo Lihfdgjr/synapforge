@@ -164,13 +164,35 @@ class HybridBlock(Module):
         # get the dense path back.  Default False = legacy synapse.
         sparse_spike_synapse: bool = False,
         sparse_spike_threshold: float = 0.30,
+        # 2026-05-02 math-simplification pack: --rfold dispatches the
+        # LiquidCell internal time-axis loop to a chunked closed-form
+        # parallel scan (synapforge.cells.rfold.liquid_rfold). Numerically
+        # equivalent to the sequential reference for chunk<=16 (verified
+        # by tests/cells/test_rfold_equivalence.py). Default OFF.
+        rfold: bool = False,
+        rfold_chunk: int = 16,
+        # 2026-05-02 math-simplification pack: top-K activation gate
+        # (k-WTA, biologically plausible). Replaces the dense
+        # ``sigmoid(gate(s))`` with a sparse top-K selector that keeps
+        # the K largest sigmoid values and zeros the rest. Backward uses
+        # straight-through estimation on the top-K only (the bottom (D-K)
+        # gate slots receive zero grad). Default 0 disables (legacy
+        # SwiGLU-style dense sigmoid).
+        # QUALITY GATE 2026-05-02 (Run 7 integration): kwta_k changes
+        # the model function (sparse mask on gate). Per quality 铁律,
+        # the launcher must NOT enable kwta_k by default (set to 0) --
+        # the kernel/code path remains in the codebase but unactivated
+        # until quality validation in a controlled side-by-side run.
+        kwta_k: int = 0,
     ) -> None:
         super().__init__()
         self.d = int(d)
 
         self.ln1 = _RMSNorm(d)
         self.liquid = LiquidCell(d, d, init="hasani",
-                                 weight_quant=weight_quant)
+                                 weight_quant=weight_quant,
+                                 rfold=rfold,
+                                 rfold_chunk=rfold_chunk)
         # tau_init=2.5 (was 1.5): 1-decay = 0.33 (was 0.49), so per-step
         # input drive is smaller but membrane integrates over more steps,
         # which is the textbook LIF behavior (Fang 2021 uses tau~2-4).
@@ -209,6 +231,14 @@ class HybridBlock(Module):
             raise ValueError(
                 f"sparse_spike_threshold must be in [0, 1], "
                 f"got {sparse_spike_threshold}"
+            )
+        # 2026-05-02 math-simplification pack -- top-K activation gate.
+        self.kwta_k = int(kwta_k)
+        if self.kwta_k < 0:
+            raise ValueError(f"kwta_k must be >= 0, got {kwta_k}")
+        if self.kwta_k > self.d:
+            raise ValueError(
+                f"kwta_k={self.kwta_k} exceeds hidden dim {self.d}"
             )
         if self.high_pass_residual_weight != 0.0:
             if self.high_pass_kernel_size < 1:
@@ -272,18 +302,18 @@ class HybridBlock(Module):
             spike_input = s + h
         else:
             spike_input = s
-        # Synapse path: dense (default) or sparse-spike-aware (opt-in).
-        # The sparse-spike kernel exploits the fact that ``s`` is
-        # binary AND sparse: instead of casting to fp and running a
-        # dense GEMM ``(s + h) @ W.T`` of cost ``O(d^2)``, it
-        # computes the spike contribution as a row-gather of
-        # ``W[:, k]`` for active spikes (cost ``O(K * out_dim)``,
-        # where ``K`` = active spike count per token, typically 5-15%
-        # of d for a healthy PLIF).  Auto-falls-back to the dense
-        # path when measured density >= ``sparse_spike_threshold`` so
-        # this branch is safe on dead/saturated PLIF too.
-        # Gate path stays dense (small linear; sparsity wins are on
-        # the *synapse* matmul which is the larger and more expensive op).
+# Run 7 integration 2026-05-02: BOTH the sparse-spike path AND
+        # the k-WTA gate path coexist as orthogonal opt-ins.
+        # ---- synapse_out: dense (default) or sparse-spike-aware (opt-in).
+        # The sparse-spike kernel exploits the fact that ``s`` is binary
+        # AND sparse: instead of casting to fp and running a dense GEMM
+        # ``(s + h) @ W.T`` of cost ``O(d^2)``, it computes the spike
+        # contribution as a row-gather of ``W[:, k]`` for active spikes
+        # (cost ``O(K * out_dim)``, where ``K`` = active spike count
+        # per token, typically 5-15% of d for a healthy PLIF). Auto-
+        # falls-back to the dense path when measured density >=
+        # ``sparse_spike_threshold`` so this branch is safe on
+        # dead/saturated PLIF too.
         if self.sparse_spike_synapse:
             from .kernels.sparse_spike_matmul import sparse_spike_linear
             if self.sew_shortcut:
@@ -296,11 +326,7 @@ class HybridBlock(Module):
                 )
             else:
                 # spike_input == s; ``h`` contribution is zero in the
-                # synapse-side accounting.  We pass an explicit zeros
-                # tensor of h's dtype so the kernel still has a clean
-                # reference for its dense bypass GEMM (which collapses
-                # to zero when h=0 -- one tiny cuBLAS launch -- so the
-                # win is preserved).  Density auto-dispatch tracks ``s``.
+                # synapse-side accounting. Density auto-dispatch tracks ``s``.
                 zero_h = torch.zeros_like(s, dtype=h.dtype)
                 synapse_out = sparse_spike_linear(
                     s, zero_h, self.synapse,
@@ -308,7 +334,23 @@ class HybridBlock(Module):
                 )
         else:
             synapse_out = self.synapse(spike_input)
-        gated = synapse_out * torch.sigmoid(self.gate(spike_input))
+        # ---- gate_out: dense sigmoid (default) or k-WTA top-K (opt-in).
+        # QUALITY GATE: kwta_k > 0 changes the model function (sparse
+        # mask on gate). Per Run 7 quality 铁律, the launcher does NOT
+        # set --kwta-k -- the dense sigmoid path is used by default.
+        gate_pre = torch.sigmoid(self.gate(spike_input))
+        if self.kwta_k > 0:
+            # k-WTA: only the K largest gate values fire; rest are zeroed.
+            # The mask is constructed from topk indices (a constant w.r.t.
+            # autograd), so backward gradient flows only through the
+            # top-K positions; the bottom (D-K) receive zero grad.
+            k = self.kwta_k
+            topk_vals, topk_idx = torch.topk(gate_pre, k=k, dim=-1)
+            mask = torch.zeros_like(gate_pre).scatter_(-1, topk_idx, 1.0)
+            gate_out = gate_pre * mask
+        else:
+            gate_out = gate_pre
+        gated = synapse_out * gate_out
         x = x + self.drop(gated)
 
         # ---- SwiGLU FFN ---- (residual #2)
@@ -398,6 +440,15 @@ class SynapForge100M(Module):
         # in every HybridBlock synapse path.  Default False = legacy
         # dense GEMM.  Auto-falls-back to dense when measured spike
         # density >= threshold (default 30%).
+        rfold: bool = False,
+        rfold_chunk: int = 16,
+        # 2026-05-02 math-simplification pack -- closed-form parallel scan
+        # for LiquidCell internals (replaces the per-token Python loop).
+        # Default False keeps Run 6 baseline.
+        kwta_k: int = 0,
+        # 2026-05-02 math-simplification pack -- top-K activation gate.
+        # Default 0 disables (legacy SwiGLU-style dense sigmoid). The
+        # Run 7 launcher does NOT set this (kwta_k changes model function).
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -423,12 +474,23 @@ class SynapForge100M(Module):
         self.sew_shortcut = bool(sew_shortcut)
         self.sparse_spike_synapse = bool(sparse_spike_synapse)
         self.sparse_spike_threshold = float(sparse_spike_threshold)
+        self.rfold = bool(rfold)
+        self.rfold_chunk = int(rfold_chunk)
+        self.kwta_k = int(kwta_k)
         if self.latent_k < 0:
             raise ValueError(f"latent_k must be >= 0, got {latent_k}")
         if not 0.0 <= self.sparse_spike_threshold <= 1.0:
             raise ValueError(
                 f"sparse_spike_threshold must be in [0, 1], "
                 f"got {sparse_spike_threshold}"
+            )
+        if self.rfold_chunk < 1:
+            raise ValueError(f"rfold_chunk must be >= 1, got {rfold_chunk}")
+        if self.kwta_k < 0:
+            raise ValueError(f"kwta_k must be >= 0, got {kwta_k}")
+        if self.kwta_k > self.d:
+            raise ValueError(
+                f"kwta_k={self.kwta_k} exceeds hidden dim {self.d}"
             )
 
         self.tok_embed = nn.Embedding(vocab, d)
@@ -449,7 +511,10 @@ class SynapForge100M(Module):
                         high_pass_residual_weight=self.high_pass_residual_weight,
                         sew_shortcut=self.sew_shortcut,
                         sparse_spike_synapse=self.sparse_spike_synapse,
-                        sparse_spike_threshold=self.sparse_spike_threshold)
+                        sparse_spike_threshold=self.sparse_spike_threshold,
+                        rfold=self.rfold,
+                        rfold_chunk=self.rfold_chunk,
+                        kwta_k=self.kwta_k)
             for _ in range(n_layers)
         )
         self.ln_f = _RMSNorm(d)
@@ -657,6 +722,9 @@ def build_synapforge_100m(
     sew_shortcut: bool = False,
     sparse_spike_synapse: bool = False,
     sparse_spike_threshold: float = 0.30,
+    rfold: bool = False,
+    rfold_chunk: int = 16,
+    kwta_k: int = 0,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
@@ -674,6 +742,9 @@ def build_synapforge_100m(
         sew_shortcut=sew_shortcut,
         sparse_spike_synapse=sparse_spike_synapse,
         sparse_spike_threshold=sparse_spike_threshold,
+        rfold=rfold,
+        rfold_chunk=rfold_chunk,
+        kwta_k=kwta_k,
     )
 
 

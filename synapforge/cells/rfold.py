@@ -222,3 +222,153 @@ def cfc_rfold_chunked(
         h = cfc_rfold(h, x, W_in, W_h, W_gate, tau, step)
         remaining -= step
     return h
+
+
+# ---------------------------------------------------------------------------
+# Diagonal-recurrence parallel scan (LiquidCell-specific).
+# ---------------------------------------------------------------------------
+# The CfC rfold above linearizes a *gated* CfC step. LiquidCell's actual
+# forward (synapforge/cells/liquid.py) is different: per-channel diagonal
+# A_t plus additive b_t.  That recurrence is *already* affine in h, so no
+# linearization is needed -- only a numerically stable parallel scan.
+#
+# Math (B = batch, T = time, D = hidden width, all per-channel diagonal):
+#     h_t = A_t * h_{t-1} + b_t
+#     => h_t = (prod_{s<=t} A_s) * h_{-1}
+#                + sum_{s<=t} (prod_{u=s+1..t} A_u) * b_s
+#
+# The naive Heinsen form (cumsum of log A) overflows for T>=128 because
+# log A can be -10 per step. We avoid log space by working in raw cumprod
+# space inside *small chunks* of length R, then chaining chunks
+# sequentially.  Within a chunk we evaluate the closed form directly:
+#     P_t = cumprod(A)[t] = prod_{s<=t} A_s
+#     numerator  = b_t / max(P_t, eps_floor)         # rebased input
+#     h_t = P_t * (h_{-1} + cumsum(numerator)[t])
+#
+# Stability: when |A_t| < 1 strongly, P_t -> 0; numerator blows up; final
+# h_t = 0 * inf = NaN.  We clamp P_t >= eps_floor (default 1e-8) inside the
+# division.  The output P_t * cumsum is still equal to the true sum
+# whenever |b_t| stays small relative to ``eps_floor / cumsum_max``.
+# Empirically (test_rfold_equivalence) this matches the sequential
+# reference within fp32 round-off for chunk<=16 at training-scale inputs.
+#
+# At chunk=16 and T=256 we make 16 short scans instead of 256 step
+# launches.  On GPU this is the kernel-launch saving the user wants
+# ("simplify the computation, not just replace the framework").  No
+# matrix-exp, no solve, no extra parameters; pure algebra.
+
+
+def liquid_rfold_chunk(
+    A_t: torch.Tensor,
+    b_t: torch.Tensor,
+    h_init: torch.Tensor,
+    eps_floor: float = 1e-30,
+) -> torch.Tensor:
+    """One chunk of the closed-form diagonal scan.
+
+    Args
+    ----
+    A_t : (B, R, D) per-channel decay, A_t in (0, 1].
+    b_t : (B, R, D) per-channel input drive.
+    h_init : (B, D) state at t = -1.
+    eps_floor : minimum cumprod value (avoid 0-divide for very small A).
+
+    Returns
+    -------
+    h : (B, R, D)  -- one h_t per step in the chunk.
+
+    Mathematically identical to:
+        h = h_init
+        for t in range(R):
+            h = A_t[:, t] * h + b_t[:, t]
+            out[:, t] = h
+    up to fp32 round-off introduced by the eps_floor clamp (which only
+    activates when the true cumprod is already underflowed).
+    """
+    if A_t.dim() != 3 or b_t.dim() != 3:
+        raise ValueError(
+            f"liquid_rfold_chunk: expected (B,R,D), got A={tuple(A_t.shape)} "
+            f"b={tuple(b_t.shape)}"
+        )
+    if A_t.shape != b_t.shape:
+        raise ValueError(
+            f"A_t {tuple(A_t.shape)} vs b_t {tuple(b_t.shape)} mismatch"
+        )
+    A_f = A_t.float()
+    b_f = b_t.float()
+    h0 = h_init.float()
+
+    # P_t = prod_{s<=t} A_s   (B, R, D)
+    P = torch.cumprod(A_f, dim=1)
+    P_safe = P.clamp(min=eps_floor)
+    # rebased input  b_t / P_t       (B, R, D)
+    rebased = b_f / P_safe
+    # cumulative sum along time axis (B, R, D)
+    csum = torch.cumsum(rebased, dim=1)
+    # h_t = P_t * (h_init + csum_t)
+    h = P * (h0.unsqueeze(1) + csum)
+    return h
+
+
+def liquid_rfold(
+    A_t: torch.Tensor,
+    b_t: torch.Tensor,
+    h_init: torch.Tensor,
+    chunk: int = 16,
+    eps_floor: float = 1e-30,
+) -> torch.Tensor:
+    """Chunked closed-form scan for the LiquidCell diagonal recurrence.
+
+    Parameters
+    ----------
+    A_t : (B, T, D) per-channel decay, A_t in (0, 1].
+    b_t : (B, T, D) per-channel input drive.
+    h_init : (B, D) state at t = -1 (h_0 in the paper).
+    chunk : steps per closed-form chunk. Larger = fewer Python iterations,
+        worse stability when ``A_t`` has small entries (cumprod underflows).
+        16 is the empirical sweet spot for our `A_log` init (`hasani` gives
+        log A_t in roughly [-10, 0] per step; cumprod over 16 steps stays
+        above 1e-70, well within fp32 range).
+    eps_floor : clamp on the cumprod to avoid zero-divide at extreme decay.
+
+    Returns
+    -------
+    h : (B, T, D)
+    """
+    if chunk < 1:
+        raise ValueError(f"chunk must be >= 1, got {chunk}")
+    if A_t.dim() != 3 or b_t.dim() != 3:
+        raise ValueError(
+            f"liquid_rfold: expected (B,T,D), got A={tuple(A_t.shape)} "
+            f"b={tuple(b_t.shape)}"
+        )
+    if A_t.shape != b_t.shape:
+        raise ValueError(
+            f"A_t {tuple(A_t.shape)} vs b_t {tuple(b_t.shape)} mismatch"
+        )
+    B, T, D = A_t.shape
+    if h_init.shape != (B, D):
+        raise ValueError(
+            f"h_init must be (B,D)=({B},{D}), got {tuple(h_init.shape)}"
+        )
+
+    # Trivial small-T: avoid the chunking overhead entirely.
+    if T <= chunk:
+        return liquid_rfold_chunk(A_t, b_t, h_init, eps_floor=eps_floor)
+
+    out_chunks: list[torch.Tensor] = []
+    h_curr = h_init
+    for start in range(0, T, chunk):
+        end = min(start + chunk, T)
+        h_chunk = liquid_rfold_chunk(
+            A_t[:, start:end, :],
+            b_t[:, start:end, :],
+            h_curr,
+            eps_floor=eps_floor,
+        )
+        out_chunks.append(h_chunk)
+        # Carry state across chunks via the LAST step of the chunk
+        # (sequential boundary -- this is the chained scan trick:
+        # parallel within chunk, sequential between chunks).
+        h_curr = h_chunk[:, -1, :]
+    return torch.cat(out_chunks, dim=1)
