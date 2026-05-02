@@ -328,8 +328,9 @@ class BM25Sidecar:
                 "n_terms": "unknown",
                 "position_offset": self.position_offset,
             }
+        base = self.bm25.stats() if hasattr(self.bm25, "stats") else {}
         return {
-            **self.bm25.stats() if hasattr(self.bm25, "stats") else {},
+            **base,
             "backend": self.backend,
             "position_offset": self.position_offset,
         }
