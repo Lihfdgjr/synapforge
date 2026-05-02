@@ -92,7 +92,8 @@ setsid bash -c "cd '${REPO_DIR}' && exec python3 -u train_100m_kd.py \
   --batch-size 32 --grad-accum-steps 2 \
   --lr 1e-4 --warmup 200 \
   --kd-every 4 --kd-topk 2048 --kd-weight 0.7 \
-  --data-files "/workspace/data/fineweb_edu/000_00000.parquet:0.65,/workspace/data/wt103_raw/train-00000.parquet:0.30,/workspace/data/wt103_raw/validation.parquet:0.05" \n  --shuffle-buffer 10000 --shuffle-seed 1717 \
+  --data-files "/workspace/data/kd_distill_v1_text.parquet:0.40,/workspace/data/fineweb_edu/000_00000.parquet:0.40,/workspace/data/wt103_raw/train-00000.parquet:0.18,/workspace/data/wt103_raw/validation.parquet:0.02" \
+  --shuffle-buffer 10000 --shuffle-seed 1717 \
   --grad-clip 1.0 --lr-decay cosine --steps 60000 --save-every 2500 \
   --self-learn-ttt --self-learn-k 4 --ttt-val-fraction 0.80 \
   --ttt-every 10 \
