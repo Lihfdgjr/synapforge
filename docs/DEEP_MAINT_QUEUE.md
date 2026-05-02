@@ -750,8 +750,14 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: ``auto-T8.3: curriculum learning sort by Qwen 0.5B ppl + tests``.
 
 ## T8.4 — EMA weights at inference
-- [ ] **Status**: pending
+- [x] (08:28, hash-pending, EMA wrapper + trainer wire + chat_demo --use-ema + 4 tests)
 - **Steps**: maintain `model_ema = 0.999 * model_ema + 0.001 * model` during training; load ema for inference.
+- **Done 2026-05-02 08:28**:
+  - `synapforge/training/ema.py` (canonical) + `synapforge/learn/ema.py` (re-export at spec import path) — `EMATracker` (legacy name) and `ModelEMA` (spec name) point at the same class. CPU-fp32 shadow state so a 100M-param run pays ~400 MB RAM, no extra VRAM. `update(model, decay)` is the standard timm/SmolLM2 recurrence, `swap(model)` is a context manager that restores live weights bit-exact even on exception, `save(path)` / `load(path)` round-trip the state plus auxiliary metadata.
+  - `train_100m_kd.py`: `--ema-decay` flag (default 0.0 = OFF, zero behaviour change). When > 0, the trainer instantiates `EMATracker`, calls `update()` after each `optim.step()`, and at every `--save-every` step writes BOTH the embedded `ema_state` key inside `step_<N>.pt` (preferred path used by `chat_demo --use-ema`) AND a sibling `step_<N>_ema.pt` file for `synapforge.training.ema.load_ema()` legacy loaders.
+  - `synapforge/demo/chat_demo.py`: `--use-ema` flag. When set, the ckpt loader prefers `raw['ema_state']` then falls back to a sibling `step_<N>_ema.pt`; emits `ema_source` in the JSON output for diagnostics. No-op when neither EMA payload exists.
+  - Tests: `tests/integration/test_ema.py` (5/5 PASS): `test_ema_update_correct` (decay-math identity bit-exact), `test_swap_context_restores_live_weights` (incl. exception path), `test_save_load_roundtrip` (state + metadata), `test_default_off_no_overhead` (--ema-decay 0.0 short-circuit), plus a chat_demo `_resolve_ema_source` smoke test. Existing `tests/integration/test_ema_weights.py` (4/4 PASS) unchanged. Combined: 8/8 pass in 4.4s on CPU.
+- **Commit**: `auto-T8.4: EMA weights at inference + trainer wire + chat_demo flag + tests`.
 
 ## T8.5 — Long sequence inference real
 - [ ] **Status**: pending

@@ -1,6 +1,7 @@
-"""Autonomous web learning + Track B retrieval memory."""
+"""Autonomous web learning + Track B retrieval memory + T8.4 EMA re-export."""
 
 from .autonomous_daemon import AutonomousLearnDaemon, SelfGoalProposer
+from .ema import EMATracker, ModelEMA, load_ema
 from .retrieval_memory import PerUserMemory, RetrievalMemory
 
 __all__ = [
@@ -8,4 +9,7 @@ __all__ = [
     "SelfGoalProposer",
     "RetrievalMemory",
     "PerUserMemory",
+    "EMATracker",
+    "ModelEMA",
+    "load_ema",
 ]
