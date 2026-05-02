@@ -61,7 +61,7 @@ def test_a2_high_pass_residual_default_off_and_runs_when_on():
     B, T, d = 2, 8, 16
 
     # Default OFF: no extra modules, no extra params.
-    blk = HybridBlock(d=d, ffn_ratio=2.0, sparsity=0.0)
+    blk = HybridBlock(d=d, ffn_ratio=2.0, sparsity=0.1)
     assert blk.high_pass_residual_weight == 0.0
     assert blk.hp_lowpass is None
     assert blk.hp_lambda is None
@@ -71,7 +71,7 @@ def test_a2_high_pass_residual_default_off_and_runs_when_on():
     assert torch.isfinite(out).all()
 
     # ON: hp_lowpass + hp_lambda built, residual computed.
-    blk_hp = HybridBlock(d=d, ffn_ratio=2.0, sparsity=0.0,
+    blk_hp = HybridBlock(d=d, ffn_ratio=2.0, sparsity=0.1,
                          high_pass_residual_weight=0.1)
     assert blk_hp.high_pass_residual_weight == pytest.approx(0.1)
     assert isinstance(blk_hp.hp_lowpass, torch.nn.Conv1d)
@@ -126,7 +126,7 @@ def test_full_model_all_three_flags_on_runs():
     """Sanity: build_synapforge_100m with A2+A3 flags forwards cleanly."""
     model = build_synapforge_100m(
         vocab=64, d=16, n_layers=1, loop_depth=1, max_seq=32,
-        ffn_ratio=2.0, sparsity=0.0,
+        ffn_ratio=2.0, sparsity=0.1,
         plif_tau_init="trimodal",
         high_pass_residual_weight=0.05,
     )
