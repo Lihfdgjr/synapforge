@@ -725,6 +725,7 @@ def build_synapforge_100m(
     rfold: bool = False,
     rfold_chunk: int = 16,
     kwta_k: int = 0,
+    tie_lm_head: bool = True,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
@@ -733,6 +734,7 @@ def build_synapforge_100m(
         dropout=dropout,
         freeze_vocab_tail=freeze_vocab_tail,
         live_vocab=live_vocab,
+        tie_lm_head=tie_lm_head,
         lm_head_spectral_norm=lm_head_spectral_norm,
         lm_head_pre_ln=lm_head_pre_ln,
         weight_quant_cfc=weight_quant_cfc,

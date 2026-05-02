@@ -679,6 +679,11 @@ def _parse_args() -> argparse.Namespace:
                         "'ternary' = BitNet b1.58 AbsMean QAT (arXiv: "
                         "2402.17764). Untouched: A_log (recurrent decay), "
                         "PLIF tau/threshold, SparseSynapse, FFN, LM head.")
+    p.add_argument("--untie-lm-head", action="store_true",
+                   default=False, dest="untie_lm_head",
+                   help="break tied tok_embed/lm_head sharing; cold-init separate "
+                        "Linear head. Use with cold-start to escape unigram-frequency "
+                        "collapse (see docs/TOKEN_SOUP_DIAGNOSIS.md). Default OFF.")
     p.add_argument("--lm-head-spectral-norm", action="store_true",
                    default=False, dest="lm_head_spectral_norm",
                    help="apply torch.nn.utils.spectral_norm to the LM head "
@@ -1991,6 +1996,7 @@ def main() -> int:
         rfold=bool(getattr(args, "rfold", False)),
         rfold_chunk=int(getattr(args, "rfold_chunk", 16)),
         kwta_k=int(getattr(args, "kwta_k", 0)),
+        tie_lm_head=not bool(getattr(args, "untie_lm_head", False)),
     )
     # Log the sparse-spike-synapse flag state so post-mortems can verify
     # the dispatch is live (matches the existing kwta/sew/rfold pattern).
@@ -2002,6 +2008,9 @@ def main() -> int:
         print(f"[rfold] R-fold closed-form scan enabled "
               f"(chunk={int(getattr(args, 'rfold_chunk', 16))}); "
               f"bit-exact for chunk<=16")
+    if bool(getattr(args, "untie_lm_head", False)):
+        print("[untie-lm-head] tok_embed and lm_head are SEPARATE; "
+              "breaking unigram-frequency collapse.")
     if int(getattr(args, "kwta_k", 0)) > 0:
         print(f"[kwta] WARNING: kwta_k={args.kwta_k} > 0 -- changes "
               f"model function. Bit-exactness vs run 6 NOT preserved.")

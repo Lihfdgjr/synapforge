@@ -83,14 +83,15 @@ echo "[run7] log -> ${LOG_FILE}"
 echo "[run7] black-listed flags (NOT enabled): --kwta-k, --cuda-graphs"
 
 setsid bash -c "cd '${REPO_DIR}' && exec python3 -u train_100m_kd.py \
-  --warmstart '${WARMSTART}' \
+  --no-warmstart \
+  --untie-lm-head \
   --teacher Qwen/Qwen2.5-0.5B \
   --backend triton_block \
   --vocab 151936 \
   --d 1280 --n-layers 16 --loop-depth 2 --ffn-ratio 3.0 \
   --batch-size 32 --grad-accum-steps 2 \
   --lr 1e-4 --warmup 200 \
-  --kd-every 4 --kd-topk 2048 --kd-weight 0.4 \
+  --kd-every 4 --kd-topk 2048 --kd-weight 0.7 \
   --shuffle-buffer 10000 --shuffle-seed 1717 \
   --grad-clip 1.0 --lr-decay cosine --steps 60000 --save-every 2500 \
   --self-learn-ttt --self-learn-k 4 --ttt-val-fraction 0.80 \
@@ -102,13 +103,12 @@ setsid bash -c "cd '${REPO_DIR}' && exec python3 -u train_100m_kd.py \
   --high-pass-residual-weight 0.05 \
   --plif-tau-init trimodal \
   --spike-target-loss-weight 0.5 \
-  --lm-head-spectral-norm \
   --cuda-sync-every 10 \
   --clip-grad-cache \
   --ema-decay 0.999 \
   --phase-aware \
   --sew-shortcut \
-  --plif-dense-bypass-steps 2000 \
+  --plif-dense-bypass-steps 4000 \
   --lazy-host-sync-accum \
   --fused-adamw \
   --skip-warmstart-eval-N 1 \
