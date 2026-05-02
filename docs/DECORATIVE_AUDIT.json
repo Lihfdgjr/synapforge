@@ -1,0 +1,74 @@
+[
+  {
+    "name": "STDP-only routing on SparseSynapticLayer",
+    "file_path": "D:\\tmp\\sf_activate_decorative\\synapforge\\action\\neuromcp.py",
+    "tag_or_flag": "self.weight._sf_grad_source = ['stdp']",
+    "file_exists": true,
+    "tag_set": true,
+    "flag_in_launcher": true,
+    "actually_active": null,
+    "blocked_reason": null,
+    "notes": []
+  },
+  {
+    "name": "Multimodal byte-patch (image/audio/time_series)",
+    "file_path": "D:\\tmp\\sf_activate_decorative\\synapforge\\trainer_mixins.py",
+    "tag_or_flag": "--modal-list / --modal-data-dir / --modal-alpha",
+    "file_exists": true,
+    "tag_set": true,
+    "flag_in_launcher": true,
+    "actually_active": null,
+    "blocked_reason": null,
+    "notes": [
+      "phase-aware gates this until val_ppl <= 100 (Phase 2)"
+    ]
+  },
+  {
+    "name": "Web daemon -> trainer parquet pipe",
+    "file_path": "D:\\tmp\\sf_activate_decorative\\synapforge\\data\\web_daemon_sink.py",
+    "tag_or_flag": "WebDaemonSink + scripts/web_self_learn_daemon.py",
+    "file_exists": true,
+    "tag_set": true,
+    "flag_in_launcher": true,
+    "actually_active": null,
+    "blocked_reason": null,
+    "notes": [
+      "default weight 0.10 in --data-files; daemon must be running for any rows to land"
+    ]
+  },
+  {
+    "name": "R-fold parallel scan in TRAINING (not just inference)",
+    "file_path": "D:\\tmp\\sf_activate_decorative\\synapforge\\cells\\liquid.py",
+    "tag_or_flag": "--rfold + --rfold-chunk",
+    "file_exists": true,
+    "tag_set": true,
+    "flag_in_launcher": true,
+    "actually_active": null,
+    "blocked_reason": null,
+    "notes": [
+      "backward path verified by tests/cells/test_rfold_equivalence.py + tests/cells/test_rfold_train_bit_exact.py"
+    ]
+  },
+  {
+    "name": "Ternary BitNet QAT (delta_proj/b_proj)",
+    "file_path": "D:\\tmp\\sf_activate_decorative\\synapforge\\cells\\liquid.py",
+    "tag_or_flag": "--weight-quant ternary",
+    "file_exists": true,
+    "tag_set": true,
+    "flag_in_launcher": false,
+    "actually_active": null,
+    "blocked_reason": "DEFERRED -- ternary swap on warmstart triggers LM-head reset (feedback_spectral_norm_warmstart_cost.md). Needs fresh run, not warmstart.",
+    "notes": []
+  },
+  {
+    "name": "PLIF spike revival (Run 7 dense bypass + sparse spike)",
+    "file_path": "D:\\tmp\\sf_activate_decorative\\synapforge\\cells\\plif.py",
+    "tag_or_flag": "--plif-dense-bypass-steps + --sparse-spike-synapse",
+    "file_exists": true,
+    "tag_set": true,
+    "flag_in_launcher": true,
+    "actually_active": null,
+    "blocked_reason": "DEPENDENCY -- spike density only emerges post step 4000 (--plif-dense-bypass-steps 4000). Verify in train log AFTER step 4000+.",
+    "notes": []
+  }
+]
