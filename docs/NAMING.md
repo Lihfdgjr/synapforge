@@ -26,7 +26,7 @@ Three reasons.
 | **Synap-1 Base**    | 100M   | d=512, n_layers=10, loop_depth=1, vocab 151936, Qwen-0.5B KD | training; Run 3l/3m/3n plateaued at val ppl ~3700 (2026-05-02) |
 | Synap-1-SFT (Base)  | 100M   | Synap-1 Base + alpaca-zh response-only SFT        | phase 3 gate |
 | Synap-1-RL (Base)   | 100M   | Synap-1-SFT + GRPO sympy verifier RL              | phase 4 gate |
-| **Synap-1 Pro**     | 300M   | d=1024, n_layers=14, loop_depth=2, vocab 151936, Qwen-0.5B KD; ~175M useful backbone vs Base's ~25M | launching post-Run 3o (ETA 14:00 May 2) |
+| **Synap-1 Pro**     | ~325M  | d=1024, n_layers=14, loop_depth=2, ffn_ratio=2.5, vocab 151936, Qwen-0.5B KD; ~169M useful backbone vs Base's ~25M | launching post-Run 3o (ETA 14:00 May 2) |
 | Synap-1 Ultra       | 500M   | d=1280, n_layers=16, loop_depth=2, vocab 151936   | next variant after Pro validates |
 | Synap-Edge          | 100M   | BitNet b1.58 ternary quantization                 | post-pitch |
 | Synap-Air           | 30M    | Distilled from Synap-1, mobile target             | future   |
@@ -40,14 +40,32 @@ backup stack — only the backbone width and depth change.
 - **Hidden dim** `d = 1024` (Base: 512)
 - **Layers** `n_layers = 14` (Base: 10)
 - **Loop depth** `loop_depth = 2` (Base: 1)
+- **FFN ratio** `ffn_ratio = 2.5` (Base: 8.0) — narrower per-layer FFN
+  width keeps total within the 300M envelope while letting hidden
+  width and depth grow. Without this trade, d=1024 n=14 ffn=8 would
+  hit ~567M total.
 - **Vocab** 151936 (Qwen tokenizer, unchanged)
-- **Total params** ~300M, of which Qwen embedding eats ~75M and the
-  **useful backbone is ~175M — 7× the ~25M useful backbone in Base**.
-  This 7× gap is the structural reason we expect Pro to push past Base's
-  val ppl ~3700 plateau.
+- **Total params** ~325M (within 10% of the 300M target; embedding
+  151936×1024 = 155.6M alone) and the **useful backbone is ~169M —
+  7× the ~25M useful backbone in Base** when the Qwen embedding is
+  excluded. This 7× gap is the structural reason we expect Pro to push
+  past Base's val ppl ~3700 plateau.
 - **Teacher KD** Qwen2.5-0.5B logits (unchanged)
 - **Training cost target** ~80 GPU-h on A800 80GB (~¥600) for first
   usable ckpt; 7 days (~¥1,200) for chat-fluent target.
+
+The exact hyperparameter values live in
+`synapforge/configs/synap1.py` as `SYNAP1_BASE` / `SYNAP1_PRO`. Build
+either by name (avoiding hard-coded `--d 1024 --n-layers 14
+--ffn-ratio 2.5` flag bundles)::
+
+    from synapforge import build_from_config
+    model = build_from_config("synap1_pro")          # 300M
+    model = build_from_config("synap1_base")         # 100M
+
+`train_100m_kd.py` continues to accept `--d / --n-layers / --ffn-ratio /
+--loop-depth` directly for ad-hoc launches; the new configs are a
+canonical reference, not a replacement of those flags.
 
 ### Synap-1 Ultra spec (500M, next variant)
 
