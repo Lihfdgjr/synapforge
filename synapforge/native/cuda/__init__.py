@@ -58,6 +58,7 @@ from .tensor import CudaTensor  # noqa: E402
 # them directly from the submodule, but expose them here for
 # convenience too.
 from . import allocator  # noqa: E402,F401
+from . import lnn_ops  # noqa: E402,F401
 from . import ops  # noqa: E402,F401
 from . import streams  # noqa: E402,F401
 from . import triton_glue  # noqa: E402,F401
@@ -69,6 +70,7 @@ __all__ = [
     "CudaMemPool",
     "CudaStreamPool",
     "ops",
+    "lnn_ops",
     "triton_glue",
     "allocator",
     "streams",
