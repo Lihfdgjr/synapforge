@@ -32,10 +32,18 @@ from pathlib import Path
 try:
     import pyarrow as pa
     import pyarrow.parquet as pq
-    import pandas as pd
     _HAVE_ARROW = True
 except Exception:  # pragma: no cover
     _HAVE_ARROW = False
+
+# pandas is optional — pyarrow alone is enough to write parquet via
+# ``pa.table(...)``. CI's [dev] extra ships pyarrow but not pandas, so we
+# must not gate the parquet path behind pandas.
+try:
+    import pandas as pd  # noqa: F401
+    _HAVE_PANDAS = True
+except Exception:  # pragma: no cover
+    _HAVE_PANDAS = False
 
 
 # --- topics & supporting vocabulary ----------------------------------------
@@ -295,17 +303,20 @@ def main() -> int:
                   f"dropped={n_drop} ({time.time() - t0:.1f}s)")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame({
+    # Build the Arrow table directly (works without pandas — CI's [dev]
+    # extra ships pyarrow but not pandas).
+    table = pa.table({
         "text": texts,
         "title": titles,
         "topic": topics,
         "subtopic": subtopics,
         "lang": langs,
     })
-    pq.write_table(pa.Table.from_pandas(df), args.out)
-    print(f"[synth] wrote {len(df):,} rows -> {args.out} "
+    pq.write_table(table, args.out)
+    n_rows = table.num_rows
+    print(f"[synth] wrote {n_rows:,} rows -> {args.out} "
           f"(dedup={args.dedup} dropped={n_drop})")
-    _write_manifest(args.out, len(df), args.seed,
+    _write_manifest(args.out, n_rows, args.seed,
                     fallback=False, dedup=args.dedup, n_dropped=n_drop)
     return 0
 

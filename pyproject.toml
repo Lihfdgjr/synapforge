@@ -52,6 +52,8 @@ web    = ["playwright>=1.40"]  # sf.action.web_actuator — DOM-only Computer-Us
 dev    = [
     "pytest>=7.0",
     "pyarrow>=12.0",
+    "pandas>=1.5",          # tests read parquet via pq.read_table().to_pandas()
+    "matplotlib>=3.5",       # T8.1 measure_stdp_weight_diff plotting smoke
     "pytest-cov>=4.0",
     "ruff>=0.1",
     "mypy>=1.0",

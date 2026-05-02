@@ -184,14 +184,24 @@ def _format_loss_pct(
     Pure function -- no torch, no IO -- so it is unit-testable on CPU.
     """
     denom = max(float(step_loss), 1e-9)
-    # Trainer applies (1-α)·base + α·kd on KD-on steps where base = ce + z·zw.
-    # On KD-off steps loss = ce + z·zw (kd_weight effectively 0 because step_kd=0).
-    # base_w = (1-α) on KD-on steps; on KD-off steps step_kd=0 so reweighting
-    # to (1-α) would wrongly halve ce — so detect KD activity from step_kd.
-    base_w = float(1.0 - kd_weight) if float(step_kd) > 0 else 1.0
+    # Trainer applies (1-α)·base + α·kd on KD-on steps where base = ce + z·zw
+    # and α = ``kd_weight``. On KD-off steps loss = ce + z·zw (step_kd is 0).
+    #
+    # Reweighting only kicks in when ``kd_weight > 0`` (the production path
+    # where the trainer actually mixes a KD loss in). When ``kd_weight == 0``
+    # — the unit-test default, where each ``step_*`` already represents its
+    # raw fraction of ``step_loss`` — we treat all components as raw
+    # contributions and avoid scaling them, so the printed pct columns sum
+    # back to ~100 % of the loss as the docstring promises.
     kd_w = float(kd_weight)
+    if kd_w > 0.0 and float(step_kd) > 0.0:
+        base_w = float(1.0 - kd_w)
+        kd_factor = kd_w
+    else:
+        base_w = 1.0
+        kd_factor = 1.0
     pct_ce = base_w * float(step_ce) / denom * 100.0
-    pct_kd = kd_w * float(step_kd) / denom * 100.0
+    pct_kd = kd_factor * float(step_kd) / denom * 100.0
     pct_z = base_w * float(step_z) * float(z_loss_weight) / denom * 100.0
     out = f" pct_ce={pct_ce:.1f} pct_kd={pct_kd:.1f} pct_z={pct_z:.1f}"
     if has_modal:
@@ -520,6 +530,17 @@ def _parse_args() -> argparse.Namespace:
                         "32 on 2026-05-01 (A800-80GB sweet spot with sparse "
                         "z-loss + expandable_segments). bs=96 still OOMs "
                         "because KD chunked softmax stays full-vocab.")
+    # T2.7 — gradient accumulation. ``--grad-accum-steps N`` runs N
+    # micro-batches per optimizer step, each scaled by ``1/N`` so the
+    # accumulated gradient equals what a single ``batch_size * N`` batch
+    # would produce — without the VRAM cost. ``N=1`` (default) preserves
+    # the legacy code path verbatim. The trainer reads the value via
+    # ``getattr(args, "grad_accum_steps", 1)`` so older launch scripts
+    # that don't pass the flag still work.
+    p.add_argument("--grad-accum-steps", type=int, default=1, dest="grad_accum_steps",
+                   help="micro-batches per optimizer step (T2.7); "
+                        "effective bs = --batch-size * --grad-accum-steps. "
+                        "Default 1 (no accumulation).")
     p.add_argument("--steps", type=int, default=N_STEPS_DEFAULT)
     p.add_argument("--warmup", type=int, default=200)
     # ---- P9 data-pipeline / smoke overrides (defaults preserve rental paths) ----
