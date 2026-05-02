@@ -344,14 +344,28 @@ class HeteroPipeline:
                         self.metrics.stage_a_wait_s += 0.05
                         continue
                 step += 1
-            # End of stream
-            self._queue_ab.put(_EOS)
+            # End of stream -- enqueue EOS but don't block forever if B
+            # has already crashed and queue_ab is full.
+            self._safe_eos_put(self._queue_ab)
         except BaseException as exc:  # noqa: BLE001
             self._record_error(exc)
+            self._safe_eos_put(self._queue_ab)
+
+    def _safe_eos_put(self, q: "Queue[Any]") -> None:
+        """Enqueue _EOS without blocking forever on a full queue.
+
+        Loops with timeout while honouring _stop_evt so a stalled
+        downstream stage can't hang shutdown.
+        """
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
             try:
-                self._queue_ab.put_nowait(_EOS)
+                q.put(_EOS, timeout=0.05)
+                return
             except Full:
-                pass
+                if self._stop_evt.is_set():
+                    return
+                continue
 
     def _stage_b_loop(self) -> None:
         """Compute: forward + backward; feed queue_bc with grads.
@@ -379,7 +393,7 @@ class HeteroPipeline:
                     continue
                 self.metrics.stage_b_wait_s += time.time() - wait_t0
                 if item is _EOS:
-                    self._queue_bc.put(_EOS)
+                    self._safe_eos_put(self._queue_bc)
                     return
                 batch: _Batch = item
                 t = time.time()
@@ -405,10 +419,7 @@ class HeteroPipeline:
                         continue
         except BaseException as exc:  # noqa: BLE001
             self._record_error(exc)
-            try:
-                self._queue_bc.put_nowait(_EOS)
-            except Full:
-                pass
+            self._safe_eos_put(self._queue_bc)
 
     def _stage_c_loop(self) -> None:
         """Optim: AdamW step; signal _optim_done_evt after each step."""
