@@ -1247,6 +1247,32 @@ def _parse_args() -> argparse.Namespace:
                         "wraps the synapforge AdamW math, just on CPU). "
                         "Auto-falls back to PlasticityAwareAdamW if any "
                         "param is plasticity-tagged. Default OFF.")
+    p.add_argument("--stdp-only-plasticity", action="store_true",
+                   default=False,
+                   dest="stdp_only_plasticity",
+                   help="route plasticity-tagged params (sources subset of "
+                        "{stdp, hebb, synaptogenesis}) through "
+                        "synapforge.native.stdp.STDPOnlyOptimizer instead "
+                        "of feeding their plast_delta into "
+                        "PlasticityAwareAdamW. STDP is a LOCAL Hebbian "
+                        "rule: per-step cost O(active_pre * active_post), "
+                        "not O(weights). At 10% spike density this is "
+                        "~10x cheaper than AdamW for those weights, "
+                        "with the Triton kernel pushing 50x+ on CUDA. "
+                        "Bypasses autograd entirely for the plasticity "
+                        "group. BP-tagged and mixed-source params still "
+                        "go through the existing AdamW path so quality "
+                        "is preserved. Default OFF: behaviour matches "
+                        "current production (AdamW for everything). "
+                        "See synapforge/native/stdp/README.md and "
+                        "scripts/bench_stdp_vs_adamw.py.")
+    p.add_argument("--stdp-alpha", type=float, default=0.02,
+                   dest="stdp_alpha",
+                   help="base learning rate for STDP plasticity updates. "
+                        "Per-layer alpha is scaled by the layer's CfC tau "
+                        "via synapforge.native.stdp.per_param_alpha. "
+                        "0.02 matches the SEW-ResNet pair-STDP rule. "
+                        "Only active when --stdp-only-plasticity is ON.")
     p.add_argument("--skip-warmstart-eval-N", type=int, default=0,
                    dest="skip_warmstart_eval_n",
                    help="when warmstarting from a known-good ckpt, skip "
@@ -2357,6 +2383,48 @@ def main() -> int:
         optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     else:
         optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
+
+    # ----- Native STDP wrap (--stdp-only-plasticity) ---------------------
+    # When this flag is ON we wrap the chosen optimizer in a
+    # HybridOptimizerDispatcher that splits params into two groups:
+    #   plasticity-only (sources subset of {stdp, hebb, synaptogenesis})
+    #     -> STDPOnlyOptimizer (no autograd, O(active_spikes) per step)
+    #   everything else -> the AdamW we just built
+    # Default OFF preserves current production behavior bit-for-bit.
+    _use_stdp_native = bool(getattr(args, "stdp_only_plasticity", False))
+    if _use_stdp_native:
+        try:
+            from synapforge.native.stdp import HybridOptimizerDispatcher
+            # Build a fresh AdamW restricted to BP/mixed params; the
+            # original `optim` was over all params, so we replace it.
+            _bp_named = []
+            _plast_count = 0
+            for _pname, _p in model.named_parameters():
+                if not _p.requires_grad:
+                    continue
+                _src = list(getattr(_p, "_sf_grad_source", ("bp",)))
+                if _src and all(s in ("stdp", "hebb", "synaptogenesis")
+                                for s in _src):
+                    _plast_count += 1
+                else:
+                    _bp_named.append((_pname, _p))
+            _factory = lambda ps: torch.optim.AdamW(
+                ps, lr=peak_lr, betas=(0.9, 0.999),
+                eps=1e-8, weight_decay=WEIGHT_DECAY,
+            )
+            optim = HybridOptimizerDispatcher.from_model(
+                model,
+                base_optim_factory=_factory,
+                base_alpha=float(getattr(args, "stdp_alpha", 0.02)),
+            )
+            _log(f"[stdp-native] HybridOptimizerDispatcher: "
+                 f"{_plast_count} plasticity-only params -> STDP, "
+                 f"{len(_bp_named)} -> AdamW. "
+                 f"alpha={getattr(args, 'stdp_alpha', 0.02)}")
+        except Exception as exc:
+            _log(f"[stdp-native] init failed ({exc!r}); falling back to "
+                 "current AdamW path. Quality preserved; perf unchanged.")
+
     print(f"optimizer: {type(optim).__name__} lr={peak_lr} wd={WEIGHT_DECAY}")
 
     # Load optimizer state from warmstart ckpt (preserves Adam m/v momentum;
