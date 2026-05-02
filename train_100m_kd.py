@@ -896,6 +896,53 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--curiosity-weight", type=float, default=0.0,
                    help="weight of 6-signal curiosity loss; 0 = disabled. "
                         "Recommended ~0.05 once base ppl<250 (Phase 1)")
+    # ---- Self-drive wire-in (task #188) -----------------------------------
+    # SelfDriveCoordinator wires the 5 latent components in
+    # synapforge.intrinsic._core (SelfGoalProposer + ImaginationRollout +
+    # FreeEnergySurprise + GoalMemory + IdleLoop) into the trainer. Default
+    # OFF -- when --self-drive is absent the trainer is bit-exact to the
+    # current Run 7 launch.
+    #
+    # When enabled: every K=20 outer steps (or when the data loader is
+    # empty), the coordinator runs M=10 imagined inner steps. The pseudo
+    # batch hidden / goal_tokens come from the proposer + imagination
+    # rollout. GoalMemory + FrontierSampler track success_rate; goals
+    # whose past success_rate is in [0.3, 0.7] are preferred (sweet
+    # spot). QualityGuard snapshots STDP weights pre-cycle and rolls
+    # back via a user-supplied callback when post-cycle val_ppl
+    # regresses past --self-drive-max-regression (default 5%).
+    p.add_argument("--self-drive", action="store_true", default=False,
+                   help="enable self-drive (curiosity + imagination + "
+                        "auto-curriculum) inner loop. Default OFF; current "
+                        "Run 7 launches stay bit-exact when omitted.")
+    p.add_argument("--self-drive-every-k", type=int, default=20,
+                   dest="self_drive_every_k",
+                   help="run the self-drive inner cycle every N outer "
+                        "steps (default 20).")
+    p.add_argument("--self-drive-inner-steps", type=int, default=10,
+                   dest="self_drive_inner_steps",
+                   help="number of imagined inner steps per cycle "
+                        "(default 10).")
+    p.add_argument("--self-drive-max-regression", type=float, default=0.05,
+                   dest="self_drive_max_regression",
+                   help="QualityGuard tolerance: rollback if post-cycle "
+                        "val_ppl > pre * (1 + this). Default 0.05.")
+    p.add_argument("--self-drive-sweet-lo", type=float, default=0.3,
+                   dest="self_drive_sweet_lo",
+                   help="FrontierSampler success-rate lower bound. "
+                        "Default 0.3.")
+    p.add_argument("--self-drive-sweet-hi", type=float, default=0.7,
+                   dest="self_drive_sweet_hi",
+                   help="FrontierSampler success-rate upper bound. "
+                        "Default 0.7.")
+    p.add_argument("--self-drive-recent-k", type=int, default=10,
+                   dest="self_drive_recent_k",
+                   help="recent-K lockout window for FrontierSampler "
+                        "(avoids local mode collapse). Default 10.")
+    p.add_argument("--self-drive-success-loss-drop", type=float, default=0.05,
+                   dest="self_drive_success_loss_drop",
+                   help="threshold for marking an inner step 'success': "
+                        "obs_loss < pre_loss * (1 - this). Default 0.05.")
     # ---- NeuroMCP wire-in (T9.2 in DEEP_MAINT_QUEUE.md) -------------------
     # NeuroMCPHead = SparseSynapticLayer + DynamicActionCodebook. Replaces
     # MCP / function-calling tool tokens with a neuroplastic head that
@@ -2780,6 +2827,64 @@ def main() -> int:
     except Exception as exc:
         _log(f"[mixin] mixins import failed; continuing without: {exc}")
 
+    # ---------------- Self-drive coordinator (default OFF) ----------------
+    # See docs/INTRINSIC_SELF_DRIVE.md for the architecture diagram. When
+    # --self-drive is absent the coordinator is None and the inner
+    # cycle never fires (current Run 7 launches stay bit-exact).
+    self_drive_coord = None
+    if bool(getattr(args, "self_drive", False)):
+        try:
+            from synapforge.intrinsic import (
+                SelfDriveCoordinator,
+                SelfDriveConfig,
+                SelfGoalProposer,
+                ImaginationRollout,
+                GoalMemory,
+            )
+            sd_cfg = SelfDriveConfig(
+                enabled=True,
+                every_k_steps=int(args.self_drive_every_k),
+                inner_steps=int(args.self_drive_inner_steps),
+                sweet_lo=float(args.self_drive_sweet_lo),
+                sweet_hi=float(args.self_drive_sweet_hi),
+                recent_k_lockout=int(args.self_drive_recent_k),
+                success_loss_drop=float(args.self_drive_success_loss_drop),
+                max_val_regression=float(args.self_drive_max_regression),
+            )
+            try:
+                _vocab_size = int(model.vocab_size)
+            except Exception:
+                _vocab_size = int(getattr(args, "vocab_size", 32000))
+            try:
+                proposer = SelfGoalProposer(model, vocab_size=_vocab_size)
+            except Exception as exc:
+                _log(f"[self-drive] proposer init failed: {exc!r}")
+                proposer = None
+            try:
+                rollout = ImaginationRollout(model)
+            except Exception as exc:
+                _log(f"[self-drive] rollout init failed: {exc!r}")
+                rollout = None
+            memory = GoalMemory(capacity=int(sd_cfg.max_goal_memory))
+            self_drive_coord = SelfDriveCoordinator(
+                cfg=sd_cfg,
+                proposer=proposer,
+                rollout=rollout,
+                memory=memory,
+                log_fn=_log,
+            )
+            _log(
+                f"[self-drive] enabled: every_k={sd_cfg.every_k_steps} "
+                f"inner_steps={sd_cfg.inner_steps} "
+                f"sweet=[{sd_cfg.sweet_lo:.2f},{sd_cfg.sweet_hi:.2f}] "
+                f"max_regression={sd_cfg.max_val_regression:.3f}"
+            )
+        except Exception as exc:
+            _log(f"[self-drive] DISABLED (init failed): {exc!r}")
+            self_drive_coord = None
+    else:
+        _log("[self-drive] disabled (--self-drive not passed)")
+
     # NeuroMCPMixin lives in ``synapforge.training`` (alongside the EMA
     # tracker), NOT in the umbrella ``synapforge.trainer_mixins`` module --
     # this keeps the wire-in independent of the older mixin import block
@@ -3391,6 +3496,123 @@ def main() -> int:
             except Exception as exc:  # never let EMA error kill training
                 _log(f"[ema] update failed step={step} ({exc!r}); disabling")
                 ema_tracker = None
+
+        # ---- Self-drive cycle (default OFF; task #188) ----
+        # Wires SelfGoalProposer + ImaginationRollout + GoalMemory +
+        # FrontierSampler + QualityGuard into a single inner loop that
+        # fires every K outer steps (or on data-loader empty). The
+        # inner runner here is intentionally minimal: it runs the model
+        # forward on the goal_tokens to compute a loss + a torch.no_grad
+        # forward update for STDP plasticity (the bypass-optimizer path
+        # per feedback_neural_action_no_token_no_mcp.md). Snapshot /
+        # rollback uses the param-state of the model so a regression on
+        # val_ppl reverts to pre-cycle weights.
+        if self_drive_coord is not None:
+            _idle = bool(data_exhausted)
+            if self_drive_coord.should_fire(step, idle=_idle):
+                _sd_cycle_t = time.time()
+                # ---- inner-step runner ----
+                # Run a forward over the goal_tokens to obtain a loss
+                # signal. We wrap in no_grad: STDP plasticity (when
+                # PLIF / SparseSynapticLayer are alive) updates via the
+                # plasticity ticks below; AdamW is intentionally NOT
+                # called here. When PLIF is dormant the runner is a
+                # signal-only no-op (still produces a loss number that
+                # GoalMemory and FrontierSampler track).
+                def _sd_run_inner(sd_step) -> float:
+                    if not sd_step.goal_tokens:
+                        return 0.0
+                    try:
+                        _gt = torch.tensor(
+                            [list(sd_step.goal_tokens)],
+                            dtype=torch.long, device=DEVICE,
+                        )
+                        _x = _gt[:, :-1]
+                        _y = _gt[:, 1:]
+                        if _x.numel() == 0:
+                            return 0.0
+                        model.eval()
+                        with torch.no_grad():
+                            _logits = model(_x)
+                            _ll = _logits.reshape(-1, _logits.size(-1)).float()
+                            _yy = _y.reshape(-1)
+                            _loss = F.cross_entropy(_ll, _yy)
+                        model.train()
+                        return float(_loss.detach().item())
+                    except Exception as _exc:
+                        _log(f"[self-drive] inner runner failed: {_exc!r}")
+                        return 0.0
+
+                # ---- snapshot / restore for STDP-only quality guard ----
+                # We snapshot ONLY the parameters that the inner-step
+                # path could mutate. Currently the runner is no_grad so
+                # nothing changes; the snapshot is a defensive harness
+                # for when STDP/SparseSynapticLayer plasticity is wired
+                # into the inner runner. Snapshot is a dict of cloned
+                # param tensors keyed by module name.
+                def _sd_snapshot():
+                    return {
+                        name: p.detach().clone()
+                        for name, p in model.named_parameters()
+                        if p.requires_grad
+                    }
+
+                def _sd_restore(snap):
+                    if not snap:
+                        return
+                    with torch.no_grad():
+                        for name, p in model.named_parameters():
+                            saved = snap.get(name)
+                            if saved is not None and saved.shape == p.shape:
+                                p.data.copy_(saved)
+
+                # ---- pre/post quality eval against the holdout val set ----
+                # Cheap: 4 batches only, so the cycle stays sub-second
+                # at the K=20 cadence. Reduces to NaN signal when the
+                # iter is empty (verify() then fails-open KEEP).
+                def _sd_eval():
+                    try:
+                        return float(evaluate(
+                            model, iter(val_ds_holdout),
+                            n_batches=4, plif_cells=None,
+                        ))
+                    except Exception as _exc:
+                        _log(f"[self-drive] eval failed: {_exc!r}")
+                        return float("nan")
+
+                def _sd_baseline_loss():
+                    # Use the accumulated CE for this outer step. We
+                    # don't reach for ``_step_ce`` here because that
+                    # only gets computed below the self-drive block;
+                    # ``accum_ce`` is already final at this point in
+                    # the loop (inner accum loop has broken).
+                    _denom = max(1, accum_done)
+                    if _lazy_host_sync_accum:
+                        try:
+                            return float(accum_ce_t.detach().item()) / _denom
+                        except Exception:
+                            return 5.0
+                    return float(accum_ce) / _denom if accum_ce > 0 else 5.0
+
+                try:
+                    _sd_summary = self_drive_coord.cycle(
+                        outer_step=step,
+                        idle=_idle,
+                        run_inner_fn=_sd_run_inner,
+                        baseline_loss_fn=_sd_baseline_loss,
+                        snapshot_fn=_sd_snapshot,
+                        restore_fn=_sd_restore,
+                        eval_fn=_sd_eval,
+                    )
+                    if _sd_summary is not None:
+                        _log(
+                            f"[self-drive] cycle done step={step} "
+                            f"inner={_sd_summary['n_inner_steps']} "
+                            f"kept={_sd_summary['n_kept']} "
+                            f"elapsed_ms={(time.time()-_sd_cycle_t)*1000.0:.1f}"
+                        )
+                except Exception as _exc:
+                    _log(f"[self-drive] cycle FAILED step={step}: {_exc!r}")
 
         # Perf audit 2026-05-02 (RECO #1): when --cuda-sync-every N>1, only
         # call torch.cuda.synchronize() every N global steps instead of

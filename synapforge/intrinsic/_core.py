@@ -32,7 +32,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .module import Module
+from ..module import Module
 
 # ---------------------------------------------------------------------------
 # 1. FreeEnergySurprise (ICM-style forward model)
