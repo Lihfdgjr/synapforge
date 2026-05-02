@@ -53,3 +53,8 @@ runtime.py.bak
 # real numbers here, but smoke artefacts shouldn't enter git
 bench_results/
 .claude/
+
+# native_demo MVP -- run-output JSON is regenerated every invocation,
+# keep the source files but not the smoke artefacts (see docs/NATIVE_DEMO.md)
+synapforge/_native_demo_results.json
+synapforge/_native_demo_torch_results.json
