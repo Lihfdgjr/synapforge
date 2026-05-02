@@ -154,6 +154,47 @@ ordering). Mitigations: keep `torch.no_grad()` semantics by default in
 `synapforge.autograd`, mirror the existing `inputs.requires_grad`
 predicate logic.
 
+### Phase 4 — partial shipment (2026-05-02)
+
+**Status:** SEW + sigmoid-gate fused fwd+bwd shipped on branch
+`feature/triton-block-bwd-closed-form`. See
+`synapforge/backends/triton_block_kernel_bwd.py` and the audit at
+`docs/TRITON_BLOCK_BACKWARD_AUDIT.md`.
+
+What landed:
+* Closed-form fused Triton fwd+bwd for the elementwise tail of
+  `HybridBlock`: `s + h` (SEW) + `sigmoid(gate_pre)` + `syn_out * gate`.
+  Three torch kernel launches collapsed into ONE Triton launch fwd
+  and ONE Triton launch bwd.
+* Plugged in via `torch.autograd.Function` (`SEWSigmoidGateFn`) — the
+  rest of the autograd graph (Linear, SparseSynapse, RMSNorm) is
+  unchanged, so this is a strict perf-only swap.
+* Numerical correctness verified to **rel-err < 1e-7** on cpu fallback
+  path (exact through SEW-add and `grad_syn = gg * gate`; 8.87e-7
+  noise on `grad_gate_pre` due to fp32 round-trip).
+* Benchmark `scripts/bench_hybrid_block.py` with shape (B=24, T=256,
+  D=1280) defers cuda-side numbers to the rental (local Windows is
+  CPU-only torch).
+* CfC + PLIF + reset bwd was already Triton-fused
+  (`fused_lnn_snn_block_bwd_kernel` in
+  `synapforge/backends/triton_block_kernel.py`) — this PR documents
+  that and reuses it. No change to that kernel.
+
+What's left for full Phase 4:
+* RMSNorm Triton bwd (LOW priority — `RMSNorm.weight` grad and
+  `dY/dx` already cuBLAS-bound for d=1280).
+* SwiGLU Triton bwd (LOW priority — three cuBLAS matmuls dominate;
+  fusing the silu+mul into Triton beats nothing if matmuls stay torch).
+* `synapforge.autograd.Function` — replace
+  `torch.autograd.Function` parent class. Currently `SEWSigmoidGateFn`
+  inherits from `torch.autograd.Function`; the migration is a 1-line
+  parent-class swap once Phase 4 generic infra lands.
+* Allocation pooling (`synapforge.cuda.MemPool`) — separate work item,
+  see Risk Register §2.
+
+Estimated remaining for full Phase 4: 2 weeks (`synapforge.autograd`
+infra + RMSNorm/SwiGLU Triton bwd).
+
 ### Phase 5 — drop `import torch` from student path (final, ~1 week)
 
 Once Phases 1-4 land:
@@ -306,7 +347,7 @@ This catches drift after the migration completes.
 | 2     | `synapforge.module.Module` finish        | 1 wk     | **SHIPPED 2026-05-02** |
 | 2.5   | safetensors ckpt migration               | 0.5 wk   | planned  |
 | 3     | `synapforge.tensor` thin wrapper         | 1-2 wks  | planned  |
-| 4     | `synapforge.autograd`                    | 3-4 wks  | planned  |
+| 4     | `synapforge.autograd`                    | 3-4 wks  | partial 2026-05-02 (SEW+gate fused bwd shipped) |
 | 5     | drop `import torch` from student path    | 1 wk     | planned  |
 
 Total: ~7-9 calendar weeks for a one-engineer migration.
