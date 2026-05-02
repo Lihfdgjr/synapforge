@@ -1043,6 +1043,30 @@ def _parse_args() -> argparse.Namespace:
                         "exp_avg_sq); fused-adamw cold-starts moments on "
                         "v1 ckpt warmstart (one-step penalty, then "
                         "bit-exact).")
+    p.add_argument("--synapforge-adamw", action="store_true", default=False,
+                   dest="synapforge_adamw",
+                   help="Phase 1 of the torch-replacement roadmap (see "
+                        "docs/TORCH_REPLACEMENT_PLAN.md). When ON and no "
+                        "plasticity sources are wired, build "
+                        "synapforge.optim.AdamW (pure-python AdamW, NO "
+                        "torch.optim inheritance, NO fused kernel) "
+                        "instead of torch.optim.AdamW or "
+                        "PlasticityAwareAdamW. Numerics match "
+                        "torch.optim.AdamW(fused=True) within 1e-5 "
+                        "(see tests/optim/test_synapforge_adamw.py). "
+                        "Step time is ~2-3 % slower than fused-adamw "
+                        "(bandwidth-bound, no fused kernel) -- "
+                        "intentional Phase 1 trade-off; Phase 4 of the "
+                        "roadmap will dispatch this same loop to a "
+                        "Triton kernel. Mutually exclusive with "
+                        "--fused-adamw; if both are passed, "
+                        "--synapforge-adamw wins (we are migrating off "
+                        "torch.optim, not towards it). Auto-falls back "
+                        "to PlasticityAwareAdamW if any param is "
+                        "plasticity-tagged (correctness > Phase 1 "
+                        "milestone). Default OFF (current default = "
+                        "PlasticityAwareAdamW unless --fused-adamw is "
+                        "set).")
     p.add_argument("--skip-warmstart-eval-N", type=int, default=0,
                    dest="skip_warmstart_eval_n",
                    help="when warmstarting from a known-good ckpt, skip "
@@ -1905,8 +1929,13 @@ def main() -> int:
     # plasticity sources mixed in) forces the safe PlasticityAwareAdamW
     # fallback so STDP / Hebb gradients are not silently dropped.
     _use_fused_adamw = bool(getattr(args, "fused_adamw", False))
-    _fused_adamw_safe = True
-    if _use_fused_adamw:
+    _use_synapforge_adamw = bool(getattr(args, "synapforge_adamw", False))
+    _adamw_safe = True
+    # Same plasticity-source safety check applies to both --fused-adamw
+    # and --synapforge-adamw paths: if ANY param is tagged with a
+    # non-bp grad source we fall back to PlasticityAwareAdamW so the
+    # plasticity stream is not silently dropped.
+    if _use_fused_adamw or _use_synapforge_adamw:
         _bad_param_names: list[str] = []
         for pname, p in model.named_parameters():
             if not p.requires_grad:
@@ -1915,18 +1944,37 @@ def main() -> int:
             if sources is None:
                 continue
             if list(sources) != ["bp"]:
-                _fused_adamw_safe = False
+                _adamw_safe = False
                 _bad_param_names.append(f"{pname}={list(sources)}")
-        if not _fused_adamw_safe:
-            _log("[fused-adamw] plasticity sources detected on "
+        if not _adamw_safe:
+            _log("[plain-adamw] plasticity sources detected on "
                  f"{len(_bad_param_names)} params (e.g. "
                  f"{_bad_param_names[:3]!r}); falling back to "
                  "PlasticityAwareAdamW for correctness.")
-        elif DEVICE != "cuda":
-            _log("[fused-adamw] requires CUDA; falling back to "
-                 "PlasticityAwareAdamW.")
-            _fused_adamw_safe = False
-    if _use_fused_adamw and _fused_adamw_safe:
+    if _use_synapforge_adamw and _adamw_safe:
+        # Phase 1 of the torch-replacement roadmap: pure-python AdamW
+        # (no torch.optim inheritance). See docs/TORCH_REPLACEMENT_PLAN.md.
+        # Wins over --fused-adamw: gets us out of torch.optim. Loses to
+        # --fused-adamw: ~2-3 % slower step (no fused CUDA kernel).
+        # Phase 4 of the roadmap will dispatch this same code path to a
+        # Triton kernel, closing the perf gap without bringing torch.optim
+        # back. Mutually exclusive with --fused-adamw (synapforge wins).
+        from synapforge.optim import AdamW as _SynapforgeAdamW
+        optim = _SynapforgeAdamW(
+            [p for p in model.parameters() if p.requires_grad],
+            lr=peak_lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=WEIGHT_DECAY,
+        )
+        if _use_fused_adamw:
+            _log("[synapforge-adamw] both --synapforge-adamw and "
+                 "--fused-adamw passed; --synapforge-adamw wins (we are "
+                 "migrating off torch.optim, not towards it).")
+        _log("[synapforge-adamw] using synapforge.optim.AdamW "
+             "(pure-python, NO torch.optim inheritance; ms_param_table "
+             "absent so plasticity ticks rely on model-side state).")
+    elif _use_fused_adamw and _adamw_safe and DEVICE == "cuda":
         # Vanilla fused AdamW. WEIGHT_DECAY mirrors build_optimizer's default.
         optim = torch.optim.AdamW(
             [p for p in model.parameters() if p.requires_grad],
@@ -1939,6 +1987,10 @@ def main() -> int:
         _log("[fused-adamw] using torch.optim.AdamW(fused=True) "
              "(ms_param_table absent; plasticity ticks must rely on "
              "model-side state, not optim.ms_param_table).")
+    elif _use_fused_adamw and _adamw_safe and DEVICE != "cuda":
+        _log("[fused-adamw] requires CUDA; falling back to "
+             "PlasticityAwareAdamW.")
+        optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     else:
         optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     print(f"optimizer: {type(optim).__name__} lr={peak_lr} wd={WEIGHT_DECAY}")
@@ -1957,9 +2009,13 @@ def main() -> int:
             if isinstance(_ck, dict) and "optim_state" in _ck:
                 _ck_state = _ck["optim_state"]
                 _state_layout = _detect_optim_state_layout(_ck_state)
+                # synapforge.optim.AdamW uses the same exp_avg/exp_avg_sq
+                # state layout as torch.optim.AdamW, so it lives in the
+                # ``torch_adamw`` bucket for layout-compat purposes.
+                from synapforge.optim import AdamW as _SfAdamW  # noqa: PLC0415
                 _running_layout = (
                     "torch_adamw"
-                    if isinstance(optim, torch.optim.AdamW)
+                    if isinstance(optim, (torch.optim.AdamW, _SfAdamW))
                     else "plasticity_adamw"
                 )
                 if _state_layout != "unknown" and _state_layout != _running_layout:
