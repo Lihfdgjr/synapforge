@@ -24,12 +24,34 @@ torch = pytest.importorskip("torch")
 from synapforge.data import AsyncTokenStream, ParquetTokenStream  # noqa: E402
 
 
+class _StubTokenizer:
+    """Minimal tokenizer that maps row "rowNNNNN" to a deterministic
+    integer sequence. The chunk-window logic (slide ``seq_len+1`` ids
+    after appending EOT per row) yields ``[i, i+1, ..., i+seq_len-1,
+    EOT_ID]`` per row.
+    """
+    SEQ_LEN = 8
+
+    def encode(self, s: str, add_special_tokens: bool = False) -> list[int]:
+        n = int(s[3:])
+        return [(n + j) % 1000 for j in range(self.SEQ_LEN)]
+
+
 class _TokenStreamHarness:
     """Stand-in that exposes the surface ``AsyncTokenStream`` reaches
     into on the inner ``ParquetTokenStream``: ``seq_len``,
     ``batch_size``, ``eot_id``, ``_tok``, ``_iter_text_rows``,
     ``_iter_token_chunks``, ``_build_batch``, ``pin_memory``.
+
+    For bit-exact comparison both the async-pipeline path (calls
+    ``_iter_text_rows`` + tokenizer + EOT) and the legacy
+    ``_iter_sync`` path (calls ``_iter_token_chunks`` directly) MUST
+    produce identical chunks. The harness aligns both: row i ->
+    ``[i, i+1, ..., i+seq_len-1, EOT_ID]``.
     """
+
+    EOT_ID = 50256
+    SEQ_LEN = 8
 
     def __init__(
         self,
@@ -38,49 +60,35 @@ class _TokenStreamHarness:
         batch_size: int = 4,
         seed: int = 42,
     ) -> None:
+        assert seq_len == self.SEQ_LEN
         self.seq_len = int(seq_len)
         self.batch_size = int(batch_size)
         self._n_chunks = int(n_chunks)
-        self.eot_id = 50256  # unused by harness but required
+        self.eot_id = self.EOT_ID
         self._tok = _StubTokenizer()
         self._seed = int(seed)
         self.pin_memory = False  # required by ParquetTokenStream._build_batch
 
     def _iter_text_rows(self) -> Iterator[str]:
-        # Deterministic: row i is "row<i>". The tokenizer emits a
-        # length-(seq_len+1) chunk per row so each row maps to exactly
-        # one window. (We ignore EOT injection here; the real path
-        # adds it but our windows already align by construction.)
+        # Row i -> "rowiiiiii"; tokenizer emits ``[i, i+1, ...,
+        # i+seq_len-1]``. The async code appends EOT_ID giving one
+        # length-(seq_len+1) chunk per row: ``[i, ..., i+seq_len-1,
+        # EOT_ID]``.
         for i in range(self._n_chunks):
             yield f"row{i:05d}"
 
     def _iter_token_chunks(self) -> Iterator[list[int]]:
-        # Same deterministic content as test_dataloader_prefetch.
+        # Mirror the async path exactly: row i -> ``[i, i+1, ...,
+        # i+seq_len-1, EOT_ID]``. ``ParquetTokenStream._iter_sync``
+        # calls this method, so the legacy reference yields the same
+        # chunks as the async path.
         for i in range(self._n_chunks):
-            yield [(i + j) % 1000 for j in range(self.seq_len + 1)]
+            yield [(i + j) % 1000 for j in range(self.SEQ_LEN)] + [self.EOT_ID]
 
     # Bind production methods. Use ``__get__`` so ``self`` is the
     # harness, not a ParquetTokenStream instance. Mirrors the pattern
     # in test_dataloader_prefetch.py.
     _build_batch = ParquetTokenStream._build_batch
-
-
-class _StubTokenizer:
-    """Minimal tokenizer that maps each row "rowNNNNN" to a fixed
-    length-(seq_len+1) integer sequence derived from N. Mirrors
-    ``ParquetTokenStream._iter_token_chunks``'s contract enough that
-    the bit-exact test compares apples to apples.
-    """
-    def encode(self, s: str, add_special_tokens: bool = False) -> list[int]:
-        # Strip the "row" prefix and convert NNNNN -> int.
-        n = int(s[3:])
-        # Emit seq_len ids (seq_len from harness is 8; we hardcode 9
-        # here matching the test's seq_len=8 so seq_len+1=9-window plus
-        # eot=10 -> 1 chunk per row exactly. We avoid the +eot
-        # mismatch by NOT appending eot here; the inner code does.
-        # Length = 8 (the seq_len) so 1 row + 1 eot = 9 ids -> exactly
-        # one length-(seq_len+1)=9 window.
-        return [(n + j) % 1000 for j in range(8)]
 
 
 def _drain(stream, n_batches: int) -> list[tuple[torch.Tensor, torch.Tensor]]:

@@ -226,9 +226,11 @@ def _run_combo(
             optim.step()
         else:
             optim.zero_grad(set_to_none=True)
-            with torch.amp.autocast(device_type=args.device,
-                                    dtype=dtype,
-                                    enabled=args.device == "cuda"):
+            with torch.amp.autocast(
+                device_type=args.device,
+                dtype=dtype if args.device == "cuda" else torch.bfloat16,
+                enabled=(args.device == "cuda" and dtype != torch.float32),
+            ):
                 logits = model(x)
                 loss = torch.nn.functional.cross_entropy(
                     logits.reshape(-1, logits.size(-1)).float(),
@@ -252,9 +254,11 @@ def _run_combo(
             optim.step()
         else:
             optim.zero_grad(set_to_none=True)
-            with torch.amp.autocast(device_type=args.device,
-                                    dtype=dtype,
-                                    enabled=args.device == "cuda"):
+            with torch.amp.autocast(
+                device_type=args.device,
+                dtype=dtype if args.device == "cuda" else torch.bfloat16,
+                enabled=(args.device == "cuda" and dtype != torch.float32),
+            ):
                 logits = model(x)
                 loss = torch.nn.functional.cross_entropy(
                     logits.reshape(-1, logits.size(-1)).float(),
