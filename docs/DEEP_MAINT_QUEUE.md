@@ -775,6 +775,38 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - [ ] **Status**: pending
 - **Steps**: sweep block size 32/64/128 × warps 4/8 → write best config.
 
+## T9.1 — Synap-1 Pro 300M launch (post Run 3o completion)
+- [ ] **Status**: STAGED — script + plan landed, awaiting trigger.
+- **Trigger**: ALL of the following:
+  1. Run 3o on `/workspace/runs/v24h_qwen3` has terminated (success or kill).
+  2. A800 80GB rental has >= 8 GPU-h on the clock.
+  3. `configs/synap1.py` SYNAP1_PRO config (sister agent) is merged into `main`.
+  4. `/workspace` has >= 50 GB free for ~50 ckpts at ~1.2 GB each.
+- **Steps**:
+  1. Read `docs/SYNAP1_PRO_PLAN.md` end-to-end (capacity math, KD math, abort criteria).
+  2. Smoke `bash -n scripts/launch_synap1_pro.sh` on rental.
+  3. `mkdir -p /workspace/runs/synap1_pro`.
+  4. Invoke `bash scripts/launch_synap1_pro.sh` -- it `setsid`+`disown`s and
+     returns in <1s. PID echoed to stdout.
+  5. Tail `train_synap1_pro.log` for 5 min to confirm step 0 loaded
+     (param count ~300M, no NaN, no OOM, no spectral-norm state-dict error).
+  6. Update `docs/PROGRESS.md` §3 with "Run 3p (Synap-1 Pro 300M from-scratch)"
+     entry; add to MASTER_PLAN.md §7 active runs.
+  7. Schedule a 1h-from-now wakeup to verify train ce < 9.5 (warmup OK).
+- **Abort during run** (per SYNAP1_PRO_PLAN.md §7):
+  - step <500: any NaN -> kill, investigate kernel.
+  - step 1000-2000: train ce > 9.5 -> kill, relaunch at lr 1e-4.
+  - step 5000-10000: val ppl > 5x train ppl -> Run-3c-class drift, kill.
+  - step 20000+: val ppl plateau within 1% over 3000 steps and >= 500 -> early-stop, save best.
+- **OOM fallback**: drop `--batch-size 32` to 24 first; if still OOM, add
+  `--grad-accum-steps 2` (waits for trainer support, currently NOT wired).
+- **Files**:
+  - `scripts/launch_synap1_pro.sh` (launch script with full rationale comments)
+  - `docs/SYNAP1_PRO_PLAN.md` (capacity/KD/budget/risks plan)
+  - `configs/synap1.py` (SYNAP1_PRO config, sister-agent PR)
+- **Commit template**:
+  `auto-T9.1: Synap-1 Pro 300M launched -- pid=<PID>, run dir /workspace/runs/synap1_pro, val target ppl <= 250 by step 35000`.
+
 ---
 
 ## Rules summary
