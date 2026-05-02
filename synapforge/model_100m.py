@@ -164,6 +164,16 @@ class HybridBlock(Module):
         # get the dense path back.  Default False = legacy synapse.
         sparse_spike_synapse: bool = False,
         sparse_spike_threshold: float = 0.30,
+        # 2026-05-02 native/spike pack -- 16x HBM bandwidth saving on
+        # the spike->synapse boundary by storing spikes as bit-packed
+        # uint16 (16 spikes per word) and feeding the Triton matmul
+        # kernel without unpacking to HBM.  Orthogonal to sparse_spike_
+        # synapse (which uses an EmbeddingBag row-gather): this one is
+        # a memory-traffic optimisation; the synapse compute is still
+        # a dense GEMM, just over a smaller activation tile.  Auto-
+        # falls-back to dense via the same threshold.  Default False.
+        # See synapforge.native.spike.
+        packed_spikes: bool = False,
         # 2026-05-02 math-simplification pack: --rfold dispatches the
         # LiquidCell internal time-axis loop to a chunked closed-form
         # parallel scan (synapforge.cells.rfold.liquid_rfold). Numerically
@@ -232,6 +242,9 @@ class HybridBlock(Module):
                 f"sparse_spike_threshold must be in [0, 1], "
                 f"got {sparse_spike_threshold}"
             )
+        # 2026-05-02 native/spike pack -- 16x HBM bandwidth saving via
+        # bit-packed uint16 spike storage (synapforge.native.spike).
+        self.packed_spikes = bool(packed_spikes)
         # 2026-05-02 math-simplification pack -- top-K activation gate.
         self.kwta_k = int(kwta_k)
         if self.kwta_k < 0:
@@ -314,7 +327,26 @@ class HybridBlock(Module):
         # falls-back to the dense path when measured density >=
         # ``sparse_spike_threshold`` so this branch is safe on
         # dead/saturated PLIF too.
-        if self.sparse_spike_synapse:
+        if self.packed_spikes:
+            # 2026-05-02 native/spike: bit-packed uint16 spike->synapse
+            # path.  16x HBM bandwidth saving on the spike branch (the
+            # spike tile loaded into the matmul shrinks 16x).  Same
+            # density auto-fallback as --sparse-spike-synapse.  Dormant
+            # under dead PLIF (density ~ 0): saves bandwidth only after
+            # PLIF revives.  See synapforge.native.spike.torch_glue.
+            from .native.spike.torch_glue import packed_spike_linear
+            if self.sew_shortcut:
+                synapse_out = packed_spike_linear(
+                    s, h, self.synapse,
+                    density_threshold=self.sparse_spike_threshold,
+                )
+            else:
+                zero_h = torch.zeros_like(s, dtype=h.dtype)
+                synapse_out = packed_spike_linear(
+                    s, zero_h, self.synapse,
+                    density_threshold=self.sparse_spike_threshold,
+                )
+        elif self.sparse_spike_synapse:
             from .kernels.sparse_spike_matmul import sparse_spike_linear
             if self.sew_shortcut:
                 # spike_input == s + h; pass s and h separately so the
@@ -440,6 +472,12 @@ class SynapForge100M(Module):
         # in every HybridBlock synapse path.  Default False = legacy
         # dense GEMM.  Auto-falls-back to dense when measured spike
         # density >= threshold (default 30%).
+        packed_spikes: bool = False,
+        # 2026-05-02 native/spike pack -- 16x HBM bandwidth saving on
+        # the spike->synapse boundary by storing spikes as bit-packed
+        # uint16 (16 spikes per word).  Orthogonal to sparse_spike_
+        # synapse (compute-side opt vs memory-traffic opt).  Default
+        # False.  See synapforge.native.spike.
         rfold: bool = False,
         rfold_chunk: int = 16,
         # 2026-05-02 math-simplification pack -- closed-form parallel scan
@@ -474,6 +512,7 @@ class SynapForge100M(Module):
         self.sew_shortcut = bool(sew_shortcut)
         self.sparse_spike_synapse = bool(sparse_spike_synapse)
         self.sparse_spike_threshold = float(sparse_spike_threshold)
+        self.packed_spikes = bool(packed_spikes)
         self.rfold = bool(rfold)
         self.rfold_chunk = int(rfold_chunk)
         self.kwta_k = int(kwta_k)
@@ -512,6 +551,7 @@ class SynapForge100M(Module):
                         sew_shortcut=self.sew_shortcut,
                         sparse_spike_synapse=self.sparse_spike_synapse,
                         sparse_spike_threshold=self.sparse_spike_threshold,
+                        packed_spikes=self.packed_spikes,
                         rfold=self.rfold,
                         rfold_chunk=self.rfold_chunk,
                         kwta_k=self.kwta_k)
@@ -722,6 +762,7 @@ def build_synapforge_100m(
     sew_shortcut: bool = False,
     sparse_spike_synapse: bool = False,
     sparse_spike_threshold: float = 0.30,
+    packed_spikes: bool = False,
     rfold: bool = False,
     rfold_chunk: int = 16,
     kwta_k: int = 0,
@@ -744,6 +785,7 @@ def build_synapforge_100m(
         sew_shortcut=sew_shortcut,
         sparse_spike_synapse=sparse_spike_synapse,
         sparse_spike_threshold=sparse_spike_threshold,
+        packed_spikes=packed_spikes,
         rfold=rfold,
         rfold_chunk=rfold_chunk,
         kwta_k=kwta_k,

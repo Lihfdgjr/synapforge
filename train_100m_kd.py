@@ -991,6 +991,22 @@ def _parse_args() -> argparse.Namespace:
                         "empirical crossover at d=1280 on A800 80GB). "
                         "Set to 1.0 to force-always-sparse, 0.0 to "
                         "force-always-dense (debug only).")
+    p.add_argument("--packed-spikes", action="store_true", default=False,
+                   dest="packed_spikes",
+                   help="Bit-pack the PLIF spike train into uint16 slots "
+                        "(16 spikes per word) before the synapse matmul "
+                        "(2026-05-02 native/spike). This is LNN+SNN-specific: "
+                        "spikes are binary {0,1}, so 15 of 16 fp16 bits are "
+                        "wasted -- packing gives 16x memory + 16x HBM "
+                        "bandwidth savings at the spike->synapse boundary. "
+                        "At B=48 T=256 d=1280 layers=16 that's ~94 MB HBM "
+                        "traffic saved per step (~60us at 1.5 TB/s). Auto "
+                        "falls-back to dense GEMM above --sparse-spike-"
+                        "threshold density. Dormant under dead PLIF "
+                        "(current Run 7 density ~ 0): the flag is safe-on "
+                        "but only saves bandwidth once spikes wake up. See "
+                        "synapforge.native.spike and "
+                        "docs/NATIVE_SPIKE_PACKING.md.")
     # ---- Run 7 integration: math-simplification flags (2026-05-02) ------
     # The model_100m.py side already has rfold/rfold_chunk/kwta_k params
     # (merged from feature/math-simplification). Run 7 launcher uses
@@ -2042,6 +2058,7 @@ def main() -> int:
         sew_shortcut=bool(args.sew_shortcut),
         sparse_spike_synapse=bool(getattr(args, "sparse_spike_synapse", False)),
         sparse_spike_threshold=float(getattr(args, "sparse_spike_threshold", 0.30)),
+        packed_spikes=bool(getattr(args, "packed_spikes", False)),
         # Run 7 integration (2026-05-02): math-simplification model knobs.
         rfold=bool(getattr(args, "rfold", False)),
         rfold_chunk=int(getattr(args, "rfold_chunk", 16)),
@@ -2054,6 +2071,18 @@ def main() -> int:
         print(f"[sparse-spike] synapse path enabled "
               f"(threshold={float(getattr(args, 'sparse_spike_threshold', 0.30)):.2f}); "
               f"auto-fallback to dense above threshold spike density")
+    if bool(getattr(args, "packed_spikes", False)):
+        # The packed-spike path is wired through the model via the same
+        # density auto-fallback as --sparse-spike-synapse. Below threshold
+        # density the spike->synapse contribution goes through the
+        # bit-packed Triton kernel (16x HBM bandwidth saving on that
+        # branch); above threshold we route through the existing dense
+        # path. Dormant when PLIF is dead (density ~ 0): bandwidth saved
+        # only after PLIF revives. See synapforge.native.spike.
+        print(f"[packed-spikes] bit-packed spike->synapse path enabled "
+              f"(threshold={float(getattr(args, 'sparse_spike_threshold', 0.30)):.2f}); "
+              f"requires Triton + CUDA. Dormant under dead PLIF; ~16x HBM "
+              f"bandwidth saving on synapse branch once spikes wake up.")
     if bool(getattr(args, "rfold", False)):
         print(f"[rfold] R-fold closed-form scan enabled "
               f"(chunk={int(getattr(args, 'rfold_chunk', 16))}); "
