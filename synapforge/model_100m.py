@@ -39,23 +39,43 @@ import torch.nn.functional as F
 
 from .cells.liquid import LiquidCell
 from .cells.synapse import SparseSynapse
-from .module import Module
+# Phase 2 of the torch-replacement roadmap (docs/TORCH_REPLACEMENT_PLAN.md):
+# `synapforge.module.Module` is the canonical base class for every block in
+# this file, and `synapforge.module.Parameter` replaces ad-hoc
+# `nn.Parameter` constructions for the parameters owned by our own classes
+# (RMSNorm, SwiGLU, SynapForge100M.pos_embed, optional hp_lambda). The
+# `nn.Linear` / `nn.Embedding` / `nn.LayerNorm` modules from torch keep
+# their own internal `nn.Parameter` until Phase 3 introduces drop-in
+# replacements (`synapforge.module.Linear`, etc).
+from .module import Module, Parameter
 from .surrogate import PLIFCell
 from .thinking.coconut import LatentThinker
 
 
-def _swiglu_ffn(d: int, ratio: float) -> nn.Module:
-    """SwiGLU FFN: silu(W_gate x) * W_up x -> W_down. 3 matrices."""
+def _swiglu_ffn(d: int, ratio: float) -> Module:
+    """SwiGLU FFN: silu(W_gate x) * W_up x -> W_down. 3 matrices.
+
+    Returns a :class:`synapforge.module.Module` (Phase 2 — was
+    ``nn.Module`` pre-Phase-2). ``nn.Module`` callers continue to
+    work because ``synapforge.module.Module`` is a subclass.
+    """
     h = int(d * ratio)
     return _SwiGLU(d, h)
 
 
-class _RMSNorm(nn.Module):
-    """Root-mean-square layer norm (no bias, affine scale only)."""
+class _RMSNorm(Module):
+    """Root-mean-square layer norm (no bias, affine scale only).
+
+    Phase 2 base-class swap: was ``nn.Module``, now
+    ``synapforge.module.Module``. Bit-exact identical behaviour;
+    ``state_dict`` keys (``weight``) unchanged. The ``weight``
+    parameter uses :class:`synapforge.module.Parameter` for the same
+    bit-exact-but-typed-correctly reason.
+    """
 
     def __init__(self, d: int, eps: float = 1e-6) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(d))
+        self.weight = Parameter(torch.ones(d))
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -63,7 +83,18 @@ class _RMSNorm(nn.Module):
         return x * rms * self.weight
 
 
-class _SwiGLU(nn.Module):
+class _SwiGLU(Module):
+    """SwiGLU FFN: ``silu(W_gate x) * W_up x -> W_down``.
+
+    Phase 2 base-class swap: was ``nn.Module``, now
+    ``synapforge.module.Module``. ``nn.Linear`` submodules are kept
+    as-is — they bring their own ``nn.Parameter`` weights, which our
+    ``Module`` parameter-tracking sees through transparently because
+    ``Module`` extends ``nn.Module``. Phase 3 of the torch-replacement
+    plan introduces ``synapforge.module.Linear``; until then the
+    Linear layers stay on torch.
+    """
+
     def __init__(self, d: int, h: int) -> None:
         super().__init__()
         self.w_gate = nn.Linear(d, h, bias=False)
@@ -174,7 +205,9 @@ class HybridBlock(Module):
             with torch.no_grad():
                 self.hp_lowpass.weight.fill_(1.0 / float(k))
                 self.hp_lowpass.bias.zero_()
-            self.hp_lambda = nn.Parameter(
+            # Phase 2: use synapforge.module.Parameter (subclass of
+            # nn.Parameter; state-dict bit-equivalent).
+            self.hp_lambda = Parameter(
                 torch.full((self.d,), float(high_pass_residual_weight))
             )
         else:
@@ -331,7 +364,12 @@ class SynapForge100M(Module):
 
         self.tok_embed = nn.Embedding(vocab, d)
         nn.init.normal_(self.tok_embed.weight, std=0.02)
-        self.pos_embed = nn.Parameter(torch.zeros(max_seq, d))
+        # Phase 2: use synapforge.module.Parameter for the
+        # block-owned positional embedding. ``nn.Embedding`` keeps its
+        # own ``nn.Parameter`` weights for now — they're equivalent
+        # under our state-dict contract (Phase 3 introduces
+        # ``synapforge.module.Embedding``).
+        self.pos_embed = Parameter(torch.zeros(max_seq, d))
         nn.init.normal_(self.pos_embed, std=0.02)
 
         self.blocks = nn.ModuleList(

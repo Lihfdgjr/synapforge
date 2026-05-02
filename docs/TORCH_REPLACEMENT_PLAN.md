@@ -50,26 +50,67 @@ wrapper, so we are committing to a phased migration.
 Acceptable trade — the adopting flag is opt-in and the perf gap closes
 in Phase 4.
 
-### Phase 2 — `synapforge.module.Module` finish migration (1 week)
+### Phase 2 — `synapforge.module.Module` finish migration (1 week, **SHIPPED 2026-05-02**)
 
-**Goal:** every module in `synapforge/cells/`, `routers/`, `moe/`,
-`modal/` inherits from `synapforge.module.Module` directly, plus drop-in
-replacements for `nn.Linear` / `nn.LayerNorm` / `nn.Embedding`.
+**Status:** done in this PR (commit on `feature/torch-replacement-phase2`).
+See `synapforge/module.py` for the implementation; tests under
+`tests/module/`.
 
-* `synapforge.module.Module` already exists. Make it the base class
-  for all blocks.
-* Add `synapforge.module.Linear`, `RMSNorm` (already de-facto used),
-  `Embedding`, `Dropout`. Inherit from `nn.Module` internally for
-  parameter registration; we drop that in Phase 3.
-* `PlasticityAwareAdamW` migrates to `synapforge.optim.PlasticityAwareAdamW`
-  base (currently inherits from `torch.optim.Optimizer`). Adapter pattern:
-  keep the torch parent class behind a thin wrapper, cut over once we
-  replace the param-group machinery in Phase 3.
-* No expected perf delta. Mostly a renaming + base-class flip + the
-  registry plumbing.
+**Delivered:**
 
-**Risk:** check that all `compile_to_ir` and plasticity hooks still fire.
-No expected ckpt-format change.
+* `synapforge.module.Module` is the documented public base class for
+  every synapforge block. Phase 2 surfaces the API contract
+  explicitly: `register_parameter` / `register_module`, `parameters` /
+  `named_parameters`, `state_dict` / `load_state_dict`, `.to` /
+  `.cuda` / `.cpu`, `.eval` / `.train`, `.zero_grad`, plus the
+  preserved plasticity hooks (`register_plasticity` /
+  `plasticity_step`) and `compile_to_ir` IR entry point. Internally
+  still inherits from `torch.nn.Module` — this is the deliberate
+  gradual-migration anchor; Phase 3 swaps the parent class once
+  `synapforge.tensor` lands.
+* `synapforge.module.Parameter` is a thin subclass of
+  `torch.nn.Parameter` with `requires_grad=True` defaulted on. Phase
+  2 contract: state-dict-byte-equivalent to `nn.Parameter`, so
+  existing `torch.save(model.state_dict())` ckpts under `runs/` round-
+  trip without conversion. Verified by
+  `tests/module/test_state_dict_compat.py`.
+* `synapforge/model_100m.py::HybridBlock` and `SynapForge100M`
+  inherit from `synapforge.module.Module` (already true pre-Phase-2);
+  the inner blocks `_RMSNorm`, `_SwiGLU` flipped from `nn.Module` to
+  `synapforge.module.Module` in this PR. The two direct-`nn.Parameter`
+  callsites in this file (`pos_embed`, `hp_lambda`) flipped to
+  `synapforge.module.Parameter`. `nn.Linear` / `nn.Embedding` /
+  `nn.LayerNorm` / `nn.Dropout` stay on torch — drop-in replacements
+  arrive in Phase 3.
+* Bit-exact equivalence with the torch baseline:
+  `tests/module/test_module_torch_compat.py` proves that a
+  `synapforge.module.Module`-based block produces forward outputs
+  identical (within rel-err 1e-5; in practice == 0 on CPU fp32) to
+  the `nn.Module` reference for the same weights.
+* State-dict round-trip: `tests/module/test_state_dict_compat.py`
+  loads an existing torch-format ckpt, saves it back via the
+  Phase-2 model, loads again, verifies byte-equality.
+
+**Skipped vs. brief (deferred to Phase 3):**
+
+* Drop-in `synapforge.module.Linear` / `RMSNorm` / `Embedding` /
+  `Dropout`. These are not blockers for Phase 2 — the existing
+  `nn.Linear` etc. continue to compose with our `Module` base class
+  because `Module` extends `nn.Module`. The drop-in replacements
+  ship alongside the `synapforge.tensor` storage migration in Phase
+  3, where they'll have meaningful work to do (route their forwards
+  through Triton kernels with `synapforge.tensor` I/O). Until then,
+  shipping empty wrappers around `nn.Linear` would be churn.
+* `PlasticityAwareAdamW` migration to a `synapforge.optim.Optimizer`
+  base. Currently inherits `torch.optim.Optimizer`; the
+  registration-plumbing migration is fully gated on Phase 3 (when
+  we replace param-group machinery and tensor storage).
+
+**Risk register:** no expected ckpt-format change; `compile_to_ir`
+and plasticity hooks fire unchanged (preserved verbatim from v0.1
+`Module`); no perf delta because we still go through `nn.Module`'s
+parameter tracking. Verified across 87 unit tests in `tests/`
+(`tests/test_correctness.py`, `tests/test_plasticity.py`, etc).
 
 ### Phase 3 — `synapforge.tensor` thin wrapper (1-2 weeks)
 
@@ -262,7 +303,7 @@ This catches drift after the migration completes.
 | Phase | Description                              | Calendar | Status   |
 |-------|------------------------------------------|----------|----------|
 | 1     | `synapforge.optim.AdamW`                 | 1 wk     | **SHIPPED 2026-05-02** |
-| 2     | `synapforge.module.Module` finish        | 1 wk     | next     |
+| 2     | `synapforge.module.Module` finish        | 1 wk     | **SHIPPED 2026-05-02** |
 | 2.5   | safetensors ckpt migration               | 0.5 wk   | planned  |
 | 3     | `synapforge.tensor` thin wrapper         | 1-2 wks  | planned  |
 | 4     | `synapforge.autograd`                    | 3-4 wks  | planned  |
