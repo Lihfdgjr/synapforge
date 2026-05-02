@@ -1436,9 +1436,9 @@ def _load_teacher(name: str, fallback_ckpt: str = "") -> "torch.nn.Module":
                 vocab=151936, d=512, n_layers=10, loop_depth=1,
                 max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
                 use_grad_checkpoint=False,
-            ,
-        plif_tau_init=(2.5 if getattr(args, "plif_tau_init", "unimodal") == "unimodal" else getattr(args, "plif_tau_init", "unimodal")),
-        high_pass_residual_weight=getattr(args, "high_pass_residual_weight", 0.0))
+                plif_tau_init=(2.5 if getattr(args, "plif_tau_init", "unimodal") == "unimodal" else getattr(args, "plif_tau_init", "unimodal")),
+                high_pass_residual_weight=getattr(args, "high_pass_residual_weight", 0.0),
+            )
             t_model.load_state_dict(sd, strict=False)
             t_model.eval()
             for p in t_model.parameters():
