@@ -67,6 +67,39 @@ on CUDA, removing the per-layer overhead. **We expect 50x+ on real
 GPU hardware** but cannot exercise CUDA from this CPU-only test
 environment.
 
+## Current production model: zero plasticity-only params
+
+Important honest finding (2026-05-02): the production `model_100m.py`
+tags `synapse.weight` as `["bp"]` only. `STDPFastWeight` uses a
+`register_buffer("W", ...)` not an `nn.Parameter`. `NeuroMCPHead`'s
+`SparseSynapticLayer.weight` is a Parameter but is NOT tagged with
+any `_sf_grad_source`.
+
+Consequence: today, on a fresh `train_100m_kd.py` run with
+`--stdp-only-plasticity` ON, the dispatcher routes ZERO params
+to STDP. The flag is a NO-OP for current quality, and the headline
+speedup on the existing model is 0%.
+
+To realise the speedup, model code must tag plasticity-only weights:
+
+```python
+# In synapforge/action/neuromcp.py SparseSynapticLayer.__init__:
+self.weight = nn.Parameter(...)
+self.weight._sf_grad_source = ["stdp"]   # was untagged
+```
+
+After tagging, those weights will go through STDP. Tagging both BP
+and STDP (`["bp", "stdp"]`) keeps the current AdamW path; only
+**plasticity-only** tags route through STDP.
+
+Recommended candidates (from `git grep _sf_grad_source`):
+
+* `synapforge/action/neuromcp.py SparseSynapticLayer.weight`
+  — currently untagged, perfect candidate (sparse, spike-driven)
+* `synapforge/mscfc_port.py block.synapse.weight`
+  — currently `["bp", "stdp", "hebb"]`, would need pure-plasticity
+  variant to benefit
+
 ## Wiring into the trainer
 
 Default OFF; opt in with `--stdp-only-plasticity`:
