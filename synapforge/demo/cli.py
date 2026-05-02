@@ -65,6 +65,35 @@ def cmd_bench(args) -> dict:
 
 
 def cmd_chat(args) -> dict:
+    """Synchronous 5 EN + 5 ZH demo (default) OR async kernel mode.
+
+    The synchronous path is the investor-pitch demo: 5 prompts each
+    language, deterministic output, JSON dump.  The async path
+    (``--async`` flag) hands off to ``synapforge.demo.async_chat_cli``,
+    which spins up the live kernel — streaming, listening, cancel,
+    proactive triggers (Task #237; docs/ASYNC_INTERACTIVE_KERNEL.md).
+    """
+    if getattr(args, "async_mode", False):
+        # Hand off to the async chat CLI. Translate the subset of args
+        # we share so the user experience is unified.
+        from .async_chat_cli import main as async_main
+        argv: list[str] = ["--async"]
+        if getattr(args, "proactive", False):
+            argv.append("--proactive")
+        if getattr(args, "interrupt_aggressive", False):
+            argv.append("--interrupt-aggressive")
+        if args.ckpt:
+            argv += ["--ckpt", args.ckpt]
+        if args.tokenizer_path:
+            argv += ["--tokenizer-path", args.tokenizer_path]
+        argv += ["--max-new", str(args.max_new)]
+        argv += ["--temperature", str(args.temperature)]
+        if args.save:
+            argv += ["--save", args.save]
+        if getattr(args, "transcript", None):
+            argv += ["--transcript", args.transcript]
+        rc = async_main(argv)
+        return {"mode": "async", "exit_code": int(rc)}
     from .chat_demo import run_demo
     user_id = getattr(args, "user_id", "default")
     print(f"=== Chat demo (5 EN + 5 ZH) [user_id={user_id}] ===")
@@ -177,6 +206,31 @@ def main(argv: list[str] | None = None) -> int:
         "--coconut-k", dest="coconut_k", type=int, default=0,
         help="Coconut latent thinking depth (arxiv:2412.06769). 0 = OFF "
              "(default). Only active when --rfold-inference is also set.")
+    # Task #237 — async interactive kernel mode. Default OFF preserves
+    # the synchronous 5 EN + 5 ZH investor demo path; passing --async
+    # forwards to synapforge.demo.async_chat_cli (streaming, listening,
+    # interruption, proactive speaking). See docs/ASYNC_INTERACTIVE_KERNEL.md.
+    pc.add_argument(
+        "--async", dest="async_mode", action="store_true", default=False,
+        help="Run the async chat kernel (streaming + listening + "
+             "interruption + proactive). Default off; the legacy 5-prompt "
+             "demo is the default. See docs/ASYNC_INTERACTIVE_KERNEL.md.",
+    )
+    pc.add_argument(
+        "--proactive", dest="proactive", action="store_true", default=False,
+        help="With --async: enable the proactive trigger loop. No-op without --async.",
+    )
+    pc.add_argument(
+        "--interrupt-aggressive", dest="interrupt_aggressive",
+        action="store_true", default=False,
+        help="With --async: lower the interrupt urgency threshold from "
+             "0.95 to 0.7 so the model interrupts more readily.",
+    )
+    pc.add_argument(
+        "--transcript", dest="transcript", default=None,
+        help="With --async: replay a deterministic input transcript "
+             "(JSONL) instead of stdin. Useful for demos / tests.",
+    )
     pc.set_defaults(fn=cmd_chat)
 
     ps = sub.add_parser("stdp", help="STDP self-organization (no backprop, ~2s)")
