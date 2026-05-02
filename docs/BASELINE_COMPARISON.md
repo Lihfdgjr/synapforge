@@ -16,19 +16,35 @@ and [TIMELINE.md](TIMELINE.md).
 
 ## 1. The 11-baseline table (Tier A/B/C, ours + 10 comparators)
 
-| Tier | Model | Params | Train tok | MMLU 5-shot | HellaSwag | GSM8K | Tok/s (A100/A800, fp16) | Streaming inf cost | Continual @ inference |
-|------|-------|-------:|----------:|------------:|----------:|------:|------------------------:|--------------------|-----------------------|
-| **A** | **Synap-1 (us)** | **100M** | **~10B (KD)** | **~30 target** [training Run 3e] | NR (training) | NR (training) | **22k** [INVESTOR.md] | **O(L) CfC, no KV** | **STDP fwd-only** [stdp_fast.py:121] |
+| Tier | Model | Params | Train tok | MMLU 5-shot | HellaSwag | GSM8K | Cross-domain ppl† | Tok/s (A100/A800, fp16) | Streaming inf cost | Continual @ inference |
+|------|-------|-------:|----------:|------------:|----------:|------:|------------------:|------------------------:|--------------------|-----------------------|
+| **A** | **Synap-1 (us)** | **100M** | **~10B (KD)** | **~30 target** [training Run 3e] | NR (training) | NR (training) | **TBD** (T9.6 harness) | **22k** [INVESTOR.md] | **O(L) CfC, no KV** | **STDP fwd-only** [stdp_fast.py:121] |
 | A | Mamba-130M [1] | 130M | 300B | 25.0 | 35.3 | NR | ~38k | O(L) SSM | static |
 | A | RWKV-4-169M [2] | 169M | 332B | 24.5 | 32.7 | NR | ~31k | O(L) RNN | static |
 | A | Pythia-160M [3] | 162M | 300B | 26.1 | 30.1 | 1.4 | ~26k | O(L^2) attention KV | static |
 | A | GPT-Neo-125M [4] | 125M | 300B | 25.9 | 28.9 | NR | ~24k | O(L^2) attention KV | static |
-| **B** | SmolLM2-360M [5] | 362M | 4T | 30.4 | 53.0 | 27.0 | ~18k | O(L^2) attention KV | static |
-| B | Pythia-410M [3] | 405M | 300B | 27.3 | 39.3 | 2.3 | ~20k | O(L^2) attention KV | static |
-| B | TinyLlama-1.1B [6] | 1.1B | 3T | 25.5 | 60.4 | 2.4 | ~10k | O(L^2) attention KV | static |
-| B | Qwen2.5-0.5B-Instr [7] (KD teacher) | 494M | 18T | 47.5 | 52.3 | 41.6 | ~16k | O(L^2) attention KV | static |
-| **C** | Qwen2.5-1.5B [7] | 1.54B | 18T | 60.9 | 67.9 | 68.5 | ~6k | O(L^2) attention KV | static |
-| C | SmolLM2-1.7B [5] | 1.71B | 11T | 51.7 | 71.0 | 31.8 | ~5.5k | O(L^2) attention KV | static |
+| **B** | SmolLM2-360M [5] | 362M | 4T | 30.4 | 53.0 | 27.0 | NR (rerun w/ T9.6) | ~18k | O(L^2) attention KV | static |
+| B | Pythia-410M [3] | 405M | 300B | 27.3 | 39.3 | 2.3 | NR | ~20k | O(L^2) attention KV | static |
+| B | TinyLlama-1.1B [6] | 1.1B | 3T | 25.5 | 60.4 | 2.4 | NR | ~10k | O(L^2) attention KV | static |
+| B | Qwen2.5-0.5B-Instr [7] (KD teacher) | 494M | 18T | 47.5 | 52.3 | 41.6 | NR (teacher; will be << student) | ~16k | O(L^2) attention KV | static |
+| **C** | Qwen2.5-1.5B [7] | 1.54B | 18T | 60.9 | 67.9 | 68.5 | NR | ~6k | O(L^2) attention KV | static |
+| C | SmolLM2-1.7B [5] | 1.71B | 11T | 51.7 | 71.0 | 31.8 | NR | ~5.5k | O(L^2) attention KV | static |
+
+† **Cross-domain ppl** = weighted-average perplexity over a strict held-out
+mix of WikiText-103-test + C4-en-validation + GSM8K-test + HumanEval +
+Chinese-news, each capped at 100K tokens. Anti-overfit verifier: when the
+trainer reports `val ppl 10` we re-run the harness here against domains
+the model has **never seen** in training and report this column. Harness:
+`scripts/eval_cross_domain_ppl.py` (T9.6). See
+`docs/SCALING_RATIONALE.md` §"ppl 10 verification protocol" for the rerun
+checklist that must precede any "ppl 10" claim in investor material.
+
+The Synap-1 cell is **TBD** because Run 3e plateaued at WT-103 ppl ~3697
+(see §3 below) and the cross-domain harness is reserved for the
+post-300M-Synap-Pro lineage where ppl 10 is achievable. The other rows
+are NR pending the side-by-side rerun on a single A800 with the same
+harness. **Do not quote a Synap-1 cross-domain ppl in any investor doc
+until this column ships measured numbers.**
 
 Sources: [1] Gu+Dao 2312.00752; [2] Peng et al. RWKV LM model card;
 [3] Pythia Biderman+ 2304.01373; [4] EleutherAI GPT-Neo card; [5] HF
