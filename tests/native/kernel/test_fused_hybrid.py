@@ -105,6 +105,20 @@ def test_bitexact_fp32():
     )
 
 
+def test_bitexact_fp32_wider():
+    """Same as bitexact_fp32 but at d=256, T=16 closer to production."""
+    d = 256
+    block = _make_block(d=d, dtype=torch.float32)
+    fused = FusedHybridBlock.from_hybrid_block(block)
+
+    x = _input(B=2, T=16, D=d, dtype=torch.float32)
+    with torch.no_grad():
+        y_ref = block(x)
+        y_fused = fused(x)
+    abs_err = (y_ref - y_fused).abs().max().item()
+    assert abs_err < 1e-4, f"d=256 fused vs reference mismatch: abs={abs_err:.2e}"
+
+
 def test_bitexact_with_sew():
     """Same as bitexact_fp32 but with sew_shortcut=True."""
     d = 128
