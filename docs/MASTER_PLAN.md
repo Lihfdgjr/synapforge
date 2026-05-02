@@ -1,7 +1,7 @@
 <!-- DOC_STAMP: STALE since 2026-05-01; check refs to synapforge/memory.py, synapforge/train.py, tests/test_neuromcp_button.py, tests/test_rfold.py, tests/test_skill_log_atomic.py -->
 # SynapForge — Master Plan
 
-**Updated**: 2026-05-01 (revision 11: + P25/P26/P27/P28/P29 OPEN — training-issues retrospective doc shipped at `docs/TRAINING_ISSUES_RETROSPECTIVE.md` covering 8 root causes from Runs 1–3h + 5 next-iteration patches)
+**Updated**: 2026-05-02 (revision 12: + Run 7 live torch baseline / Run 8 native stack 17-30k tok/s projection / P30/P31 OPEN: native integration + step-500 verdict pending. Native v0.1 12-subpackage framework shipped — see `README.md §synapforge.native v0.1` and `docs/NATIVE_OVERVIEW.md`)
 **Owner**: Liu (mohuanfang@gmail.com)
 **Status**: pre-investor-demo, training in progress on rental A800 80GB
 
@@ -51,11 +51,12 @@ Source of truth: `scripts/phase_manager.py` (auto-watches `train.log`, writes `.
 
 | Phase | Trigger | Adds | Notes |
 |-------|---------|------|-------|
-| 0 | warm start, ce ≈ 9.6 | LM-only KD from Qwen 0.5B teacher | current state at v24h_qwen |
+| 0 | warm start, ce ≈ 9.6 | LM-only KD from Qwen 0.5B teacher | **Run 7 live (PID 41692, started 16:40 2026-05-02)** with TOKEN_SOUP fix stack: `--untie-lm-head --no-warmstart --kd-weight 0.7`, no spectral_norm. Step 500 verdict ~30 min after launch. |
 | 1 | val ppl ≤ 250 | `--self-learn-ttt --self-learn-k 8 --curiosity-weight 0.05 --phase-aware` | turn on TTT replay + curiosity (real flags; argparse-validated 2026-05-01) |
 | 2 | val ppl ≤ 100 | `--modal-list image,audio,time_series` | needs base linguistic competence first or cross-modal aux destroys it |
 | 3 | val ppl ≤ 60 | alpaca-zh SFT + response-only-loss, lr 1e-4 | the chat-emergence threshold |
 | 4 | chat eval ≥ 60% pass | GRPO RL with sympy verifier (gsm8k math) | post-SFT polish |
+| 5 | Run 7 step 500 PASS verdict (val ppl ≤ 600) | **Run 8 launch on `synapforge.native` stack** | target 17-30k tok/s @ A800 80GB (vs Run 7 baseline 2,750). Conservative 17k = MVP-CPU 2.86× × kernel 1.15× × dispatch 1.7× × 60% integration efficiency. Headroom 30k = clean stacking. Both projections; integration agent merges 12 branches → `feature/run8-native-integration`. **Quality-not-regress invariant**: Run 8 must hit at least Run 7's val ppl trajectory at every checkpoint. |
 
 **Why ppl-gated, not step-gated**: prevents premature feature activation that cripples the
 backbone (we've burned 2× by enabling cross-modal aux too early — see
@@ -726,39 +727,112 @@ verify-pipeline run. Feature audit agent (see §6) will check **(c)** end-to-end
 - **See**: `docs/TRAINING_ISSUES_RETROSPECTIVE.md` §2.e.
 - **Status**: OPEN. ETA 1 day (just rerun trainer with current config).
 
+### P30. Run 7 step 500 verdict — OPEN (TOKEN_SOUP fix verification)
+- **Symptom**: Run 6 (PID 24075, killed 14:00 2026-05-02) emitted word
+  salad at every checkpoint despite ce dropping. Diagnosed as 3-cause
+  superposition (tied LM head + spectral_norm warmstart key mismatch +
+  kd-weight 0.40 masking CE ascent) — see CHANGELOG v0.6.5-fix entry.
+- **Fix landed**: 5-step diagnostic commit chain
+  (`2765f46`/`e564e72`/`3df3bce`/`8c3cb47`/`3c092e6`):
+  `--untie-lm-head` (default ON), `--no-warmstart` (default OFF, ON for
+  Run 7 cold-start), drop `--lm-head-spectral-norm`, `--kd-weight 0.7`,
+  `--data-files` literal-newline bug fixed.
+- **Run 7 launched**: 2026-05-02 16:40, PID 41692 on rental
+  `117.74.66.77:41614`. Cold start (no warmstart), LR 5e-5, kd 0.7,
+  data fineweb_edu+wt103+alpaca_zh, batch 64.
+- **Verdict criterion**: step 500 val ppl ≤ 600 = diagnosis correct,
+  proceed to Run 8 native-stack launch. Step 500 val ppl > 1000 = root
+  cause incomplete, deeper investigation (probably PLIF dead + LR + LN
+  composition).
+- **Status**: OPEN. ETA ~30 min after launch (so likely landed by the
+  time someone reads this; check `monitor.jsonl` step 500 row).
+
+### P31. synapforge.native v0.1 integration merge — OPEN (cross-branch trunk merge)
+- **Symptom**: 12 native subpackages live on 12 separate feature
+  branches (see CHANGELOG v0.7.0-native table). Each is internally
+  consistent and tested. None are merged into a single trunk yet.
+- **Risk**: silent merge conflict at the `synapforge/native/__init__.py`
+  level — most branches edit the same file. Already 5 branches commit
+  to it (`__init__.py` re-exports public surface).
+- **Plan**: integration agent owns `feature/run8-native-integration`.
+  Merge order:
+  1. `feature/native-mvp` (foundation — shipped first)
+  2. `feature/native-data-loader` (no torch dependency)
+  3. `feature/native-vjp-catalog` (closed-form math)
+  4. `feature/native-cuda-backend` (Cuda primitives)
+  5. `feature/native-saturation` (bench/profiler)
+  6. `feature/native-spike-pack`, `feature/native-stdp-runtime`,
+     `feature/native-fused-kernel` (kernel cluster — share vjp +
+     cuda + spike packing)
+  7. `feature/native-dispatch-async`, `feature/native-async-aux`
+     (scheduler cluster)
+  8. `feature/native-modal-packing` (multimodal)
+  9. `feature/trainer-refactor-v2` (top-level Trainer wire-in)
+- **Verification gate**: `pytest -q tests/native/` plus
+  `synapforge/native/_no_torch_check.sh` (grep across all 12 subpkg
+  production code for `import torch`) must pass before Run 8 launch.
+- **Quality-not-regress invariant**: each integration step compares
+  bench output against the previous commit on a fixed (B, T, d, layers)
+  shape; any val-ppl regression > 1% blocks the merge.
+- **Status**: OPEN. ETA 1-3 days. Owned by integration agent (not this
+  doc-update agent — see top-of-task constraints).
+
 ---
 
 ## 7. Active runs (rental: 117.74.66.77:41614)
 
 | PID | Run name | Started | Last status | Logs |
 |-----|----------|---------|-------------|------|
-| 13663 | v24h_qwen Run 2 | 2026-05-01 | step 1640 ce=5.95 | `/workspace/runs/v24h_qwen/train.log` |
-| 12965 | auto_eval_daemon | 2026-05-01 | watching v24h_qwen (stale path) | `/workspace/auto_eval/eval.log` |
-| (running) | triple_backup_daemon | 2026-05-01 | watching v24h_qwen (stale path) | `/workspace/backup/backup.log` |
-| (running) | phase_manager | 2026-05-01 | watching v24h_qwen (stale path) | `/workspace/runs/v24h_qwen/phase.log` |
+| **41692** | **v24h_qwen Run 7 (TOKEN_SOUP fix)** | **2026-05-02 16:40** | **step 500 verdict pending** | `/workspace/runs/v24h_qwen_run7/train.log` |
+| (planned) | Run 8 (synapforge.native stack) | post-Run-7-verdict | not yet launched | `/workspace/runs/v24h_qwen_run8/train.log` |
+| (background) | triple_backup_daemon | watching Run 7 | health unknown — recheck path | `/workspace/backup/backup.log` |
+| (background) | phase_manager | watching Run 7 | repointed to Run 7 dir | `/workspace/runs/v24h_qwen_run7/phase.log` |
 
-**v24h_qwen Run 2 STATUS — DEAD 2026-05-01 18:01**
-- Crashed: torch.save → "file write failed" (system disk 99.9% full)
-- Cause: SAVE_EVERY=250 + 1.83GB ckpts → 53 ckpts × 1.83GB = 97GB on 100GB disk
-- PLIF observation: dead 10/10 from step_000250 through step_013250 (entire run)
-- Final state: ce ≈ 8.2 (ppl ≈ 3640), spike rate 0.000
+**Run 7 — TOKEN_SOUP diagnosis fix, live torch baseline 2026-05-02 16:40+**
+- PID 41692 on rental, started 16:40 local
+- **Cold start**: `--no-warmstart` (skip Run 6 PLIF/lm_head poison),
+  `--untie-lm-head` (separate lm_head.weight param), drop
+  `--lm-head-spectral-norm`, `--kd-weight 0.7`
+- Backend: triton_block (gpu_dense at 6.7k tok/s = 90% wasted A800,
+  see `feedback_triton_backend_required.md`)
+- Data corpus: 3-parquet quality mix (fineweb_edu + wt103 + alpaca_zh)
+  via `--data-files` (literal-newline bug fixed in `2765f46`)
+- LR 5e-5, batch 64, vocab 151936 (Qwen2.5)
+- **Acts as the baseline number for Run 8 native-stack comparison**:
+  Run 7 measured tok/s on torch path vs Run 8 projected on native path
+- Step 500 verdict: val ppl ≤ 600 = TOKEN_SOUP root-cause confirmed,
+  Run 8 native launch goes ahead. > 1000 = deeper investigation needed.
 
-**v24h_qwen3 Run 3 STATUS — TRAINING 2026-05-01 18:43+**
-- PID 15477 on rental
-- Warmstart: `step_002250_plif_reinit.pt` (matched 93/163 — half-warm; PLIF param names changed so PLIF is random init)
-- Backend: triton_block, batch=64 (z-loss OOM at bs=128 vocab=151936), kd-every=4
-- SAVE_EVERY=2000, ckpt_cleanup.sh keeping last 5 step_*.pt (background loop)
-- First 130 steps: ce 6.77 → 6.05 (CfC+FFN learning; PLIF still dead — auto-revive triggers at step 1000+)
-- Output: `/workspace/runs/v24h_qwen3/`
-- Daemons (phase/backup/auto_eval) still pointed at OLD v24h_qwen — need to be restarted with new path
+**Run 8 (planned, not launched) — synapforge.native v0.1 stack**
+- Trigger: Run 7 step 500 PASS verdict
+- Stack: post-integration `feature/run8-native-integration` — all 12
+  native subpackages merged (see P31)
+- Target throughput: **17,000 tok/s conservative, 30,000 tok/s headroom**
+  (vs Run 7 baseline 2,750)
+  - Conservative: MVP-CPU 2.86× × kernel 1.15× × dispatch 1.7× × 60%
+    integration efficiency = 6.0×, applied to Run 7 baseline → 16.5k
+    (rounded 17k)
+  - Headroom: same levers stacked clean = ~10× → 27.5k (rounded 30k)
+- **Honest read on the projection**: until Run 8 actually runs, both
+  numbers are projections, not measurements. Even 12-15k beats baseline
+  by 4-5×. Will report measured number in CHANGELOG v0.7.1 after launch.
+- **Quality-not-regress invariant**: Run 8 must hit at least Run 7's
+  val ppl trajectory at every checkpoint. Throughput speedup is a
+  speed lever, NOT a quality lever.
 
-**Verify** (next session):
+**Run 6 STATUS — KILLED 2026-05-02 14:00 (TOKEN_SOUP word salad)**
+- PID 24075, val ppl plateaued ~3700 with word salad outputs
+- Diagnosed as 3-cause superposition (P30):
+  tied LM head + spectral_norm warmstart key mismatch + kd-weight 0.40
+- Killed 14:00; Run 7 launched 16:40 with diagnosis fix.
+
+**Verify Run 7** (next session):
 ```
 ssh -p 41614 root@117.74.66.77 \
   'pgrep -fa "python3.*train_100m_kd"; \
-   tail -20 /workspace/runs/v24h_qwen3/train.log; \
+   tail -20 /workspace/runs/v24h_qwen_run7/train.log; \
    df -h / | tail -1; \
-   ls -la /workspace/runs/v24h_qwen3/*.pt'
+   ls -la /workspace/runs/v24h_qwen_run7/*.pt'
 ```
 
 ---
