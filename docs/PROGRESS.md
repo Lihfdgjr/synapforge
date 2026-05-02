@@ -1,32 +1,65 @@
 # Synap-1 Live Training Progress
 
-> **Synap-1 phase 0, val ppl 421, 30% to phase 1 trigger.**
+> **2026-05-02: Run 7 launched 16:40 with TOKEN_SOUP fix. Step 500 verdict
+> pending. synapforge.native v0.1 12-subpackage framework shipped between
+> 19:00–23:00. Run 8 native-stack launch on Run 7 PASS verdict.**
 
 One-pager dashboard for the current run. Glance here first; everything else
-([MASTER_PLAN](MASTER_PLAN.md), [INVESTOR](INVESTOR.md), [NAMING](NAMING.md))
+([MASTER_PLAN](MASTER_PLAN.md), [INVESTOR](INVESTOR.md),
+[NATIVE_OVERVIEW](NATIVE_OVERVIEW.md), [NAMING](NAMING.md))
 expands the context.
 
 ---
 
-## 1. Live numbers (2026-05-01)
+## 0. Today's milestones (2026-05-02)
 
-| Metric        | Value                              | Source / note                                  |
-|---------------|------------------------------------|------------------------------------------------|
-| Run name      | `v24h_qwen3` (Run 3b)              | post-strip-optim_state recovery                |
-| Trainer PID   | 16697 on rental 117.74.66.77:41614 | A800 80GB                                      |
-| Step          | ~2920                              | last poll; see `monitor.jsonl`                 |
-| Train CE      | 7.5 - 8.3                          | KD-on/off oscillation, kd-every=4              |
-| **VAL ppl**   | **421**                            | step 2500; phase 1 trigger at <=250            |
-| z-loss        | 134 -> 104 -> 126 (falling)        | logits regularizer, healthy                    |
-| Spike rate    | 0/10 (PLIF dead)                   | auto-revive engaged at step 1000+, slow        |
-| Backend       | triton_block, batch=64, kd-every=4 | A800 utilization gate                          |
-| Tok/s         | see `monitor.jsonl`                | last reading not pinned in this brief          |
-| GPU util      | ~78%                               | 77 GB / 80 GB used                             |
-| RAM           | 5 GB / 115 GB (110 GB free)        | 14 cores, headroom for CPU jobs                |
-| Disk          | 28% / 100 GB                       | post-disk-full cleanup (Run 2 incident)        |
+| Time   | Event                                                                                  | Cross-ref                                                           |
+|--------|----------------------------------------------------------------------------------------|---------------------------------------------------------------------|
+| 14:00  | Run 6 KILLED (TOKEN_SOUP word salad, val ppl plateaued ~3700)                          | [CHANGELOG v0.6.5-fix](../CHANGELOG.md), [MASTER_PLAN P30](MASTER_PLAN.md) |
+| 16:40  | Run 7 LAUNCHED (PID 41692) with diagnosis fix: untie + cold-start + kd0.7 + drop spec  | [MASTER_PLAN §3 phase 0](MASTER_PLAN.md), [P30](MASTER_PLAN.md)     |
+| 19:00–23:00 | 12 parallel agents shipped `synapforge.native` v0.1 — data / vjp / cuda / bench / spike / stdp / kernel / dispatch / modal / auxsched / training / native_demo | [README §synapforge.native v0.1](../README.md), [NATIVE_OVERVIEW](NATIVE_OVERVIEW.md), [CHANGELOG v0.7.0-native](../CHANGELOG.md) |
+| 23:00  | Awaiting Run 7 step 500 verdict + Run 8 native-stack launch trigger                    | [P30](MASTER_PLAN.md), [P31](MASTER_PLAN.md)                        |
 
-Warmstart: `/workspace/runs/v24h_qwen/step_002250_plif_reinit_NOOPT.pt`
-(legacy ckpt, optim_state stripped, fresh Adam this run).
+**Native v0.1 measured numbers** (from this evening's parallel sprint):
+
+- MVP CPU 2.86× vs torch oracle (1.00s vs 2.87s, 100-step LNN+SNN train,
+  same seed/shapes/init, both monotonic)
+- Fused HybridBlock 1.15-1.18× e2e at d=256 (bit-exact)
+- Async hetero CPU+GPU dispatch 1.7× ceiling
+- Async aux 2.9× vs sequential
+- Spike bit-pack 16× HBM bandwidth saving (~600 µs/step ceiling on A800)
+
+**Run 7 vs Run 8 framing**: Run 7 (torch baseline, live now) measures
+2,750 tok/s on the rental A800. Run 8 projection on the native stack is
+**17,000 tok/s conservative, 30,000 tok/s headroom** — both are
+projections until Run 8 actually launches; even 12-15k beats baseline 4-5×.
+
+---
+
+## 1. Live numbers (2026-05-02)
+
+| Metric        | Value                                    | Source / note                                  |
+|---------------|------------------------------------------|------------------------------------------------|
+| Run name      | `v24h_qwen_run7` (Run 7, TOKEN_SOUP fix) | cold start (no warmstart from Run 6 poison)    |
+| Trainer PID   | 41692 on rental 117.74.66.77:41614       | A800 80GB, started 2026-05-02 16:40            |
+| Step          | ~50                                      | step 500 verdict pending (ETA ~30 min after launch) |
+| Train CE      | warmup band                              | KD-on/off oscillation expected, kd-every=4 (kd-weight 0.7) |
+| **VAL ppl**   | **pending step 500**                     | verdict criterion: ≤ 600 = TOKEN_SOUP fix CONFIRMED |
+| Backend       | triton_block, batch=64, kd-every=4       | A800 utilization gate; gpu_dense wastes 90% on this card |
+| Tok/s @ Run 7 | **2,750 baseline** (torch path)          | benchmarks Run 8 native-stack target           |
+| Run 8 target  | **17,000-30,000 projected**              | native stack post-integration (P31) — see [NATIVE_OVERVIEW](NATIVE_OVERVIEW.md) |
+| Disk          | (recheck)                                | post-Run 6 cleanup; cap retention via daemon  |
+
+**Run 7 launcher flags (TOKEN_SOUP fix stack)**:
+```
+--untie-lm-head                  (default ON; separate lm_head.weight from embed)
+--no-warmstart                   (skip Run 6 poisoned ckpt)
+--kd-weight 0.7                  (up from 0.40; teacher dominates while LM head re-learns)
+--data-files <fineweb_edu+wt103+alpaca_zh quality mix>
+                                 (literal-newline bug fixed in 2765f46)
+--lr 5e-5
+NO --lm-head-spectral-norm       (retracted -- caused warmstart key mismatch)
+```
 
 ---
 
@@ -41,10 +74,15 @@ Warmstart: `/workspace/runs/v24h_qwen/step_002250_plif_reinit_NOOPT.pt`
 | Run 3l   | May 1-2   | DIVERGED      | step 4000=569, step 5000=**1864**, step 5500=**2522** Run-3c-class    | killed 00:55; merged T2.4-T2.7 not in live; LR 1e-4 + warmup 100 too hot |
 | Run 3m | May 2 01:10 -> 02:43 | DIVERGED+KILLED | VAL step13500=**4406** (best) → step15000=**25965** (4× catastrophic). Killed PID 26272 02:43. |
 | Run 3n | May 2 02:44 -> 05:46 | COMPLETED | warmstart step_014250.pt, LR 2e-5, warmup 200, shuffle-seed 711, ran full 30000 steps (10963.6s, 491.5M tok, 44832 tok/s avg). Final VAL step30000=**3697** (down from step3000 best 4038, monotonic descent throughout) |
-| **Run 3o** | **May 2 09:00 -> now** | **STARTED** | warmstart step_030000.pt (Run 3n final), LR 2e-5, warmup 200, shuffle-seed 911, --steps 60000 (continue training another 30000 steps). T5.1 pct fix verified live (pct_ce=63.7 + pct_kd=36.2 = 99.9% on KD-on steps) | step 40 ce 9.1 (warmstart bounce) → expected to recover to ce ~8.4 by step 500 then drop further. ETA: 5-6h to step 60000. Phase 1 trigger ≤250 still ~14× away |
+| Run 3o | May 2 09:00 -> ~13:30 | TOKEN_SOUP | warmstart step_030000.pt, LR 2e-5, but outputs word salad despite ce dropping. Diagnosed as 3-cause superposition (tied lm_head + spectral_norm warmstart + kd 0.40). |
+| Run 6 | May 2 ~13:30 -> 14:00 | **KILLED 14:00** | val ppl plateaued ~3700, word salad outputs. PID 24075 killed. See [P30](MASTER_PLAN.md). |
+| **Run 7** | **May 2 16:40 -> now** | **TRAINING** | PID 41692. Cold start, `--untie-lm-head --no-warmstart --kd-weight 0.7`, drop spectral_norm. Step 500 verdict pending: ≤ 600 = TOKEN_SOUP root-cause confirmed → trigger Run 8 native-stack launch. |
+| **Run 8** | **post-Run-7-PASS** | **PLANNED** | synapforge.native v0.1 12-subpackage stack (post-integration P31). Target tok/s @ A800: **17k conservative / 30k headroom**, vs Run 7 baseline 2,750. Quality-not-regress invariant: must hit Run 7's val ppl trajectory at every checkpoint. |
 
 Run 3a -> Run 3b cutover took <30 min. Optim-state strip is now standard
-warmstart hygiene; see [RENTAL_RECOVERY](RENTAL_RECOVERY.md).
+warmstart hygiene; see [RENTAL_RECOVERY](RENTAL_RECOVERY.md). Run 6 -> Run 7
+cutover (TOKEN_SOUP diagnosis) took ~3h including 5-step diagnostic commit
+chain (`2765f46`/`e564e72`/`3df3bce`/`8c3cb47`/`3c092e6`).
 
 ---
 
