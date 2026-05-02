@@ -124,43 +124,51 @@ def _info_nce(
     if m == 0:
         return 0.0, np.zeros_like(z_a), np.zeros_like(z_b)
 
-    # cosine similarity / temperature.
-    sim = pairwise_cosine(z_a, z_b, eps=eps) / temperature  # (M, M)
+    # Raw cosine similarity (without temperature) and the scaled logits.
+    a32 = z_a.astype(np.float32, copy=False)
+    b32 = z_b.astype(np.float32, copy=False)
+    na = np.maximum(np.linalg.norm(a32, axis=-1, keepdims=True), eps)
+    nb = np.maximum(np.linalg.norm(b32, axis=-1, keepdims=True), eps)
+    u = a32 / na   # (M, H) -- normalized z_a
+    v = b32 / nb   # (M, H) -- normalized z_b
+    cos = u @ v.T  # (M, M) raw cosine similarity
+    logits = cos / temperature  # (M, M)
 
     # Row CE: targets are the diagonal.
-    log_p_rows = _log_softmax(sim, axis=1)
-    log_p_cols = _log_softmax(sim, axis=0)
+    log_p_rows = _log_softmax(logits, axis=1)
+    log_p_cols = _log_softmax(logits, axis=0)
     diag_idx = np.arange(m)
     loss_rows = -np.mean(log_p_rows[diag_idx, diag_idx])
     loss_cols = -np.mean(log_p_cols[diag_idx, diag_idx])
     loss = 0.5 * (loss_rows + loss_cols)
 
-    # Analytic gradient w.r.t. sim:
-    #   dL/dsim = 0.5/M * (softmax(sim, axis=1) - I) +
-    #             0.5/M * (softmax(sim, axis=0) - I)
+    # Analytic gradient w.r.t. logits:
+    #   dL/dlogits = 0.5/M * (softmax(logits, axis=1) - I) +
+    #                0.5/M * (softmax(logits, axis=0) - I)
     p_rows = np.exp(log_p_rows)
     p_cols = np.exp(log_p_cols)
     eye = np.eye(m, dtype=np.float32)
-    dsim = (p_rows - eye) * (0.5 / m) + (p_cols - eye) * (0.5 / m)
+    dlogits = (p_rows - eye) * (0.5 / m) + (p_cols - eye) * (0.5 / m)
 
-    # Cosine sim chain rule. Let u = a/||a||, v = b/||b||.
-    # sim_{i,j} = u_i . v_j / temperature.
-    # dL/da_i = (1/(t * ||a_i||)) * sum_j dsim_{i,j} (v_j - sim_{i,j} u_i)
-    # ...and symmetric for b.
-    a32 = z_a.astype(np.float32, copy=False)
-    b32 = z_b.astype(np.float32, copy=False)
-    na = np.maximum(np.linalg.norm(a32, axis=-1, keepdims=True), eps)
-    nb = np.maximum(np.linalg.norm(b32, axis=-1, keepdims=True), eps)
-    u = a32 / na   # (M, H)
-    v = b32 / nb   # (M, H)
+    # Chain through temperature: dL/dcos = dL/dlogits * (1/temperature).
+    dcos = dlogits / temperature  # (M, M)
 
-    # term1: dsim @ v - elementwise (sim * dsim).sum(j) * u
-    grad_u = (dsim @ v) - (np.sum(dsim * (sim * temperature) /
-                                  temperature, axis=1, keepdims=True) * u)
-    grad_v = (dsim.T @ u) - (np.sum(dsim.T * (sim.T * temperature) /
-                                    temperature, axis=1, keepdims=True) * v)
-    grad_a = (1.0 / (temperature * na)) * grad_u
-    grad_b = (1.0 / (temperature * nb)) * grad_v
+    # Chain through cosine. Let:
+    #     u_i = a_i / ||a_i||, v_j = b_j / ||b_j||,
+    #     cos_{i,j} = u_i . v_j.
+    # Then:
+    #     dL/du_i = sum_j dcos_{i,j} * v_j        = (dcos @ v)[i]
+    #     dL/dv_j = sum_i dcos_{i,j} * u_i        = (dcos.T @ u)[j]
+    # And the L2-norm Jacobian is:
+    #     du_i / da_i = (I - u_i u_i^T) / ||a_i||
+    # So:
+    #     dL/da_i = (1/||a_i||) * (dL/du_i - (u_i . dL/du_i) * u_i)
+    grad_u = dcos @ v          # (M, H)
+    grad_v = dcos.T @ u        # (M, H)
+    proj_u = np.sum(grad_u * u, axis=1, keepdims=True) * u
+    proj_v = np.sum(grad_v * v, axis=1, keepdims=True) * v
+    grad_a = (grad_u - proj_u) / na
+    grad_b = (grad_v - proj_v) / nb
 
     return float(loss), grad_a, grad_b
 
