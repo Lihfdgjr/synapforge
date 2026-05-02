@@ -159,14 +159,21 @@ def _load_teacher(candidates: Sequence[str], device: str = "cuda"):  # pragma: n
     last_err = None
     for path in candidates:
         try:
-            tok = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(
+                path, trust_remote_code=True, padding_side="left",
+            )
             mdl = AutoModelForCausalLM.from_pretrained(
                 path,
                 torch_dtype=torch.bfloat16 if device.startswith("cuda") else torch.float32,
                 trust_remote_code=True,
             ).to(device).eval()
             print(f"[gen_kd] loaded teacher from {path!r} on {device}", flush=True)
-            # Pad token: Qwen 2.5 doesn't define one; reuse eos.
+            # Pad token: Qwen 2.5 doesn't define one; reuse eos. With
+            # padding_side='left' the pads are at the front, so the
+            # generation continues correctly from the *right* end of
+            # each row (the actual prompt boundary). Right-padding
+            # would force every row to generate from a pad token,
+            # which produces empty completions for short prompts.
             if tok.pad_token_id is None:
                 tok.pad_token = tok.eos_token
             return tok, mdl, path
@@ -202,7 +209,11 @@ def _generate_batch(
     )
     input_ids = enc["input_ids"].to(device)
     attn_mask = enc["attention_mask"].to(device)
+    # With padding_side='left', the leading region of each row is pads
+    # and the real prompt content starts at index ``T_in - prompt_len``.
+    # ``prompt_lens[b]`` = count of non-pad tokens (real prompt length).
     prompt_lens = attn_mask.sum(dim=1).tolist()
+    T_in = input_ids.shape[1]  # padded prompt-batch length
 
     with torch.no_grad():
         out_ids = mdl.generate(
@@ -215,16 +226,39 @@ def _generate_batch(
             pad_token_id=tok.pad_token_id,
             eos_token_id=tok.eos_token_id,
         )
-    # out_ids: [B, prompt_len + gen_tokens] (max — generate truncates per-row)
-    full_ids = out_ids  # [B, T]
-    # Build attention mask for the full sequence (no padding inside since
-    # generate appends to a packed batch; pad token at the end if eos was hit
-    # earlier in some rows).
-    full_attn = (full_ids != tok.pad_token_id).long()
-    # Re-run a forward pass to extract teacher logits over the FULL
-    # sequence (necessary because generate doesn't return logits over
-    # the prompt prefix — and we want top-K supervision on every position
-    # so the student gets dense distillation signal).
+    # out_ids shape: [B, T_in + gen_steps] -- generate appends to the
+    # left-padded prompt batch. Generated tokens start at column T_in
+    # for every row (eos in row b => the rest of row b is pad_token_id).
+    full_ids = out_ids  # [B, T_total]
+    # Build a mask that's 1 over (real prompt + actual generated tokens),
+    # 0 over (left pads + post-eos right pads). To distinguish post-eos
+    # pads from intra-prompt pads, we OR (col >= T_in) with (col_in_prompt
+    # AND not pad). The simpler, correct approach: keep the original
+    # ``attn_mask`` for the prompt region, and for the generated region
+    # mark a token as valid until we hit the first eos OR a run of
+    # consecutive pad tokens.
+    B, T_total = full_ids.shape
+    gen_region = full_ids[:, T_in:]  # [B, T_gen]
+    is_eos = (gen_region == tok.eos_token_id)
+    # First-eos position per row; positions strictly AFTER first-eos are
+    # ignored. Tokens AT first-eos are kept (the eos itself is part of
+    # the generated stream).
+    eos_idx = is_eos.float().argmax(dim=1)  # [B] (0 if no eos found)
+    no_eos_mask = (~is_eos.any(dim=1)).long()  # 1 where no eos found
+    # Effective generated length per row.
+    gen_T = gen_region.shape[1]
+    eff_gen_len = torch.where(no_eos_mask.bool(),
+                              torch.full_like(eos_idx, gen_T),
+                              eos_idx + 1)
+    # Build full-sequence mask: 1 for real prompt tokens (use attn_mask),
+    # 1 for valid generated tokens (col_in_gen < eff_gen_len), 0 elsewhere.
+    full_attn = torch.zeros_like(full_ids)
+    full_attn[:, :T_in] = attn_mask
+    cols = torch.arange(gen_T, device=full_ids.device).unsqueeze(0).expand(B, -1)
+    gen_mask = (cols < eff_gen_len.unsqueeze(1)).long()
+    full_attn[:, T_in:] = gen_mask
+
+    # Re-run forward to extract teacher top-K over the FULL sequence.
     with torch.no_grad():
         out = mdl(input_ids=full_ids, attention_mask=full_attn)
         logits = out.logits  # [B, T, V]
@@ -243,7 +277,12 @@ def _generate_batch(
     completion_text: list = []
 
     for b in range(full_ids_np.shape[0]):
-        valid = int(full_attn_np[b].sum())
+        # The valid contiguous range is [pad_start_b, T_in + eff_gen_len_b).
+        # pad_start_b = T_in - prompt_lens[b] (left-padding).
+        plen_b = int(prompt_lens[b])
+        pad_start_b = T_in - plen_b
+        gen_end_b = T_in + int(eff_gen_len[b].item())
+        valid = gen_end_b - pad_start_b
         if valid <= 1:
             in_ids_rows.append([])
             idx_rows.append(np.zeros((0, topk), dtype=np.int32))
@@ -251,12 +290,14 @@ def _generate_batch(
             sl_rows.append(0)
             completion_text.append("")
             continue
-        in_ids_rows.append(full_ids_np[b, :valid].tolist())
-        idx_rows.append(top_idx_np[b, :valid, :])
-        lp_rows.append(top_lp_np[b, :valid, :])
+        # Slice contiguous valid window.
+        in_ids_rows.append(full_ids_np[b, pad_start_b:gen_end_b].tolist())
+        idx_rows.append(top_idx_np[b, pad_start_b:gen_end_b, :])
+        lp_rows.append(top_lp_np[b, pad_start_b:gen_end_b, :])
         sl_rows.append(valid)
-        # Decode just the generated tail (after prompt) for sample inspection.
-        gen_ids = full_ids_np[b, prompt_lens[b]:valid].tolist()
+        # Decode just the generated tail (positions T_in:gen_end_b in the
+        # full row) for sample inspection.
+        gen_ids = full_ids_np[b, T_in:gen_end_b].tolist()
         completion_text.append(tok.decode(gen_ids, skip_special_tokens=True))
 
     return in_ids_rows, idx_rows, lp_rows, sl_rows, completion_text, prompt_lens

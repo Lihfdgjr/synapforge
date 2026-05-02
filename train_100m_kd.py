@@ -817,6 +817,39 @@ def _parse_args() -> argparse.Namespace:
                         "See docs/PERF_KNOBS.md for the math test.")
     p.add_argument("--teacher-fallback-ckpt", default="",
                    help="path to a self-distill teacher ckpt (used if HF teacher load fails)")
+    # ---- KD distill data (pre-generated teacher continuations, M5.1) ----
+    # Pre-generated KD distill parquets (output of scripts/gen_kd_data.py)
+    # carry teacher-sampled continuations on a curated prompt set, with
+    # per-position top-K teacher log-probs already computed. The cleanest,
+    # already-supported path is to feed the *.samples.jsonl text through
+    # ParquetTokenStream by passing this glob into ``--data-glob`` (see
+    # docs/KD_DISTILL.md). The flags below additionally let the trainer
+    # MIX a distill-data parquet into the training stream with an
+    # *override* KD weight — useful when you want stronger distillation
+    # on the curated-prompt rows than the default ``--kd-weight`` gives
+    # on raw web rows. Default OFF; full integration with the live
+    # dataloader is staged behind tests/integration/test_kd_distill_mix.py.
+    p.add_argument("--kd-distill-data", default="",
+                   help="path to a pre-generated KD distill parquet "
+                        "(output of scripts/gen_kd_data.py). When set, "
+                        "the trainer treats this corpus as a higher-"
+                        "confidence KD source: rows from this parquet "
+                        "use ``--kd-distill-weight`` instead of "
+                        "``--kd-weight`` and skip the live teacher "
+                        "forward (the top-K teacher log-probs are "
+                        "already cached on disk). NOTE M5.1-staged: "
+                        "the wire-in to ParquetTokenStream is in "
+                        "follow-up PR; today this flag only emits a "
+                        "log line and validates the file exists. "
+                        "Default empty (no distill mix).")
+    p.add_argument("--kd-distill-weight", type=float, default=0.8,
+                   help="KD alpha to use specifically on rows from "
+                        "``--kd-distill-data``. Recommended 0.8 (vs "
+                        "default --kd-weight=0.4 for raw web rows): "
+                        "the distill data has clean teacher "
+                        "trajectories so the student should pull "
+                        "harder onto them. Only used when "
+                        "``--kd-distill-data`` is set.")
     # ---- Phase-gated opt-in components (default OFF, see docs/PHASE_TRAINING.md) ----
     p.add_argument("--modal-list", default="",
                    help="comma-separated modalities to enable for contrastive aux "
@@ -2005,6 +2038,43 @@ def main() -> int:
             teacher = None
     else:
         _log("KD disabled (kd-weight=0)")
+
+    # ---------------- KD distill data (M5.1) ----------------
+    # Validate the optional pre-generated KD distill parquet. Today this
+    # is opt-in metadata only — the M5.1 follow-up PR wires the
+    # ParquetTokenStream-merged dataloader. We still emit a clear log
+    # line so operators can see whether the flag is active in this run.
+    _kd_distill_path = getattr(args, "kd_distill_data", "") or ""
+    if _kd_distill_path:
+        if not os.path.exists(_kd_distill_path):
+            _log(f"WARNING: --kd-distill-data {_kd_distill_path!r} not found "
+                 f"on disk; ignoring (no-op)")
+            args.kd_distill_data = ""
+        else:
+            _kd_distill_size = os.path.getsize(_kd_distill_path)
+            _kd_manifest = _kd_distill_path + ".manifest.json"
+            _manifest_summary = "<no-manifest>"
+            if os.path.exists(_kd_manifest):
+                try:
+                    with open(_kd_manifest, "r", encoding="utf-8") as _mf:
+                        _manifest = __import__("json").load(_mf)
+                    _manifest_summary = (
+                        f"rows={_manifest.get('rows', '?')} "
+                        f"topk={_manifest.get('topk', '?')} "
+                        f"teacher={_manifest.get('teacher_source', '?')!r}"
+                    )
+                except Exception as exc:
+                    _manifest_summary = f"<manifest-read-failed:{exc!r}>"
+            _log(f"KD distill data ATTACHED: {_kd_distill_path!r} "
+                 f"({_kd_distill_size/1e6:.1f} MB) -- {_manifest_summary}")
+            _log(f"  kd_distill_weight={args.kd_distill_weight} "
+                 f"(vs default kd_weight={args.kd_weight} on web rows)")
+            _log("  M5.1 wire-in: today this only validates the file. "
+                 "The training stream still reads from --data-glob; pass "
+                 "the .samples.jsonl path through --data-glob to mix the "
+                 "teacher continuations into the CE stream. Full top-K "
+                 "consumer code path is staged in tests/integration/"
+                 "test_kd_distill_mix.py.")
 
     # ---------------- backend integration ----------------
     if backend_name == "triton_block":
