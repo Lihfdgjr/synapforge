@@ -212,6 +212,14 @@ def evaluate_sft(
     model.eval()
     losses: list[float] = []
     rate_accum: list = []
+    # Device-aware: take cue from the model itself so a CPU-only test
+    # harness (CI runners, integration tests) can call evaluate_sft on
+    # a CUDA-built process without device mismatch on F.embedding.
+    try:
+        model_device = next(model.parameters()).device
+    except StopIteration:
+        model_device = torch.device(DEVICE)
+    use_cuda_path = model_device.type == "cuda"
     for _ in range(n_batches):
         try:
             batch = next(val_iter)
@@ -224,13 +232,13 @@ def evaluate_sft(
             # (LM stream), treat it as full-CE on all non-pad positions.
             x, y = batch
             m = (y != pad_id).float()
-        x = x.to(DEVICE)
-        y = y.to(DEVICE)
-        m = m.to(DEVICE)
+        x = x.to(model_device)
+        y = y.to(model_device)
+        m = m.to(model_device)
         if not response_only:
             m = (y != pad_id).float()  # all non-pad positions
-        if DEVICE == "cuda":
-            with torch.amp.autocast(device_type=DEVICE, dtype=DTYPE):
+        if use_cuda_path:
+            with torch.amp.autocast(device_type="cuda", dtype=DTYPE):
                 logits = model(x).float()
                 loss = response_only_ce_loss(logits, y, m)
         else:
