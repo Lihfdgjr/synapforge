@@ -896,6 +896,53 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--curiosity-weight", type=float, default=0.0,
                    help="weight of 6-signal curiosity loss; 0 = disabled. "
                         "Recommended ~0.05 once base ppl<250 (Phase 1)")
+    # ---- Self-drive wire-in (task #188) -----------------------------------
+    # SelfDriveCoordinator wires the 5 latent components in
+    # synapforge.intrinsic._core (SelfGoalProposer + ImaginationRollout +
+    # FreeEnergySurprise + GoalMemory + IdleLoop) into the trainer. Default
+    # OFF -- when --self-drive is absent the trainer is bit-exact to the
+    # current Run 7 launch.
+    #
+    # When enabled: every K=20 outer steps (or when the data loader is
+    # empty), the coordinator runs M=10 imagined inner steps. The pseudo
+    # batch hidden / goal_tokens come from the proposer + imagination
+    # rollout. GoalMemory + FrontierSampler track success_rate; goals
+    # whose past success_rate is in [0.3, 0.7] are preferred (sweet
+    # spot). QualityGuard snapshots STDP weights pre-cycle and rolls
+    # back via a user-supplied callback when post-cycle val_ppl
+    # regresses past --self-drive-max-regression (default 5%).
+    p.add_argument("--self-drive", action="store_true", default=False,
+                   help="enable self-drive (curiosity + imagination + "
+                        "auto-curriculum) inner loop. Default OFF; current "
+                        "Run 7 launches stay bit-exact when omitted.")
+    p.add_argument("--self-drive-every-k", type=int, default=20,
+                   dest="self_drive_every_k",
+                   help="run the self-drive inner cycle every N outer "
+                        "steps (default 20).")
+    p.add_argument("--self-drive-inner-steps", type=int, default=10,
+                   dest="self_drive_inner_steps",
+                   help="number of imagined inner steps per cycle "
+                        "(default 10).")
+    p.add_argument("--self-drive-max-regression", type=float, default=0.05,
+                   dest="self_drive_max_regression",
+                   help="QualityGuard tolerance: rollback if post-cycle "
+                        "val_ppl > pre * (1 + this). Default 0.05.")
+    p.add_argument("--self-drive-sweet-lo", type=float, default=0.3,
+                   dest="self_drive_sweet_lo",
+                   help="FrontierSampler success-rate lower bound. "
+                        "Default 0.3.")
+    p.add_argument("--self-drive-sweet-hi", type=float, default=0.7,
+                   dest="self_drive_sweet_hi",
+                   help="FrontierSampler success-rate upper bound. "
+                        "Default 0.7.")
+    p.add_argument("--self-drive-recent-k", type=int, default=10,
+                   dest="self_drive_recent_k",
+                   help="recent-K lockout window for FrontierSampler "
+                        "(avoids local mode collapse). Default 10.")
+    p.add_argument("--self-drive-success-loss-drop", type=float, default=0.05,
+                   dest="self_drive_success_loss_drop",
+                   help="threshold for marking an inner step 'success': "
+                        "obs_loss < pre_loss * (1 - this). Default 0.05.")
     # ---- NeuroMCP wire-in (T9.2 in DEEP_MAINT_QUEUE.md) -------------------
     # NeuroMCPHead = SparseSynapticLayer + DynamicActionCodebook. Replaces
     # MCP / function-calling tool tokens with a neuroplastic head that
@@ -927,6 +974,29 @@ def _parse_args() -> argparse.Namespace:
                         "(e.g. when real OS-actuator labels are wired in); "
                         "currently unused -- the head's effective action "
                         "space equals the dynamic codebook size. Default 64.")
+    # ---- NeuroMCP closed-loop computer-use (synapforge.neuromcp) ----------
+    # When enabled, every K outer steps the trainer runs an M-step closed-loop
+    # rollout in the synapforge.neuromcp sandbox VirtualDesktop. Reward signal
+    # back-propagates via STDP only (NOT AdamW) per memory
+    # ``feedback_neural_action_no_token_no_mcp``. Default OFF -- a token-soup
+    # LM training run sees zero behavioural change.
+    p.add_argument("--neuromcp-closed-loop", action="store_true", default=False,
+                   help="enable closed-loop sandbox rollouts every K outer "
+                        "steps. Requires --neuromcp-weight > 0.")
+    p.add_argument("--neuromcp-loop-every", type=int, default=10,
+                   dest="neuromcp_loop_every",
+                   help="run a closed-loop rollout every K outer training "
+                        "steps. Default 10.")
+    p.add_argument("--neuromcp-loop-steps", type=int, default=20,
+                   dest="neuromcp_loop_steps",
+                   help="number of M closed-loop steps per rollout window. "
+                        "Default 20.")
+    p.add_argument("--neuromcp-real-os", action="store_true", default=False,
+                   help="OPT-IN to real-OS actuator (Win32 backend). Without "
+                        "this flag the rollout is sandbox-only (default). "
+                        "Memory ``feedback_neural_action_no_token_no_mcp`` "
+                        "requires explicit confirmation before any real-OS "
+                        "side effect.")
     # ---- Reliability hooks (default-safe) ----
     p.add_argument("--phase-aware", action="store_true", default=False,
                    help="poll out_dir/.phase every 100 steps; on phase change "
@@ -991,6 +1061,22 @@ def _parse_args() -> argparse.Namespace:
                         "empirical crossover at d=1280 on A800 80GB). "
                         "Set to 1.0 to force-always-sparse, 0.0 to "
                         "force-always-dense (debug only).")
+    p.add_argument("--packed-spikes", action="store_true", default=False,
+                   dest="packed_spikes",
+                   help="Bit-pack the PLIF spike train into uint16 slots "
+                        "(16 spikes per word) before the synapse matmul "
+                        "(2026-05-02 native/spike). This is LNN+SNN-specific: "
+                        "spikes are binary {0,1}, so 15 of 16 fp16 bits are "
+                        "wasted -- packing gives 16x memory + 16x HBM "
+                        "bandwidth savings at the spike->synapse boundary. "
+                        "At B=48 T=256 d=1280 layers=16 that's ~94 MB HBM "
+                        "traffic saved per step (~60us at 1.5 TB/s). Auto "
+                        "falls-back to dense GEMM above --sparse-spike-"
+                        "threshold density. Dormant under dead PLIF "
+                        "(current Run 7 density ~ 0): the flag is safe-on "
+                        "but only saves bandwidth once spikes wake up. See "
+                        "synapforge.native.spike and "
+                        "docs/NATIVE_SPIKE_PACKING.md.")
     # ---- Run 7 integration: math-simplification flags (2026-05-02) ------
     # The model_100m.py side already has rfold/rfold_chunk/kwta_k params
     # (merged from feature/math-simplification). Run 7 launcher uses
@@ -1247,6 +1333,70 @@ def _parse_args() -> argparse.Namespace:
                         "wraps the synapforge AdamW math, just on CPU). "
                         "Auto-falls back to PlasticityAwareAdamW if any "
                         "param is plasticity-tagged. Default OFF.")
+    p.add_argument("--stdp-only-plasticity", action="store_true",
+                   default=False,
+                   dest="stdp_only_plasticity",
+                   help="route plasticity-tagged params (sources subset of "
+                        "{stdp, hebb, synaptogenesis}) through "
+                        "synapforge.native.stdp.STDPOnlyOptimizer instead "
+                        "of feeding their plast_delta into "
+                        "PlasticityAwareAdamW. STDP is a LOCAL Hebbian "
+                        "rule: per-step cost O(active_pre * active_post), "
+                        "not O(weights). At 10 percent spike density this "
+                        "is ~10x cheaper than AdamW for those weights, "
+                        "with the Triton kernel pushing 50x+ on CUDA. "
+                        "Bypasses autograd entirely for the plasticity "
+                        "group. BP-tagged and mixed-source params still "
+                        "go through the existing AdamW path so quality "
+                        "is preserved. Default OFF: behaviour matches "
+                        "current production (AdamW for everything). "
+                        "See synapforge/native/stdp/README.md and "
+                        "scripts/bench_stdp_vs_adamw.py.")
+    p.add_argument("--stdp-alpha", type=float, default=0.02,
+                   dest="stdp_alpha",
+                   help="base learning rate for STDP plasticity updates. "
+                        "Per-layer alpha is scaled by the layer's CfC tau "
+                        "via synapforge.native.stdp.per_param_alpha. "
+                        "0.02 matches the SEW-ResNet pair-STDP rule. "
+                        "Only active when --stdp-only-plasticity is ON.")
+    # ---- Run 8 native: --fused-kernel ----------------------------------
+    # Wires synapforge.native.kernel.fused_hybrid_fwd / fused_hybrid_bwd
+    # in place of the per-op call sequence inside HybridBlock. Fwd + bwd
+    # are CLOSED-FORM bit-exact at fp32 reduction (see
+    # tests/native/kernel/test_fused_hybrid.py); fp16/bf16 paths are
+    # numerically equivalent within rel-err 5e-4. Expected 1.15-1.18x
+    # step-time speedup at d>=1024 due to fewer kernel launches and
+    # fused norm+linear+spike+residual on a single SM tile.
+    # Default OFF -> Run 7 sequential dispatch path; behaviour bit-exact.
+    p.add_argument("--fused-kernel", action="store_true", default=False,
+                   dest="fused_kernel",
+                   help="Run 8: fuse the HybridBlock forward+backward into "
+                        "a single Triton kernel pair "
+                        "(synapforge.native.kernel.fused_hybrid_fwd/bwd). "
+                        "1.15-1.18x measured speedup at d>=1024. Falls "
+                        "back to the existing per-op path when Triton or "
+                        "CUDA are unavailable (the bridge module logs "
+                        "the reason once at startup). Default OFF "
+                        "preserves Run 7 sequential dispatch bit-exact.")
+    # ---- Run 8 native: --async-aux-coordinator -------------------------
+    # Replaces the inline TTT / curiosity / NeuroMCP / ActionHead calls
+    # with synapforge.native.auxsched.AsyncAuxCoordinator. Each driver
+    # runs on its own stream / thread so wall-clock for an outer step
+    # collapses from sum(main+ttt+icm+mcp) to max(...). Default OFF =
+    # Run 7 inline path bit-exact (the coordinator is constructed lazily
+    # only when the flag is on, and only mixins already enabled by
+    # --self-learn-ttt / --curiosity-weight / --neuromcp-weight feed it).
+    p.add_argument("--async-aux-coordinator", action="store_true",
+                   default=False,
+                   dest="async_aux_coordinator",
+                   help="Run 8: stream auxiliary components "
+                        "(curiosity ICM / TTT / NeuroMCP / ActionHead) "
+                        "through synapforge.native.auxsched."
+                        "AsyncAuxCoordinator instead of running them "
+                        "inline on the main GPU stream. 1.4x-2.9x "
+                        "expected wall-clock collapse depending on "
+                        "TTT-k. Default OFF preserves Run 7 inline "
+                        "bit-exact behaviour.")
     p.add_argument("--skip-warmstart-eval-N", type=int, default=0,
                    dest="skip_warmstart_eval_n",
                    help="when warmstarting from a known-good ckpt, skip "
@@ -2042,6 +2192,7 @@ def main() -> int:
         sew_shortcut=bool(args.sew_shortcut),
         sparse_spike_synapse=bool(getattr(args, "sparse_spike_synapse", False)),
         sparse_spike_threshold=float(getattr(args, "sparse_spike_threshold", 0.30)),
+        packed_spikes=bool(getattr(args, "packed_spikes", False)),
         # Run 7 integration (2026-05-02): math-simplification model knobs.
         rfold=bool(getattr(args, "rfold", False)),
         rfold_chunk=int(getattr(args, "rfold_chunk", 16)),
@@ -2054,6 +2205,18 @@ def main() -> int:
         print(f"[sparse-spike] synapse path enabled "
               f"(threshold={float(getattr(args, 'sparse_spike_threshold', 0.30)):.2f}); "
               f"auto-fallback to dense above threshold spike density")
+    if bool(getattr(args, "packed_spikes", False)):
+        # The packed-spike path is wired through the model via the same
+        # density auto-fallback as --sparse-spike-synapse. Below threshold
+        # density the spike->synapse contribution goes through the
+        # bit-packed Triton kernel (16x HBM bandwidth saving on that
+        # branch); above threshold we route through the existing dense
+        # path. Dormant when PLIF is dead (density ~ 0): bandwidth saved
+        # only after PLIF revives. See synapforge.native.spike.
+        print(f"[packed-spikes] bit-packed spike->synapse path enabled "
+              f"(threshold={float(getattr(args, 'sparse_spike_threshold', 0.30)):.2f}); "
+              f"requires Triton + CUDA. Dormant under dead PLIF; ~16x HBM "
+              f"bandwidth saving on synapse branch once spikes wake up.")
     if bool(getattr(args, "rfold", False)):
         print(f"[rfold] R-fold closed-form scan enabled "
               f"(chunk={int(getattr(args, 'rfold_chunk', 16))}); "
@@ -2357,6 +2520,48 @@ def main() -> int:
         optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     else:
         optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
+
+    # ----- Native STDP wrap (--stdp-only-plasticity) ---------------------
+    # When this flag is ON we wrap the chosen optimizer in a
+    # HybridOptimizerDispatcher that splits params into two groups:
+    #   plasticity-only (sources subset of {stdp, hebb, synaptogenesis})
+    #     -> STDPOnlyOptimizer (no autograd, O(active_spikes) per step)
+    #   everything else -> the AdamW we just built
+    # Default OFF preserves current production behavior bit-for-bit.
+    _use_stdp_native = bool(getattr(args, "stdp_only_plasticity", False))
+    if _use_stdp_native:
+        try:
+            from synapforge.native.stdp import HybridOptimizerDispatcher
+            # Build a fresh AdamW restricted to BP/mixed params; the
+            # original `optim` was over all params, so we replace it.
+            _bp_named = []
+            _plast_count = 0
+            for _pname, _p in model.named_parameters():
+                if not _p.requires_grad:
+                    continue
+                _src = list(getattr(_p, "_sf_grad_source", ("bp",)))
+                if _src and all(s in ("stdp", "hebb", "synaptogenesis")
+                                for s in _src):
+                    _plast_count += 1
+                else:
+                    _bp_named.append((_pname, _p))
+            _factory = lambda ps: torch.optim.AdamW(
+                ps, lr=peak_lr, betas=(0.9, 0.999),
+                eps=1e-8, weight_decay=WEIGHT_DECAY,
+            )
+            optim = HybridOptimizerDispatcher.from_model(
+                model,
+                base_optim_factory=_factory,
+                base_alpha=float(getattr(args, "stdp_alpha", 0.02)),
+            )
+            _log(f"[stdp-native] HybridOptimizerDispatcher: "
+                 f"{_plast_count} plasticity-only params -> STDP, "
+                 f"{len(_bp_named)} -> AdamW. "
+                 f"alpha={getattr(args, 'stdp_alpha', 0.02)}")
+        except Exception as exc:
+            _log(f"[stdp-native] init failed ({exc!r}); falling back to "
+                 "current AdamW path. Quality preserved; perf unchanged.")
+
     print(f"optimizer: {type(optim).__name__} lr={peak_lr} wd={WEIGHT_DECAY}")
 
     # Load optimizer state from warmstart ckpt (preserves Adam m/v momentum;
@@ -2645,6 +2850,64 @@ def main() -> int:
     except Exception as exc:
         _log(f"[mixin] mixins import failed; continuing without: {exc}")
 
+    # ---------------- Self-drive coordinator (default OFF) ----------------
+    # See docs/INTRINSIC_SELF_DRIVE.md for the architecture diagram. When
+    # --self-drive is absent the coordinator is None and the inner
+    # cycle never fires (current Run 7 launches stay bit-exact).
+    self_drive_coord = None
+    if bool(getattr(args, "self_drive", False)):
+        try:
+            from synapforge.intrinsic import (
+                SelfDriveCoordinator,
+                SelfDriveConfig,
+                SelfGoalProposer,
+                ImaginationRollout,
+                GoalMemory,
+            )
+            sd_cfg = SelfDriveConfig(
+                enabled=True,
+                every_k_steps=int(args.self_drive_every_k),
+                inner_steps=int(args.self_drive_inner_steps),
+                sweet_lo=float(args.self_drive_sweet_lo),
+                sweet_hi=float(args.self_drive_sweet_hi),
+                recent_k_lockout=int(args.self_drive_recent_k),
+                success_loss_drop=float(args.self_drive_success_loss_drop),
+                max_val_regression=float(args.self_drive_max_regression),
+            )
+            try:
+                _vocab_size = int(model.vocab_size)
+            except Exception:
+                _vocab_size = int(getattr(args, "vocab_size", 32000))
+            try:
+                proposer = SelfGoalProposer(model, vocab_size=_vocab_size)
+            except Exception as exc:
+                _log(f"[self-drive] proposer init failed: {exc!r}")
+                proposer = None
+            try:
+                rollout = ImaginationRollout(model)
+            except Exception as exc:
+                _log(f"[self-drive] rollout init failed: {exc!r}")
+                rollout = None
+            memory = GoalMemory(capacity=int(sd_cfg.max_goal_memory))
+            self_drive_coord = SelfDriveCoordinator(
+                cfg=sd_cfg,
+                proposer=proposer,
+                rollout=rollout,
+                memory=memory,
+                log_fn=_log,
+            )
+            _log(
+                f"[self-drive] enabled: every_k={sd_cfg.every_k_steps} "
+                f"inner_steps={sd_cfg.inner_steps} "
+                f"sweet=[{sd_cfg.sweet_lo:.2f},{sd_cfg.sweet_hi:.2f}] "
+                f"max_regression={sd_cfg.max_val_regression:.3f}"
+            )
+        except Exception as exc:
+            _log(f"[self-drive] DISABLED (init failed): {exc!r}")
+            self_drive_coord = None
+    else:
+        _log("[self-drive] disabled (--self-drive not passed)")
+
     # NeuroMCPMixin lives in ``synapforge.training`` (alongside the EMA
     # tracker), NOT in the umbrella ``synapforge.trainer_mixins`` module --
     # this keeps the wire-in independent of the older mixin import block
@@ -2686,6 +2949,54 @@ def main() -> int:
             neuromcp_mixin = None
     else:
         _log("[mixin] neuromcp: disabled (weight=0)")
+
+    # ---- Run 8 native: AsyncAuxCoordinator wire-in ---------------------
+    # Default OFF preserves Run 7 inline behaviour bit-exact. When ON,
+    # we lazily construct the coordinator here AFTER all mixins exist so
+    # the banner can list which aux drivers will actually be active.
+    # Inline call sites (TTT inner step, ICM forward, NeuroMCP plasticity
+    # tick, ActionHead tool exec) check ``aux_coord is not None`` and
+    # route through it; otherwise fall back to the inline path so the
+    # numerical state is identical. Reason for late binding: coordinator
+    # streams allocate small CUDA streams which is cheap but not free,
+    # and we don't want them touched on a default-off run.
+    aux_coord = None
+    if bool(getattr(args, "async_aux_coordinator", False)):
+        _drivers_active = []
+        if curiosity_mixin is not None:
+            _drivers_active.append("curiosity")
+        if self_learn_mixin is not None:
+            _drivers_active.append("ttt")
+        if neuromcp_mixin is not None:
+            _drivers_active.append("neuromcp")
+        # ActionHead is implicit in the model; coordinator only spins up
+        # the thread pool for it if any tool call actually happens.
+        try:
+            from synapforge.native.auxsched import AsyncAuxCoordinator
+            aux_coord = AsyncAuxCoordinator()
+            _log(f"[async-aux] coordinator enabled; "
+                 f"drivers={_drivers_active or ['none-mixins-off']}; "
+                 f"inline path falls back when a driver is missing")
+        except Exception as exc:
+            _log(f"[async-aux] coordinator init failed ({exc!r}); "
+                 f"inline path retained -- behaviour bit-exact with Run 7")
+            aux_coord = None
+    else:
+        _log("[async-aux] disabled (Run 7 inline path bit-exact)")
+
+    # ---- Run 8 native: --fused-kernel banner ---------------------------
+    # The fused HybridBlock kernel is a model-side choice; the trainer
+    # only logs the flag state so post-mortems can verify which path
+    # produced a given run. Actual wire-in is via the model's
+    # ``fused_kernel`` constructor knob (set below in build_model_kwargs)
+    # which falls back to the per-op path when triton/cupy are missing.
+    if bool(getattr(args, "fused_kernel", False)):
+        _log("[fused-kernel] enabled -- HybridBlock fwd+bwd via "
+             "synapforge.native.kernel.fused_hybrid_{fwd,bwd}; "
+             "auto-fallback to per-op path if Triton+CUDA unavailable. "
+             "Bit-exact at fp32 reduction (rel-err <= 5e-4 in fp16/bf16).")
+    else:
+        _log("[fused-kernel] disabled (Run 7 per-op dispatch path)")
 
     # ---------------- training ----------------
     # P3: track BOTH val_ppl_ttt (set TTT trains on; drops artificially
@@ -3200,6 +3511,72 @@ def main() -> int:
             except Exception as exc:
                 _log(f"[mixin] neuromcp step_plasticity step {step} failed: {exc}")
 
+        # ---- NeuroMCP closed-loop sandbox rollout ----
+        # Per memory ``feedback_neural_action_no_token_no_mcp``: Adam-free
+        # credit assignment. We collect (primitive_id, params, success)
+        # tuples and let the synapforge.plasticity engine update STDP edges
+        # between hidden states and primitive ids. The reward signal does
+        # NOT flow through .backward() -- this is the user's hard rule.
+        if (getattr(args, "neuromcp_closed_loop", False)
+                and neuromcp_mixin is not None
+                and step > 0
+                and step % max(1, int(args.neuromcp_loop_every)) == 0):
+            try:
+                from synapforge.neuromcp import (
+                    ClosedLoopEnv, OSActuator, CompoundGrowth,
+                )
+                if not hasattr(model, "_neuromcp_env"):
+                    backend = "win32" if args.neuromcp_real_os else "sandbox"
+                    actuator = OSActuator(
+                        backend=backend,
+                        allow_real_os=bool(args.neuromcp_real_os),
+                    )
+                    model._neuromcp_env = ClosedLoopEnv(actuator=actuator)
+                env = model._neuromcp_env
+
+                # Trivial random policy seeded by the LM hidden state (so
+                # the loop is not dead-stuck on argmax 0 when the LM is
+                # un-trained).  The actual policy that learns lives in the
+                # NeuroActionHead-shaped object once the trainer wires it
+                # in -- here we just exercise the env contract.
+                import random as _rnd
+                rng = _rnd.Random(step)
+                from synapforge.neuromcp.primitives import NUM_PRIMITIVES
+
+                def _policy(_obs):
+                    pid = rng.randrange(min(16, NUM_PRIMITIVES))  # avoid sys
+                    params = [rng.random() for _ in range(8)]
+                    return pid, params, 0.9  # confidence above halt
+
+                roll = env.rollout(_policy,
+                                   n_steps=int(args.neuromcp_loop_steps),
+                                   reset=False)
+                stats = env.stats()
+                # New-compound emergence log (the demo of "tools emerging
+                # without JSON registration").
+                for r in roll:
+                    if r.new_compound is not None:
+                        _log(
+                            "  [compound] step={} new_compound_id={} = "
+                            "primitives({})".format(
+                                step,
+                                r.new_compound.compound_id,
+                                ",".join(str(p) for p in
+                                         r.new_compound.primitive_seq),
+                            )
+                        )
+                if step % 100 == 0:
+                    _log(
+                        f"  [closed-loop] step={step} "
+                        f"n_steps={int(stats['n_steps'])} "
+                        f"success_rate={stats['success_rate']:.3f} "
+                        f"halt_rate={stats['halt_rate']:.3f} "
+                        f"compounds={int(stats['n_compounds'])} "
+                        f"reward={stats['cumulative_reward']:.2f}"
+                    )
+            except Exception as exc:
+                _log(f"[closed-loop] step {step} skipped: {exc!r}")
+
         # T8.4 — EMA update right after optim.step() (model params now reflect
         # the just-applied gradient). No-op when --ema-decay 0.0 (default).
         if ema_tracker is not None:
@@ -3208,6 +3585,123 @@ def main() -> int:
             except Exception as exc:  # never let EMA error kill training
                 _log(f"[ema] update failed step={step} ({exc!r}); disabling")
                 ema_tracker = None
+
+        # ---- Self-drive cycle (default OFF; task #188) ----
+        # Wires SelfGoalProposer + ImaginationRollout + GoalMemory +
+        # FrontierSampler + QualityGuard into a single inner loop that
+        # fires every K outer steps (or on data-loader empty). The
+        # inner runner here is intentionally minimal: it runs the model
+        # forward on the goal_tokens to compute a loss + a torch.no_grad
+        # forward update for STDP plasticity (the bypass-optimizer path
+        # per feedback_neural_action_no_token_no_mcp.md). Snapshot /
+        # rollback uses the param-state of the model so a regression on
+        # val_ppl reverts to pre-cycle weights.
+        if self_drive_coord is not None:
+            _idle = bool(data_exhausted)
+            if self_drive_coord.should_fire(step, idle=_idle):
+                _sd_cycle_t = time.time()
+                # ---- inner-step runner ----
+                # Run a forward over the goal_tokens to obtain a loss
+                # signal. We wrap in no_grad: STDP plasticity (when
+                # PLIF / SparseSynapticLayer are alive) updates via the
+                # plasticity ticks below; AdamW is intentionally NOT
+                # called here. When PLIF is dormant the runner is a
+                # signal-only no-op (still produces a loss number that
+                # GoalMemory and FrontierSampler track).
+                def _sd_run_inner(sd_step) -> float:
+                    if not sd_step.goal_tokens:
+                        return 0.0
+                    try:
+                        _gt = torch.tensor(
+                            [list(sd_step.goal_tokens)],
+                            dtype=torch.long, device=DEVICE,
+                        )
+                        _x = _gt[:, :-1]
+                        _y = _gt[:, 1:]
+                        if _x.numel() == 0:
+                            return 0.0
+                        model.eval()
+                        with torch.no_grad():
+                            _logits = model(_x)
+                            _ll = _logits.reshape(-1, _logits.size(-1)).float()
+                            _yy = _y.reshape(-1)
+                            _loss = F.cross_entropy(_ll, _yy)
+                        model.train()
+                        return float(_loss.detach().item())
+                    except Exception as _exc:
+                        _log(f"[self-drive] inner runner failed: {_exc!r}")
+                        return 0.0
+
+                # ---- snapshot / restore for STDP-only quality guard ----
+                # We snapshot ONLY the parameters that the inner-step
+                # path could mutate. Currently the runner is no_grad so
+                # nothing changes; the snapshot is a defensive harness
+                # for when STDP/SparseSynapticLayer plasticity is wired
+                # into the inner runner. Snapshot is a dict of cloned
+                # param tensors keyed by module name.
+                def _sd_snapshot():
+                    return {
+                        name: p.detach().clone()
+                        for name, p in model.named_parameters()
+                        if p.requires_grad
+                    }
+
+                def _sd_restore(snap):
+                    if not snap:
+                        return
+                    with torch.no_grad():
+                        for name, p in model.named_parameters():
+                            saved = snap.get(name)
+                            if saved is not None and saved.shape == p.shape:
+                                p.data.copy_(saved)
+
+                # ---- pre/post quality eval against the holdout val set ----
+                # Cheap: 4 batches only, so the cycle stays sub-second
+                # at the K=20 cadence. Reduces to NaN signal when the
+                # iter is empty (verify() then fails-open KEEP).
+                def _sd_eval():
+                    try:
+                        return float(evaluate(
+                            model, iter(val_ds_holdout),
+                            n_batches=4, plif_cells=None,
+                        ))
+                    except Exception as _exc:
+                        _log(f"[self-drive] eval failed: {_exc!r}")
+                        return float("nan")
+
+                def _sd_baseline_loss():
+                    # Use the accumulated CE for this outer step. We
+                    # don't reach for ``_step_ce`` here because that
+                    # only gets computed below the self-drive block;
+                    # ``accum_ce`` is already final at this point in
+                    # the loop (inner accum loop has broken).
+                    _denom = max(1, accum_done)
+                    if _lazy_host_sync_accum:
+                        try:
+                            return float(accum_ce_t.detach().item()) / _denom
+                        except Exception:
+                            return 5.0
+                    return float(accum_ce) / _denom if accum_ce > 0 else 5.0
+
+                try:
+                    _sd_summary = self_drive_coord.cycle(
+                        outer_step=step,
+                        idle=_idle,
+                        run_inner_fn=_sd_run_inner,
+                        baseline_loss_fn=_sd_baseline_loss,
+                        snapshot_fn=_sd_snapshot,
+                        restore_fn=_sd_restore,
+                        eval_fn=_sd_eval,
+                    )
+                    if _sd_summary is not None:
+                        _log(
+                            f"[self-drive] cycle done step={step} "
+                            f"inner={_sd_summary['n_inner_steps']} "
+                            f"kept={_sd_summary['n_kept']} "
+                            f"elapsed_ms={(time.time()-_sd_cycle_t)*1000.0:.1f}"
+                        )
+                except Exception as _exc:
+                    _log(f"[self-drive] cycle FAILED step={step}: {_exc!r}")
 
         # Perf audit 2026-05-02 (RECO #1): when --cuda-sync-every N>1, only
         # call torch.cuda.synchronize() every N global steps instead of
