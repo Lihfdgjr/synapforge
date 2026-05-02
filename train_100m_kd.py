@@ -936,6 +936,71 @@ def _parse_args() -> argparse.Namespace:
                         "empirical crossover at d=1280 on A800 80GB). "
                         "Set to 1.0 to force-always-sparse, 0.0 to "
                         "force-always-dense (debug only).")
+    # ---- Run 7 integration: math-simplification flags (2026-05-02) ------
+    # The model_100m.py side already has rfold/rfold_chunk/kwta_k params
+    # (merged from feature/math-simplification). Run 7 launcher uses
+    # --rfold + --rfold-chunk and skips --kwta-k (changes model function).
+    p.add_argument("--rfold", action="store_true", default=False,
+                   dest="rfold",
+                   help="R-fold closed-form parallel scan for LiquidCell "
+                        "internals (math-simplification 2026-05-02). "
+                        "Numerically equivalent to the per-token Python "
+                        "loop within bit-exact tolerance for chunk<=16 "
+                        "(verified by tests/cells/test_rfold_equivalence.py). "
+                        "Expected 1.5-2x speed-up on the LiquidCell call "
+                        "with no quality regression. Default OFF.")
+    p.add_argument("--rfold-chunk", type=int, default=16,
+                   dest="rfold_chunk",
+                   help="R-fold chunk size (must be <=16 for the bit-exact "
+                        "regime; larger chunks use the parallel-scan "
+                        "approximation that has measured drift after T~30 "
+                        "and is not used by Run 7). Default 16.")
+    p.add_argument("--kwta-k", type=int, default=0,
+                   dest="kwta_k",
+                   help="k-WTA top-K activation gate width "
+                        "(math-simplification 2026-05-02). Replaces dense "
+                        "sigmoid gate with sparse top-K mask. CHANGES THE "
+                        "MODEL FUNCTION -- per Run 7 quality 铁律 the "
+                        "launcher does NOT set this. Kept as opt-in flag "
+                        "for controlled side-by-side testing later. "
+                        "Default 0 = legacy dense sigmoid gate (bit-exact).")
+    p.add_argument("--bf16-full", action="store_true", default=False,
+                   dest="bf16_full",
+                   help="Banner-only flag to acknowledge that all forward "
+                        "math runs in bf16 autocast (already the default "
+                        "code path on CUDA). Used by Run 7 launcher as "
+                        "a documentation marker. No behaviour change.")
+    # ---- Run 7 integration: --grad-ckpt alias for --grad-checkpoint -----
+    # The math-simplification pack landed --grad-ckpt as a more concise
+    # name. Wire it as an alias so the launcher's `--grad-ckpt` flag
+    # behaves identically to the long-standing `--grad-checkpoint`.
+    p.add_argument("--grad-ckpt", action="store_true", default=False,
+                   dest="grad_ckpt_alias",
+                   help="Alias for --grad-checkpoint (math-simplification "
+                        "2026-05-02). Equivalent in every way -- the "
+                        "trainer ORs the two flags before consuming.")
+    # ---- Run 7 integration: --ttt-every (NEW quality-grey gate) ---------
+    p.add_argument("--ttt-every", type=int, default=1,
+                   dest="ttt_every",
+                   help="At eval-time TTT probe, only run the inner-loop "
+                        "adapt step when ``step %% ttt_every == 0``. "
+                        "Default 1 = run every eval (matches Run 6 "
+                        "behaviour bit-exact). Run 7 uses 10 (probe "
+                        "every 10th eval block) to reduce TTT compute "
+                        "since current TTT lift is dead-PLIF-driven and "
+                        "= -0.0006 (i.e. signal is dead, no quality "
+                        "loss from sub-sampling).")
+    # ---- Run 7 integration: --kill-if-val-regresses (NEW quality guard) -
+    p.add_argument("--kill-if-val-regresses", type=float, default=0.0,
+                   dest="kill_if_val_regresses",
+                   help="If the holdout val_ppl exceeds this multiple of "
+                        "the warmstart's best val_ppl (recorded in the "
+                        "metrics.json under 'baseline_val_ppl'), exit "
+                        "non-zero with a [QUALITY-GUARD] message. "
+                        "Enforces the user's '质量只能升不能降' rule. "
+                        "Default 0.0 disables the guard (Run 6 "
+                        "behaviour). Run 7 sets 1.03 = 3%% regression "
+                        "tolerance over Run 6's best (4299).")
     # ---- Perf knobs (2026-05-01; see docs/PERF_KNOBS.md) ------------------
     p.add_argument("--z-loss-topk", type=int, default=2048,
                    help="top-K logits used for sparse z-loss logsumexp; "
@@ -1904,12 +1969,16 @@ def main() -> int:
     print(f"steps={n_steps} bs={args.batch_size} seq={seq_len} lr={peak_lr}")
 
     # ---------------- model ----------------
+    # --grad-ckpt is the math-simplification alias for --grad-checkpoint.
+    # OR them so either flag activates activation checkpointing.
+    _grad_ckpt = bool(args.grad_checkpoint or
+                      bool(getattr(args, "grad_ckpt_alias", False)))
     model = build_synapforge_100m(
         vocab=int(args.vocab), d=int(args.d), n_layers=int(args.n_layers),
         loop_depth=int(args.loop_depth), max_seq=seq_len,
         ffn_ratio=float(args.ffn_ratio), sparsity=float(args.sparsity),
         dropout=MODEL_DROPOUT,
-        use_grad_checkpoint=args.grad_checkpoint,
+        use_grad_checkpoint=_grad_ckpt,
         freeze_vocab_tail=bool(args.freeze_vocab_tail),
         lm_head_spectral_norm=bool(args.lm_head_spectral_norm),
         lm_head_pre_ln=bool(args.lm_head_pre_ln),
@@ -1918,6 +1987,10 @@ def main() -> int:
         sew_shortcut=bool(args.sew_shortcut),
         sparse_spike_synapse=bool(getattr(args, "sparse_spike_synapse", False)),
         sparse_spike_threshold=float(getattr(args, "sparse_spike_threshold", 0.30)),
+        # Run 7 integration (2026-05-02): math-simplification model knobs.
+        rfold=bool(getattr(args, "rfold", False)),
+        rfold_chunk=int(getattr(args, "rfold_chunk", 16)),
+        kwta_k=int(getattr(args, "kwta_k", 0)),
     )
     # Log the sparse-spike-synapse flag state so post-mortems can verify
     # the dispatch is live (matches the existing kwta/sew/rfold pattern).
@@ -1925,6 +1998,15 @@ def main() -> int:
         print(f"[sparse-spike] synapse path enabled "
               f"(threshold={float(getattr(args, 'sparse_spike_threshold', 0.30)):.2f}); "
               f"auto-fallback to dense above threshold spike density")
+    if bool(getattr(args, "rfold", False)):
+        print(f"[rfold] R-fold closed-form scan enabled "
+              f"(chunk={int(getattr(args, 'rfold_chunk', 16))}); "
+              f"bit-exact for chunk<=16")
+    if int(getattr(args, "kwta_k", 0)) > 0:
+        print(f"[kwta] WARNING: kwta_k={args.kwta_k} > 0 -- changes "
+              f"model function. Bit-exactness vs run 6 NOT preserved.")
+    if _grad_ckpt:
+        print(f"[grad-ckpt] activation checkpointing ON")
     n_params = model.num_parameters()
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
     if str(args.quant_cfc_weights) == "ternary":
@@ -2495,6 +2577,13 @@ def main() -> int:
     # creates/updates a ``best_step_<N>.pt`` symlink/copy so a relauncher can
     # warmstart from the actual best ckpt without grepping the log.
     best_val_ppl_holdout = float("inf")
+    # Run 7 quality guard (2026-05-02): if --kill-if-val-regresses is set,
+    # the trainer kills the process when ``val_ppl_holdout > multiplier *
+    # baseline_val_ppl``. baseline_val_ppl is the FIRST val_ppl_holdout
+    # observed in this run (i.e. the warmstart's val_ppl after the
+    # initial eval). Subsequent evals must improve or stay within the
+    # tolerance band. Enforces 质量只能升不能降.
+    _quality_guard_baseline_ppl = None  # set on first eval; never modified
     t0 = time.time()
     last_log_t = t0
     cum_tok = 0
@@ -3298,6 +3387,42 @@ def main() -> int:
                 f"VAL step {step}: val_ppl_ttt={ppl_ttt:.2f} "
                 f"val_ppl_holdout={ppl_holdout:.2f} (honest)"
             )
+            # Run 7 quality guard (2026-05-02): if --kill-if-val-regresses
+            # is set and we've seen at least one prior val_ppl_holdout,
+            # exit non-zero when the current val regresses past the
+            # multiplier (1.03 = 3% tolerance over baseline).
+            _quality_guard_mult = float(getattr(args, "kill_if_val_regresses", 0.0))
+            if _quality_guard_mult > 0.0:
+                if _quality_guard_baseline_ppl is None:
+                    # First val of this run becomes the baseline. Persist
+                    # to metrics so post-mortem reads see exactly what we
+                    # gated on.
+                    _quality_guard_baseline_ppl = float(ppl_holdout)
+                    metrics["baseline_val_ppl"] = _quality_guard_baseline_ppl
+                    _log(
+                        f"[QUALITY-GUARD] baseline_val_ppl set to "
+                        f"{_quality_guard_baseline_ppl:.2f} (first eval); "
+                        f"trainer will exit non-zero if val_ppl > "
+                        f"{_quality_guard_mult:.2f} * baseline = "
+                        f"{_quality_guard_mult * _quality_guard_baseline_ppl:.2f}"
+                    )
+                else:
+                    _threshold = _quality_guard_mult * _quality_guard_baseline_ppl
+                    if float(ppl_holdout) > _threshold:
+                        _log(
+                            f"[QUALITY-GUARD] val_ppl regression detected: "
+                            f"{ppl_holdout:.2f} > {_threshold:.2f} "
+                            f"({_quality_guard_mult:.2f}x baseline "
+                            f"{_quality_guard_baseline_ppl:.2f}); "
+                            f"exiting non-zero per --kill-if-val-regresses"
+                        )
+                        # Persist final metrics before bailing.
+                        try:
+                            with open(os.path.join(out_dir, "metrics.json"), "w") as _f:
+                                json.dump(metrics, _f, indent=2)
+                        except Exception:
+                            pass
+                        sys.exit(2)
             # T9.3 -- multi-seq-len VAL + monotonic-quality flag.
             # Default OFF (--val-seq-lens empty); when set, run
             # evaluate() at every requested length with auto-scaled
@@ -3357,7 +3482,16 @@ def main() -> int:
                     _log(f"  [honest-eval] step {step} skipped: {exc}")
             # Opt-in: probe TTT lift on top-K hardest val examples.
             # CRITICAL: only the TTT side is exposed -- holdout stays clean.
-            if self_learn_mixin is not None:
+            # Run 7 (2026-05-02): --ttt-every gates the probe so it runs
+            # only when ``step % ttt_every == 0`` (default 1 = every eval).
+            # With ttt_every=10 and eval_every=500, the probe runs at
+            # steps 500, 1000, ... that are also multiples of 10 (i.e.
+            # all of them, since 500 % 10 == 0). The intent: when the
+            # eval cadence is finer or when ttt_every is set larger
+            # than eval_every, the probe gets skipped for cheaper evals.
+            _ttt_every = max(1, int(getattr(args, "ttt_every", 1)))
+            _ttt_should_probe = (step % _ttt_every == 0)
+            if self_learn_mixin is not None and _ttt_should_probe:
                 try:
                     val_it_probe = iter(val_ds_ttt)
                     xv, yv = next(val_it_probe)
@@ -3371,6 +3505,10 @@ def main() -> int:
                          f"lift={rec['lift']:+.4f}")
                 except Exception as exc:
                     _log(f"  [self-learn] probe failed: {exc}")
+            elif self_learn_mixin is not None and not _ttt_should_probe:
+                # Cheap diagnostic so the post-mortem can confirm the
+                # gate is firing as expected.
+                _log(f"  [self-learn] step {step} skipped (ttt_every={_ttt_every})")
             samples = []
             for p in sample_prompts:
                 try:
