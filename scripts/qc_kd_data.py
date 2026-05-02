@@ -51,32 +51,42 @@ except Exception:  # pragma: no cover
 
 
 # --- TOKEN_SOUP detector ----------------------------------------------------
-def is_token_soup(text: str, n: int = 1, min_repeats: int = 8) -> bool:
-    """Detect "the the the..." or "<garbled>... <garbled>..." patterns.
+# We're looking for the failure mode "the the the the..." (a single
+# *word-shaped* token repeated 8+ times in a row), or its bigram form
+# ("foo bar foo bar..."), or a single Chinese character glyph repeated
+# ≥12 times in a row. We deliberately DON'T flag:
+#   - whitespace runs in code (4-space indent)
+#   - punctuation runs (".....", "::::")
+#   - "}}}}}}", ")))" etc.
+# because those are normal code patterns, not LM degeneration.
+_WORD_RE = re.compile(r"[A-Za-z]+|[一-鿿]+|[0-9]+")
 
-    Strategy: tokenise on whitespace + punctuation; look for any n-gram
-    that appears > min_repeats times in a row. Ignores empty / very short
-    completions (those are reported separately).
+
+def is_token_soup(text: str, min_repeats: int = 8) -> bool:
+    """Detect "the the the..." or "garbled garbled..." token-loop patterns.
+
+    Strategy: extract *word tokens only* (alpha runs, CJK runs, digit runs);
+    ignore whitespace, punctuation, and code symbols. Then look for any
+    unigram or bigram that repeats consecutively at least ``min_repeats``
+    times. Empty / very short completions are reported separately.
     """
     if not text or len(text) < 8:
         return False
-    # whitespace + simple word split — works for both EN and ZH because
-    # Chinese chars get individual chars when there's no whitespace.
-    # For Chinese repetition, look at char-level too.
-    toks = re.findall(r"\S+", text)
+    toks = _WORD_RE.findall(text)
     if len(toks) >= min_repeats:
-        # Check for unigram repetition.
-        for i in range(len(toks) - min_repeats):
+        # Unigram repetition: "the the the the the the the the".
+        for i in range(len(toks) - min_repeats + 1):
             if all(toks[i + k] == toks[i] for k in range(min_repeats)):
                 return True
-        # Check for bigram repetition.
-        for i in range(len(toks) - 2 * min_repeats):
+        # Bigram repetition: "foo bar foo bar foo bar ...".
+        for i in range(len(toks) - 2 * min_repeats + 1):
             if all(toks[i + 2 * k] == toks[i] and toks[i + 2 * k + 1] == toks[i + 1]
                    for k in range(min_repeats)):
                 return True
-    # Char-level for Chinese (a single char repeated ≥12 times).
-    cmin = max(min_repeats, 12)
-    for m in re.finditer(r"(.)\1{%d,}" % (cmin - 1), text):
+    # Single-char glyph repetition (Chinese / ad-hoc): only fire when
+    # ≥ 12 of the SAME CJK character in a row. Skip ASCII (would flag
+    # whitespace + code symbols as soup).
+    for m in re.finditer(r"([一-鿿])\1{11,}", text):
         return True
     return False
 
