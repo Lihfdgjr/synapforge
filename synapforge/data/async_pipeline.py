@@ -127,7 +127,12 @@ class AsyncTokenStream:
         remote_warehouse: object | None = None,
         stages: int = 4,
         prefetch: int = 8,
+        files_with_weights: list[tuple[str, float]] | None = None,
     ) -> None:
+        # ``files_with_weights`` (D4 quality-data push) is forwarded to
+        # the inner ParquetTokenStream verbatim. The async pipeline
+        # operates on whatever rows the inner stream yields, so the
+        # weighted mixture is honoured upstream of any threading.
         self.stages = max(1, min(4, int(stages)))
         self.prefetch = max(2, int(prefetch))
 
@@ -150,6 +155,7 @@ class AsyncTokenStream:
             prefetch_factor=0,        # async pipeline replaces this
             pin_memory=False,         # stage 2 owns pinning
             remote_warehouse=remote_warehouse,
+            files_with_weights=files_with_weights,
         )
         # Public attribute mirrors so callers that rely on these (e.g.
         # the trainer's val-stream auto-scaler) see the same surface

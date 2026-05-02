@@ -1,0 +1,192 @@
+{
+  "kind": "quality_corpus_manifest",
+  "corpus_version": "v7",
+  "generated_utc": "2026-05-02T12:30:46Z",
+  "target_gb": 5.0,
+  "mixture_requested": {
+    "web_edu": 0.5,
+    "wiki": 0.3,
+    "instruct": 0.2
+  },
+  "mixture_actual": {
+    "web_edu": 0.5,
+    "wiki": 0.3,
+    "instruct": 0.2
+  },
+  "total_files": 11,
+  "total_size_gb": 3.13,
+  "total_rows": 2769760,
+  "estimated_tokens": 1028181177,
+  "by_domain": {
+    "web_edu": {
+      "weight": 0.5,
+      "files": [
+        "000_00000.parquet"
+      ],
+      "rows": 726000,
+      "bytes": 2152819114,
+      "tokens_est": 673888173
+    },
+    "wiki": {
+      "weight": 0.3,
+      "files": [
+        "train-00001.parquet",
+        "train-00000.parquet",
+        "train-00000.parquet",
+        "validation.parquet",
+        "test.parquet"
+      ],
+      "rows": 2040260,
+      "bytes": 902575424,
+      "tokens_est": 348213666
+    },
+    "instruct": {
+      "weight": 0.20000000000000004,
+      "files": [
+        "sft_seed_v3.jsonl",
+        "sft_combined.jsonl",
+        "sft_gold_v1.jsonl",
+        "sft_seed_v2.jsonl",
+        "sft_seed_v1.jsonl"
+      ],
+      "rows": 3500,
+      "bytes": 72710696,
+      "tokens_est": 6079338
+    }
+  },
+  "files": [
+    {
+      "path": "/home/liu/lnn-train/data/fineweb_edu/000_00000.parquet",
+      "host": "myserver",
+      "domain": "web_edu",
+      "weight": 0.5,
+      "rows": 726000,
+      "size_mb": 2152.8,
+      "tokens_est": 673888173,
+      "quality_score": 0.8473,
+      "pass_quality_gate": true,
+      "text_column": "text"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/wt103_raw/train-00001.parquet",
+      "host": "myserver",
+      "domain": "wiki",
+      "weight": 0.0522,
+      "rows": 900675,
+      "size_mb": 157.1,
+      "tokens_est": 85302779,
+      "quality_score": 0.7767,
+      "pass_quality_gate": true,
+      "text_column": "text"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/wt103_raw/train-00000.parquet",
+      "host": "myserver",
+      "domain": "wiki",
+      "weight": 0.0522,
+      "rows": 900675,
+      "size_mb": 157.0,
+      "tokens_est": 79584243,
+      "quality_score": 0.7658,
+      "pass_quality_gate": true,
+      "text_column": "text"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/wiki_zh/train-00000.parquet",
+      "host": "myserver",
+      "domain": "wiki",
+      "weight": 0.1951,
+      "rows": 230792,
+      "size_mb": 587.1,
+      "tokens_est": 182909699,
+      "quality_score": 0.8152,
+      "pass_quality_gate": false,
+      "text_column": "text"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/wt103_raw/validation.parquet",
+      "host": "myserver",
+      "domain": "wiki",
+      "weight": 0.0002,
+      "rows": 3760,
+      "size_mb": 0.7,
+      "tokens_est": 197162,
+      "quality_score": 0.0,
+      "pass_quality_gate": false,
+      "text_column": "text"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/wt103_raw/test.parquet",
+      "host": "myserver",
+      "domain": "wiki",
+      "weight": 0.0002,
+      "rows": 4358,
+      "size_mb": 0.7,
+      "tokens_est": 219783,
+      "quality_score": 0.0,
+      "pass_quality_gate": false,
+      "text_column": "text"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/sft_seed_v3.jsonl",
+      "host": "myserver",
+      "domain": "instruct",
+      "weight": 0.1118,
+      "rows": 1000,
+      "size_mb": 40.6,
+      "tokens_est": 600886,
+      "quality_score": 0.7445,
+      "pass_quality_gate": false,
+      "text_column": "(jsonl)"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/sft_combined.jsonl",
+      "host": "myserver",
+      "domain": "instruct",
+      "weight": 0.0429,
+      "rows": 1000,
+      "size_mb": 15.6,
+      "tokens_est": 530617,
+      "quality_score": 0.7354,
+      "pass_quality_gate": false,
+      "text_column": "(jsonl)"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/sft_gold_v1.jsonl",
+      "host": "myserver",
+      "domain": "instruct",
+      "weight": 0.0,
+      "rows": 8,
+      "size_mb": 0.0,
+      "tokens_est": 2103,
+      "quality_score": 0.0,
+      "pass_quality_gate": false,
+      "text_column": "(jsonl)"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/sft_seed_v2.jsonl",
+      "host": "myserver",
+      "domain": "instruct",
+      "weight": 0.0433,
+      "rows": 1000,
+      "size_mb": 15.7,
+      "tokens_est": 4717762,
+      "quality_score": 0.0,
+      "pass_quality_gate": false,
+      "text_column": "(jsonl)"
+    },
+    {
+      "path": "/home/liu/lnn-train/data/sft_seed_v1.jsonl",
+      "host": "myserver",
+      "domain": "instruct",
+      "weight": 0.0021,
+      "rows": 492,
+      "size_mb": 0.8,
+      "tokens_est": 227970,
+      "quality_score": 0.0,
+      "pass_quality_gate": false,
+      "text_column": "(jsonl)"
+    }
+  ],
+  "data_files_arg": "/home/liu/lnn-train/data/fineweb_edu/000_00000.parquet:0.5000,/home/liu/lnn-train/data/wt103_raw/train-00001.parquet:0.0522,/home/liu/lnn-train/data/wt103_raw/train-00000.parquet:0.0522,/home/liu/lnn-train/data/wiki_zh/train-00000.parquet:0.1951,/home/liu/lnn-train/data/wt103_raw/validation.parquet:0.0002,/home/liu/lnn-train/data/wt103_raw/test.parquet:0.0002,/home/liu/lnn-train/data/sft_seed_v3.jsonl:0.1118,/home/liu/lnn-train/data/sft_combined.jsonl:0.0429,/home/liu/lnn-train/data/sft_seed_v2.jsonl:0.0433,/home/liu/lnn-train/data/sft_seed_v1.jsonl:0.0021"
+}

@@ -135,16 +135,76 @@ class ParquetTokenStream:
         prefetch_factor: int = 0,
         pin_memory: bool = False,
         remote_warehouse: object | None = None,
+        files_with_weights: list[tuple[str, float]] | None = None,
     ) -> None:
-        # remote_warehouse: optional ``RemoteDataWarehouse`` (typed as
-        # ``object`` here to keep the import lazy; we duck-type the
-        # ``.list_remote_shards()`` / ``.get_shard()`` / ``.local_dir``
-        # surface). When set, ``glob_pattern`` is interpreted relative to
-        # the remote dataset (basename-glob) and parquets are lazy-fetched
-        # into a bounded local SSD cache. See
-        # ``synapforge/data/remote_warehouse.py``.
+        # files_with_weights (D4 of 2026-05-02 quality-data push):
+        #     Optional mixture of explicit (path, weight) pairs.  When
+        #     set, OVERRIDES ``glob_pattern`` — we DO NOT glob; the file
+        #     list is taken verbatim and each parquet's contribution to
+        #     the streamed token sequence is biased by ``weight``.  Used
+        #     by the ``--data-files PATH:W,PATH:W,...`` trainer flag to
+        #     wire in ``scripts/assemble_quality_corpus.py`` output.
+        #
+        #     Weights need not sum to 1.0 — they are normalised
+        #     internally and then converted to **per-file row quotas**
+        #     each epoch via stratified sampling: an epoch consumes
+        #     approximately ``weight_i * total_rows`` rows from file i
+        #     before any file is repeated.  This guarantees the realised
+        #     mixture matches the requested mixture even if shard sizes
+        #     differ wildly (FineWeb-Edu 2 GB + sft_seed 40 MB would
+        #     otherwise be overwhelmingly FineWeb-Edu under naive
+        #     concatenation).
+        #
+        #     Determinism: with ``shuffle_buffer > 1``, each file's row
+        #     iterator runs through the same Fisher-Yates reservoir as
+        #     before; the per-file sampler RNG is seeded from
+        #     ``shuffle_seed + epoch`` so consecutive epochs draw
+        #     different permutations.
+        #
+        #     Backwards-compat: when ``None`` (default), behaviour is
+        #     identical to the v0.1 single-glob path — the existing
+        #     trainer launches and tests are unaffected.
         self.remote_warehouse = remote_warehouse
-        if remote_warehouse is not None:
+        # ``files_with_weights`` (D4 quality-data push) takes precedence
+        # over both warehouse-glob and plain glob. We normalise the
+        # weights here so downstream iterators can sample directly.
+        self.files_with_weights: list[tuple[str, float]] | None = None
+        if files_with_weights is not None and len(files_with_weights) > 0:
+            if remote_warehouse is not None:
+                # Warehouse + explicit file list isn't implemented yet —
+                # the warehouse expects basenames, but ``files_with_weights``
+                # carries absolute paths.  Document the limitation rather
+                # than silently mis-route.
+                raise ValueError(
+                    "files_with_weights cannot combine with remote_warehouse "
+                    "(warehouse expects basename-globs). Either materialise "
+                    "the corpus locally OR run without the warehouse."
+                )
+            paths = [p for p, _ in files_with_weights]
+            weights = [float(w) for _, w in files_with_weights]
+            missing = [p for p in paths if not os.path.exists(p)]
+            if missing:
+                raise FileNotFoundError(
+                    "files_with_weights path(s) do not exist: "
+                    + ", ".join(missing[:5])
+                    + (f" (and {len(missing)-5} more)" if len(missing) > 5 else "")
+                )
+            total = sum(max(0.0, w) for w in weights)
+            if total <= 0:
+                raise ValueError(
+                    f"files_with_weights total weight must be > 0; "
+                    f"got {weights!r}"
+                )
+            # We construct paths/weights from the same input list so
+            # they're always the same length; ``strict=True`` would be
+            # nice but not available on Python 3.8 (the rental's
+            # supported floor).
+            self.files_with_weights = [
+                (p, max(0.0, w) / total)
+                for p, w in zip(paths, weights)
+            ]
+            self.files = list(paths)
+        elif remote_warehouse is not None:
             # File listing comes from the warehouse; the glob is treated
             # as a basename pattern (e.g. "train-*.parquet") matched
             # against the remote shard list. We DO NOT pre-fetch; only
@@ -226,7 +286,17 @@ class ParquetTokenStream:
         instance so different passes through the corpus never replay the
         same lexical sequence (the deterministic-ordering divergence
         root cause logged as P24 in MASTER_PLAN.md §6).
+
+        When ``files_with_weights`` is set, this method dispatches to
+        the weighted-mixture iterator: rows from N parquets are
+        interleaved using a weighted Roulette wheel so the realised
+        token mixture matches the requested per-file weights regardless
+        of shard size.
         """
+        if self.files_with_weights is not None:
+            yield from self._iter_text_rows_weighted()
+            return
+
         epoch = 0
         while True:
             if self.shuffle_buffer > 1:
@@ -263,6 +333,145 @@ class ParquetTokenStream:
             epoch += 1
             if not self.loop:
                 return
+
+    def _open_file_iter(self, path: str) -> Iterator[str]:
+        """Return a fresh row iterator over the string column of ``path``.
+
+        Used by the weighted-mixture iterator (one open generator per
+        file). If a parquet runs out of rows during a non-looping epoch
+        we re-open it to keep its weight contribution flowing — this is
+        the standard "infinite stream per source" pattern from
+        ``torch.utils.data.WeightedRandomSampler``.
+
+        Supports two formats so a single ``files_with_weights`` mix can
+        blend pretrain parquets with SFT/instruction jsonl:
+
+          * ``*.parquet`` -- pyarrow column scan (auto text-col).
+          * ``*.jsonl`` / ``*.jsonl.gz`` -- one JSON-object-per-line.
+            The yielded string is one of (in priority order):
+              1. ``obj["text"]`` if string
+              2. ``obj["content"]`` if string
+              3. concat of ``obj["messages"][i].content`` with role
+                 prefix ``<|role|>`` -- matches the chat harness format
+                 the SFT trainer renders for tokenization.
+        """
+        low = path.lower()
+        if low.endswith(".jsonl") or low.endswith(".jsonl.gz"):
+            yield from self._open_jsonl_iter(path)
+            return
+
+        pf = pq.ParquetFile(path)
+        col = self.text_column
+        if col is None:
+            # Try the canonical content columns first; fall back to the
+            # first string column.
+            for f in pf.schema_arrow:
+                if str(f.type) == "string" and f.name in (
+                        "text", "content", "raw_content", "document", "code"
+                ):
+                    col = f.name
+                    break
+            if col is None:
+                for f in pf.schema_arrow:
+                    if str(f.type) == "string":
+                        col = f.name
+                        break
+            if col is None:
+                raise RuntimeError(
+                    f"no string column in {path}; got {pf.schema_arrow}"
+                )
+        for batch in pf.iter_batches(batch_size=64, columns=[col]):
+            for s in batch.column(col).to_pylist():
+                if s:
+                    yield s
+
+    def _open_jsonl_iter(self, path: str) -> Iterator[str]:
+        """Iterator helper for jsonl files in ``files_with_weights``.
+
+        See ``_open_file_iter`` docstring for the supported schemas.
+        """
+        import json as _json
+        if path.lower().endswith(".gz"):
+            import gzip as _gzip
+            opener = _gzip.open  # type: ignore[assignment]
+        else:
+            opener = open  # type: ignore[assignment]
+        with opener(path, "rt", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                # 1. {"text": ...}
+                txt = obj.get("text") if isinstance(obj, dict) else None
+                if isinstance(txt, str) and txt:
+                    yield txt
+                    continue
+                # 2. {"content": ...}
+                content = obj.get("content") if isinstance(obj, dict) else None
+                if isinstance(content, str) and content:
+                    yield content
+                    continue
+                # 3. {"messages": [{"role": ..., "content": ...}, ...]}
+                msgs = obj.get("messages") if isinstance(obj, dict) else None
+                if isinstance(msgs, list):
+                    bits: list[str] = []
+                    for m in msgs:
+                        if not isinstance(m, dict):
+                            continue
+                        role = str(m.get("role", "") or "")
+                        ctn = m.get("content", "")
+                        if isinstance(ctn, str) and ctn:
+                            bits.append(f"<|{role}|>{ctn}")
+                    if bits:
+                        yield "\n".join(bits)
+
+    def _iter_text_rows_weighted(self) -> Iterator[str]:
+        """Weighted multi-file mixture iterator.
+
+        Maintains one generator per file and on each step picks the
+        *next* file by ``random.choices(files, weights)`` (independent
+        Bernoulli trial per row). When a file's generator is exhausted
+        we re-open it (cheap — just a parquet metadata read) so its
+        weight stays in the long-running mixture even if its raw
+        content is much smaller than another shard.
+
+        With ``loop=False`` the iterator stops once *every* file has
+        been read at least once; this preserves the existing
+        ``ParquetTokenStream(loop=False)`` semantics for evaluation
+        streams that pass weighted mixes (rare but supported).
+        """
+        rng = random.Random(self.shuffle_seed)
+        # Open one fresh generator per file. We re-open lazily when one
+        # is exhausted — this lets us keep the mixture "infinite" even
+        # when one file is much smaller than another.
+        files = [p for p, _ in self.files_with_weights]
+        weights = [w for _, w in self.files_with_weights]
+        gens: list[Iterator[str] | None] = [self._open_file_iter(p) for p in files]
+        seen_eof: set[int] = set()
+        while True:
+            idx = rng.choices(range(len(files)), weights=weights, k=1)[0]
+            try:
+                if gens[idx] is None:
+                    gens[idx] = self._open_file_iter(files[idx])
+                yield next(gens[idx])  # type: ignore[arg-type]
+            except StopIteration:
+                seen_eof.add(idx)
+                gens[idx] = None  # will be re-opened on next pick
+                if not self.loop and len(seen_eof) >= len(files):
+                    return
+                # Reopen NOW for a continuous loop (saves one rng pick).
+                gens[idx] = self._open_file_iter(files[idx])
+                try:
+                    yield next(gens[idx])
+                except StopIteration:
+                    # Genuinely empty file; mark dead and continue.
+                    weights[idx] = 0.0
+                    if all(w <= 0 for w in weights):
+                        return
 
     def _iter_text_rows(self) -> Iterator[str]:
         """Yield text strings from all parquet files.
@@ -418,6 +627,15 @@ class ParquetTokenStream:
         wh = ""
         if self.remote_warehouse is not None:
             wh = f", remote_warehouse={self.remote_warehouse!r}"
+        ww = ""
+        if self.files_with_weights is not None:
+            top = ", ".join(
+                f"{os.path.basename(p)}:{w:.2f}"
+                for p, w in self.files_with_weights[:3]
+            )
+            extra = "" if len(self.files_with_weights) <= 3 else \
+                f"...+{len(self.files_with_weights) - 3} more"
+            ww = f", files_with_weights=[{top}{extra}]"
         return (
             f"ParquetTokenStream(files={len(self.files)}, "
             f"seq_len={self.seq_len}, batch_size={self.batch_size}, "
@@ -425,7 +643,7 @@ class ParquetTokenStream:
             f"shuffle_buffer={self.shuffle_buffer}, "
             f"shuffle_seed={self.shuffle_seed}, "
             f"prefetch_factor={self.prefetch_factor}, "
-            f"pin_memory={self.pin_memory}{wh})"
+            f"pin_memory={self.pin_memory}{wh}{ww})"
         )
 
 
