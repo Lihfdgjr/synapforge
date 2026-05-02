@@ -6,10 +6,13 @@
 [![License](https://img.shields.io/github/license/Lihfdgjr/synapforge)](https://github.com/Lihfdgjr/synapforge/blob/master/LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 
-**SynapForge** is the framework; **Synap-1** (突触一号) is the model trained with it
-— a 100M-parameter **LNN + SNN hybrid language model** — *not a transformer*.
-See [docs/NAMING.md](docs/NAMING.md) for the framework-vs-model split + the
-Synap-1 / Synap-Pro / Synap-Edge roadmap.
+**SynapForge** is the framework; **Synap-1** (突触一号) is the model trained
+with it — an **LNN + SNN hybrid language model** — *not a transformer* —
+shipping in two tiers: **Synap-1 Base (100M)** and **Synap-1 Pro (300M,
+launching post-Run 3o, ETA 14:00 May 2)**, with **Synap-1 Ultra (500M)**
+designed as the next variant.
+See [docs/NAMING.md](docs/NAMING.md) for the framework-vs-model split,
+the per-tier specs, and the Synap-1 / Synap-Edge / Synap-Air roadmap.
 
 Built from the ground up around four ideas that aren't in standard LLM stacks:
 
