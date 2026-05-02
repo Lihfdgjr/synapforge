@@ -138,7 +138,10 @@ def _reference_forward(
     bvec = delta * F.linear(y1, b_w, b_b)                         # (B, T, D)
     decay_a = A_log.exp().to(delta.dtype)                         # (D,)
 
-    # Forward CfC scan (sequential, fp32).
+    # Forward CfC scan (sequential, fp32). MATCHES LiquidCell exactly:
+    # the recurrence carries the UN-TANHED state ``h_pre``; the tanh
+    # is applied AFTER the full scan to produce ``h_post`` which is
+    # what PLIF + SEW consume downstream.
     delta_f = delta.float()
     bvec_f = bvec.float()
     if h0 is None:
@@ -147,16 +150,13 @@ def _reference_forward(
         h_carry = h0.float()
 
     h_pre_seq = []
-    h_post_seq = []
     for t in range(T):
         A_t = torch.exp(-delta_f[:, t] * decay_a.float())
         h_pre = A_t * h_carry + bvec_f[:, t]
-        h_post = torch.tanh(h_pre)
         h_pre_seq.append(h_pre)
-        h_post_seq.append(h_post)
-        h_carry = h_post
+        h_carry = h_pre   # <-- LiquidCell carries the raw state, not tanh'd
     h_pre_t = torch.stack(h_pre_seq, dim=1)        # (B, T, D), fp32
-    h_post_t = torch.stack(h_post_seq, dim=1)      # (B, T, D), fp32
+    h_post_t = torch.tanh(h_pre_t)                  # (B, T, D), fp32 (tanh applied AFTER scan)
 
     # ---- PLIF integrator + spike + reset ----
     plif_decay = torch.exp(-1.0 / log_tau.exp())  # (D,)
@@ -372,32 +372,38 @@ def _reference_backward(
     g_h_post_total = g_h_post_total + g_h_post_via_plif
 
     # ---- CfC scan bwd: chained through tanh + bilinear scan ----
-    g_h_carry = torch.zeros(B, D, dtype=torch.float32, device=grad_out.device)
+    # The CfC recurrence carries the UN-TANHED state ``h_pre`` (matches
+    # LiquidCell.forward exactly).  After the full scan, the per-step
+    # outputs are ``h_post = tanh(h_pre)`` -- only the FINAL tanh is
+    # exposed to downstream consumers (PLIF / SEW / gate / synapse).
+    # Therefore the reverse-time recurrence carries dL/dh_pre[t+1] *
+    # A_{t+1} into dL/dh_pre[t], and the upstream gh_post_total feeds
+    # in via tanh'(h_pre[t]) once per t (no carry through tanh).
+    g_h_pre_carry = torch.zeros(B, D, dtype=torch.float32, device=grad_out.device)
     g_delta_seq = torch.zeros(B, T, D, dtype=torch.float32, device=grad_out.device)
     g_bvec_seq = torch.zeros(B, T, D, dtype=torch.float32, device=grad_out.device)
     g_A_log_acc = torch.zeros_like(A_log, dtype=torch.float32)
     decay_a_f = decay_a.float()
     for t in range(T - 1, -1, -1):
-        # tanh': dL/d h_pre = dL/d h_post * (1 - h_post^2)
-        gh_post_t = g_h_post_total[:, t] + g_h_carry
+        # tanh': dL/d h_pre[t] (from THIS step's outputs only) = dL/d h_post[t] * (1 - h_post^2)
+        # The scan carry comes from h_pre[t+1] -> h_pre[t] via A_{t+1}.
         tanh_d = 1.0 - h_post[:, t].pow(2)
-        gh_pre_t = gh_post_t * tanh_d
-        # h_pre = A_t * h_post[t-1] + bvec
+        gh_pre_via_tanh = g_h_post_total[:, t] * tanh_d
+        gh_pre_t = gh_pre_via_tanh + g_h_pre_carry
+        # h_pre[t] = A_t * h_pre[t-1] + bvec[t]   (un-tanh'd carry)
         if t > 0:
-            h_post_tm1 = h_post[:, t - 1]
+            h_pre_tm1 = h_pre[:, t - 1]
         else:
-            h_post_tm1 = h0.float() if h0 is not None else torch.zeros(B, D, dtype=torch.float32, device=grad_out.device)
+            h_pre_tm1 = h0.float() if h0 is not None else torch.zeros(B, D, dtype=torch.float32, device=grad_out.device)
         A_t = torch.exp(-delta[:, t].float() * decay_a_f)
-        gA_t = gh_pre_t * h_post_tm1
-        g_h_carry = gh_pre_t * A_t
+        gA_t = gh_pre_t * h_pre_tm1
+        g_h_pre_carry = gh_pre_t * A_t
         g_bvec_seq[:, t] = gh_pre_t
-        # delta gradient: A_t = exp(-delta*decay_a) so dA/d delta = -decay_a * A_t
+        # delta gradient (via A_t):  A_t = exp(-delta*decay_a)
+        #   dA/d delta = -decay_a * A_t
         g_delta_seq[:, t] = gA_t * (-decay_a_f * A_t)
-        # bvec also depends on delta: bvec = delta * (W_b y1 + b_b)
-        # We'll handle that when we backprop the bvec gradient through W_b
-        # (delta = softplus(W_d y1 + b_d)).
         g_A_log_acc += (gA_t * (-delta[:, t].float() * A_t * decay_a_f)).sum(dim=0)
-    g_h0 = g_h_carry if h0 is not None else None
+    g_h0 = g_h_pre_carry if h0 is not None else None
 
     # delta has TWO sources of gradient:
     #   (1) g_delta_seq from scan (A_t = exp(-delta*decay_a))
