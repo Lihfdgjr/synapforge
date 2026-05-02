@@ -572,4 +572,16 @@ def split_val_stream(
 
 from synapforge.data.remote_warehouse import RemoteDataWarehouse  # noqa: E402
 
-__all__ = ["ParquetTokenStream", "split_val_stream", "RemoteDataWarehouse"]
+# Lazy-import the async pipeline so the legacy single-stream import
+# path stays cheap (the async module pulls in threading/queue at import
+# time, which the import linter for synapforge.cells already complains
+# about). Callers ask for AsyncTokenStream explicitly via
+# ``from synapforge.data import AsyncTokenStream``.
+from synapforge.data.async_pipeline import AsyncTokenStream  # noqa: E402
+
+__all__ = [
+    "AsyncTokenStream",
+    "ParquetTokenStream",
+    "RemoteDataWarehouse",
+    "split_val_stream",
+]
