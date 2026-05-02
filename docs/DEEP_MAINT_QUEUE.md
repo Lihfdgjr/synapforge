@@ -775,6 +775,25 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - [ ] **Status**: pending
 - **Steps**: sweep block size 32/64/128 × warps 4/8 → write best config.
 
+## T9.2 — NeuroMCP wire-in to 100M trainer
+- [x] (feature/neuromcp-trainer-wire, NeuroMCPMixin + 3 CLI flags + 4 tests; default OFF) **Status**: shipped on `feature/neuromcp-trainer-wire`.
+- **Goal**: production trainer (`train_100m_kd.py`) actually exercises `synapforge.action.neuromcp.NeuroMCPHead` (SparseSynapticLayer + DynamicActionCodebook). Before this, NeuroMCP was a standalone PoC in `synapforge.demo.four_button` and was NOT trained as part of Synap-1; the v4.1/v4.2 NeuroMCP claim was unsubstantiated by the current trainer code. PoC contract: density 4.5 -> 39.9%, K=9 -> 12, 100% hit-rate (long-horizon test at `tests/integration/test_neuromcp_long_horizon.py`).
+- **Files**:
+  - `synapforge/training/neuromcp_mixin.py` (~290 LOC): `NeuroMCPMixin` class wrapping `NeuroMCPHead`. Default-OFF / fail-soft contract identical to `synapforge.trainer_mixins.{MultimodalMixin, SelfLearnMixin, CuriosityMixin}`. Exposes `action_loss(text_hidden, y_next) -> Tensor`, `step_plasticity()`, `stats()`, `smoke()`.
+  - `synapforge/training/__init__.py`: re-exports `NeuroMCPMixin` so the trainer can `from synapforge.training import NeuroMCPMixin`.
+  - `train_100m_kd.py`: 3 new argparse flags (`--neuromcp-weight 0.0`, `--neuromcp-codebook-size 16`, `--neuromcp-action-dim 64`), opt-in instantiation block (with optimizer param-group add), in-loop `action_loss` add, post-`optim.step()` `step_plasticity` call, every-100-step density/K log line, mixin column in the periodic step log.
+  - `tests/integration/test_neuromcp_trainer_mixin.py` (4 tests): default-off, enabled forward smoke, loss-addition arithmetic, density-grows-after-100-steps. All 4 pass on Windows CPU (.venv torch 2.0.1+cpu) in ~2.5s.
+- **Action target rationale**: a pure LM trainer has no real action labels yet. The mixin synthesises a placeholder target from the next-token's first byte mod K (documented in the docstring); real OS-actuator labels can be passed via `target_ids=` to bypass it. The placeholder is enough to drive the `coact_ema` (so density grows) and the codebook novelty signal (so K grows), reproducing the PoC mechanism inside the LM's hidden-state distribution.
+- **Default behaviour unchanged**: `--neuromcp-weight 0.0` (the production default) keeps the mixin = `None`; the trainer's existing `need_hidden` predicate already handles the third-mixin case. No GPU memory regression, no log-schema change for legacy launches.
+- **Smoke**: `python -m synapforge.training.neuromcp_mixin` returns `{"ok": true, "loss": 4.05, "density": 0.043, "K": 5, "hit_rate": 0.25}`.
+- **Verification**:
+  ```
+  python -m pytest tests/integration/test_neuromcp_trainer_mixin.py -v
+  # 4 passed in 2.56s
+  ```
+- **Next step**: launch a 1500-step warmstart run on the rental with `--neuromcp-weight 0.05 --neuromcp-codebook-size 16` and verify density crosses 0.10 + K grows by 200 steps. Promote weight to 0.1 once base ppl < 250 (matches the curiosity / multimodal phase-trigger schedule in H5).
+- **Commit**: `auto-neuromcp-wire: NeuroMCPMixin + trainer flag + 4 tests; default OFF, opt-in via --neuromcp-weight`.
+
 ## T9.1 — Synap-1 Pro 300M launch (post Run 3o completion)
 - [ ] **Status**: STAGED — script + plan landed, awaiting trigger.
 - **Trigger**: ALL of the following:
@@ -806,6 +825,56 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
   - `configs/synap1.py` (SYNAP1_PRO config, sister-agent PR)
 - **Commit template**:
   `auto-T9.1: Synap-1 Pro 300M launched -- pid=<PID>, run dir /workspace/runs/synap1_pro, val target ppl <= 250 by step 35000`.
+
+## T9.3 — multi-seq val + monotonic quality check
+- [x] **Status**: landed on `feature/multi-seq-val` -- argparse + helper +
+  trainer-loop wire-in + tests.
+- **Why**: User 铁律 (memory `feedback_50m_context_monotonic_quality.md` and
+  `feedback_long_context_quality.md`) -- quality must GROW with context
+  length, not just stay flat or degrade. Inference-STDP path should lower
+  per-token ppl as context grows. The trainer was VAL-ing only at the
+  training seq_len; the property was never measured during training.
+- **Flags**:
+  - `--val-seq-lens "256,512,1024"`: CSV of extra seq-lens for VAL. Empty
+    (default) keeps the legacy single-seq behaviour.
+  - `--val-seq-lens-bs "24,12,4"`: explicit per-length batch sizes. When
+    empty, auto-scale (next flag) takes over.
+  - `--val-seq-lens-auto-scale` (default ON) /
+    `--no-val-seq-lens-auto-scale`: derive `bs = int(base_bs * train_seq /
+    seq_len)` floor 1, so longer seq drops batch to fit VRAM (256->1024 =
+    16x activation).
+- **Trainer log line additions** (only when --val-seq-lens non-empty):
+  ```
+  VAL step 1000 seq=256 ppl=120.00 / seq=512 ppl=100.00 / seq=1024 ppl=80.00
+    quality_grows_with_seq=True
+  ```
+  `metrics.json` gets two new keys: `ppl_eval_per_seq` (step ->
+  {seq_len: ppl}) and `quality_grows_with_seq` (step -> bool).
+- **Cost** (per VAL step):
+  ~16 batches per length. With auto-scale and bs ~ 1/L scaling, wallclock is
+  roughly **N + N + N = 3 N** model forwards if each length runs 16 batches
+  -- i.e. for a 3-length list, ~3x the existing single-seq val cost. At
+  default `--eval-every 500` this adds <2% to total wallclock on rental.
+- **Files**:
+  - `train_100m_kd.py` (helpers `_parse_val_seq_lens`,
+    `_monotonic_quality_grows`, `_eval_at_seq_lens`, `_format_per_seq_log`;
+    argparse block at end of `_parse_args()`; wire-in inside the
+    `step % eval_every == 0` block).
+  - `tests/integration/test_multi_seq_val.py` (5 cases: default-single-seq,
+    multi-seq logs, monotonic flag, auto-scale, bad-csv).
+- **Next training run shape** (the user 铁律 deliverable):
+  ```
+  uvicorn ... train_100m_kd \
+    --seq-len 256 --batch-size 32 \
+    --val-seq-lens "256,512,1024" \
+    # auto-scale ON => val bs auto = 32, 16, 8
+    --eval-every 500 ...
+  ```
+  Each VAL step now emits the `quality_grows_with_seq=` flag. Phase
+  manager / dashboards can trip on a False -- it means STDP retrieval
+  is broken or the model is not USING the extra context.
+- **Commit template**:
+  `auto-multi-seq-val: per-seq-length VAL + monotonic-quality-grows check + tests`.
 
 ---
 

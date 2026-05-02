@@ -11,5 +11,6 @@ without pulling in optimiser construction.
 from __future__ import annotations
 
 from .ema import EMATracker, ModelEMA, load_ema
+from .neuromcp_mixin import NeuroMCPMixin
 
-__all__ = ["EMATracker", "ModelEMA", "load_ema"]
+__all__ = ["EMATracker", "ModelEMA", "load_ema", "NeuroMCPMixin"]
