@@ -790,6 +790,37 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--curiosity-weight", type=float, default=0.0,
                    help="weight of 6-signal curiosity loss; 0 = disabled. "
                         "Recommended ~0.05 once base ppl<250 (Phase 1)")
+    # ---- NeuroMCP wire-in (T9.2 in DEEP_MAINT_QUEUE.md) -------------------
+    # NeuroMCPHead = SparseSynapticLayer + DynamicActionCodebook. Replaces
+    # MCP / function-calling tool tokens with a neuroplastic head that
+    # grows synapses (co-activation EMA) and prototypes (cosine-novelty).
+    # PoC at synapforge.demo.four_button hits density 4.5->39.9% / K=9->12 /
+    # 100% hit-rate on the 4-button env. Default OFF here because the LM
+    # trainer has no real action labels yet -- placeholder targets are used
+    # (next-token first byte mod K) which is enough to drive the
+    # plasticity rules and prove the head learns. See
+    # synapforge.training.neuromcp_mixin.NeuroMCPMixin docstring.
+    p.add_argument("--neuromcp-weight", type=float, default=0.0,
+                   help="weight of NeuroMCP action-codebook CE loss; "
+                        "0 = disabled (default). Recommended ~0.05 for "
+                        "first wire-in runs. The mixin runs the LM hidden "
+                        "state through SparseSynapticLayer + "
+                        "DynamicActionCodebook, computes CE against a "
+                        "placeholder action target (next-token first byte "
+                        "mod K), and adds neuromcp_weight * action_loss "
+                        "to the total. Density / K grow via the same PoC "
+                        "rules validated at synapforge.demo.four_button.")
+    p.add_argument("--neuromcp-codebook-size", type=int, default=16,
+                   dest="neuromcp_codebook_size",
+                   help="initial alive prototype count for the dynamic "
+                        "action codebook. ``max_size = 4 * codebook_size`` "
+                        "so growth has headroom. Default 16 (max 64).")
+    p.add_argument("--neuromcp-action-dim", type=int, default=64,
+                   dest="neuromcp_action_dim",
+                   help="placeholder for a future fixed-action-dim head "
+                        "(e.g. when real OS-actuator labels are wired in); "
+                        "currently unused -- the head's effective action "
+                        "space equals the dynamic codebook size. Default 64.")
     # ---- Reliability hooks (default-safe) ----
     p.add_argument("--phase-aware", action="store_true", default=False,
                    help="poll out_dir/.phase every 100 steps; on phase change "
@@ -946,6 +977,44 @@ def _parse_args() -> argparse.Namespace:
                         "``chat_demo --use-ema``) AND written to a sibling "
                         "step_<N>_ema.pt file for legacy "
                         "synapforge.training.ema.load_ema() loaders.")
+    # T9.3 (DEEP_MAINT_QUEUE.md) -- multi-seq-len validation + monotonic
+    # quality check. When --val-seq-lens is passed (CSV of ints), at each
+    # VAL step the trainer ALSO runs validation at every additional
+    # seq-len, building a fresh ParquetTokenStream per length. Output:
+    #     VAL step N seq=256 ppl=X / seq=512 ppl=Y / seq=1024 ppl=Z
+    #     quality_grows_with_seq=True
+    # The monotonic flag is True iff ppl strictly DECREASES across the
+    # provided lengths sorted ascending (more left-context => lower
+    # per-token ppl). This is the user 铁律: "quality must grow with
+    # context length, not just stay flat or degrade." Default: empty
+    # string => behaviour unchanged (only val at training seq_len).
+    p.add_argument("--val-seq-lens", type=str, default="",
+                   dest="val_seq_lens",
+                   help="comma-separated extra seq-lens for VAL "
+                        "(e.g. '256,512,1024'). When non-empty, at each "
+                        "VAL step the trainer runs validation at EACH of "
+                        "these lengths in addition to training seq_len. "
+                        "Logs one ``seq=N ppl=X`` token per length and a "
+                        "``quality_grows_with_seq=True/False`` flag. "
+                        "Default '' = no extra val (legacy behaviour).")
+    p.add_argument("--val-seq-lens-bs", type=str, default="",
+                   dest="val_seq_lens_bs",
+                   help="comma-separated batch sizes paired 1:1 with "
+                        "--val-seq-lens (e.g. '24,12,4' for 256/512/1024). "
+                        "If empty AND --no-val-seq-lens-auto-scale, falls "
+                        "back to --batch-size for every length (may OOM at "
+                        "longer seq). Length must match --val-seq-lens.")
+    p.add_argument("--val-seq-lens-auto-scale", action="store_true",
+                   default=True, dest="val_seq_lens_auto_scale",
+                   help="when --val-seq-lens-bs not provided, auto-scale "
+                        "per-length batch as ``int(base_bs * (train_seq / "
+                        "seq_len))`` floor 1, so longer seq drops batch "
+                        "to fit VRAM (256->1024 = 16x activation). "
+                        "Default ON.")
+    p.add_argument("--no-val-seq-lens-auto-scale", action="store_false",
+                   dest="val_seq_lens_auto_scale",
+                   help="disable T9.3 multi-seq val auto-scaling; reuse "
+                        "--batch-size at every seq-len (may OOM).")
     return p.parse_args()
 
 
@@ -999,6 +1068,200 @@ def evaluate(model, val_iter, n_batches: int = 16,
         return float("nan")
     avg = sum(losses) / len(losses)
     return math.exp(avg)
+
+
+# ---------------------------------------------------------------------------
+# T9.3 (DEEP_MAINT_QUEUE.md) -- multi-seq-len VAL + monotonic-quality check.
+# ---------------------------------------------------------------------------
+# Defaults to OFF (empty --val-seq-lens) so existing runs see zero behaviour
+# change. When the user passes --val-seq-lens "256,512,1024", at every VAL
+# step the trainer ALSO runs validation at those lengths, builds a per-seq
+# val stream, and asserts the user 铁律: "quality grows with context length".
+#
+# The 铁律 (memory: feedback_50m_context_monotonic_quality.md and
+# feedback_long_context_quality.md) is that an inference-STDP model should
+# get LOWER per-token ppl as context grows, because more left-context means
+# more bits to predict from. If ppl(L=1024) >= ppl(L=256), the model is
+# wrong (or the STDP path is dead). The monotonic flag surfaces that
+# regression as a single bool in train.log + metrics.json so phase_manager
+# / dashboards can trip on it.
+
+
+def _parse_val_seq_lens(
+    val_seq_lens_csv: str,
+    val_seq_lens_bs_csv: str,
+    train_seq_len: int,
+    train_batch_size: int,
+    auto_scale: bool,
+) -> list:
+    """Resolve ``--val-seq-lens`` + ``--val-seq-lens-bs`` into pairs.
+
+    Parameters
+    ----------
+    val_seq_lens_csv:
+        Raw CSV from ``--val-seq-lens`` (e.g. ``"256,512,1024"``).
+        Empty string => no extra val => return ``[]`` (caller will only
+        validate at training seq_len, the legacy path).
+    val_seq_lens_bs_csv:
+        Raw CSV from ``--val-seq-lens-bs`` (e.g. ``"24,12,4"``). When
+        non-empty, length MUST equal that of ``val_seq_lens_csv``;
+        explicit pairing wins over auto-scale.
+    train_seq_len:
+        The training-time ``--seq-len``. Used for auto-scaling and as
+        the implicit baseline in the monotonic check.
+    train_batch_size:
+        The training-time ``--batch-size``. The "base" for auto-scale.
+    auto_scale:
+        When True AND ``val_seq_lens_bs_csv`` is empty, derive batch as
+        ``max(1, int(train_batch_size * train_seq_len / seq_len))``.
+        When False, fall back to ``train_batch_size`` for every length
+        (caller is responsible for any OOMs).
+
+    Returns
+    -------
+    List of ``(seq_len, batch_size)`` tuples in user-supplied order. The
+    monotonic check sorts by ``seq_len`` separately, so ordering only
+    affects log presentation.
+
+    Raises
+    ------
+    ValueError if the CSV is malformed or if ``--val-seq-lens-bs`` length
+    does not match ``--val-seq-lens``.
+    """
+    s_lens = [t.strip() for t in (val_seq_lens_csv or "").split(",") if t.strip()]
+    if not s_lens:
+        return []
+    try:
+        seq_lens = [int(s) for s in s_lens]
+    except ValueError as exc:
+        raise ValueError(
+            f"--val-seq-lens must be a CSV of ints; got {val_seq_lens_csv!r}"
+        ) from exc
+    for L in seq_lens:
+        if L <= 0:
+            raise ValueError(f"--val-seq-lens entries must be > 0; got {L}")
+
+    bs_raw = [t.strip() for t in (val_seq_lens_bs_csv or "").split(",") if t.strip()]
+    if bs_raw:
+        if len(bs_raw) != len(seq_lens):
+            raise ValueError(
+                f"--val-seq-lens-bs has {len(bs_raw)} entries but "
+                f"--val-seq-lens has {len(seq_lens)} entries; must match 1:1"
+            )
+        try:
+            batch_sizes = [int(b) for b in bs_raw]
+        except ValueError as exc:
+            raise ValueError(
+                f"--val-seq-lens-bs must be a CSV of ints; got "
+                f"{val_seq_lens_bs_csv!r}"
+            ) from exc
+        for B in batch_sizes:
+            if B <= 0:
+                raise ValueError(f"--val-seq-lens-bs entries must be > 0; got {B}")
+    else:
+        if auto_scale:
+            base_b = max(1, int(train_batch_size))
+            base_s = max(1, int(train_seq_len))
+            batch_sizes = [
+                max(1, int(base_b * base_s / max(1, int(L))))
+                for L in seq_lens
+            ]
+        else:
+            batch_sizes = [int(train_batch_size)] * len(seq_lens)
+
+    return list(zip(seq_lens, batch_sizes))
+
+
+def _monotonic_quality_grows(per_seq_ppl: dict) -> bool:
+    """Compute the user 铁律 flag: ppl strictly DECREASES with seq_len.
+
+    The dict ``per_seq_ppl`` maps ``seq_len -> ppl``. We sort by seq_len
+    ascending and check ``ppl[i+1] < ppl[i]`` for every consecutive pair.
+    NaN/Inf entries fail the check (cannot conclude ppl improved). Single
+    entry returns True trivially (cannot regress).
+
+    Returns True iff longer context yielded strictly lower ppl across
+    every adjacent pair. The "strict <" is intentional: equal ppl across
+    different context lengths means the model is not USING the extra
+    context, which is itself a regression vs. the inference-STDP claim.
+    """
+    if not per_seq_ppl:
+        return True
+    items = sorted(per_seq_ppl.items(), key=lambda kv: int(kv[0]))
+    for i in range(len(items) - 1):
+        p_short = float(items[i][1])
+        p_long = float(items[i + 1][1])
+        if not (math.isfinite(p_short) and math.isfinite(p_long)):
+            return False
+        if not (p_long < p_short):
+            return False
+    return True
+
+
+def _eval_at_seq_lens(
+    model,
+    pairs: list,
+    *,
+    val_glob: str,
+    data_glob: str,
+    tokenizer_name: str,
+    n_batches: int = 16,
+    remote_warehouse=None,
+):
+    """Run :func:`evaluate` once per ``(seq_len, batch_size)`` pair.
+
+    Builds a fresh non-looping ``ParquetTokenStream`` for each length so
+    that each call sees the same first ``n_batches`` chunks (modulo the
+    seq_len-driven re-tokenization). Catches FileNotFoundError on the
+    val glob and falls back to the train glob, mirroring the main()
+    bootstrap logic so smoke runs with a single parquet still work.
+
+    Returns a dict ``seq_len -> ppl`` in the order given by ``pairs``.
+    Empty ``pairs`` returns ``{}`` and the caller must handle that case
+    (legacy single-seq path).
+    """
+    out: dict = {}
+    if not pairs:
+        return out
+    for (seq_len_i, bs_i) in pairs:
+        try:
+            ds_i = ParquetTokenStream(
+                val_glob, seq_len=int(seq_len_i),
+                tokenizer_name=tokenizer_name,
+                batch_size=int(bs_i), loop=False,
+                remote_warehouse=remote_warehouse,
+            )
+        except FileNotFoundError:
+            ds_i = ParquetTokenStream(
+                data_glob, seq_len=int(seq_len_i),
+                tokenizer_name=tokenizer_name,
+                batch_size=int(bs_i), loop=False,
+                remote_warehouse=remote_warehouse,
+            )
+        ppl_i = evaluate(model, iter(ds_i), n_batches=int(n_batches),
+                          plif_cells=None)
+        out[int(seq_len_i)] = float(ppl_i)
+    return out
+
+
+def _format_per_seq_log(
+    step: int, per_seq_ppl: dict, monotonic: bool,
+) -> str:
+    """Render the multi-seq VAL log line.
+
+    Format:
+        VAL step N seq=256 ppl=X / seq=512 ppl=Y / seq=1024 ppl=Z
+            quality_grows_with_seq=True
+
+    The single-line `seq=...` column block is sorted by ``seq_len``
+    ascending so the longest context is always rightmost; downstream
+    parsers that care about ordering can rely on that. The
+    quality-grows flag is on its own line below for grep-friendliness.
+    """
+    items = sorted(per_seq_ppl.items(), key=lambda kv: int(kv[0]))
+    parts = [f"seq={int(L)} ppl={float(p):.2f}" for (L, p) in items]
+    head = f"VAL step {int(step)} " + " / ".join(parts)
+    return f"{head}\n  quality_grows_with_seq={bool(monotonic)}"
 
 
 @torch.no_grad()
@@ -1605,6 +1868,7 @@ def main() -> int:
     modal_mixin = None
     self_learn_mixin = None
     curiosity_mixin = None
+    neuromcp_mixin = None
     try:
         from synapforge.trainer_mixins import (
             MultimodalMixin, SelfLearnMixin, CuriosityMixin,
@@ -1649,6 +1913,48 @@ def main() -> int:
             _log("[mixin] curiosity: disabled (weight=0)")
     except Exception as exc:
         _log(f"[mixin] mixins import failed; continuing without: {exc}")
+
+    # NeuroMCPMixin lives in ``synapforge.training`` (alongside the EMA
+    # tracker), NOT in the umbrella ``synapforge.trainer_mixins`` module --
+    # this keeps the wire-in independent of the older mixin import block
+    # so a missing ``intrinsic`` / ``modal`` import there never blocks
+    # NeuroMCP. Default OFF; only constructed when --neuromcp-weight > 0.
+    if float(args.neuromcp_weight) > 0:
+        try:
+            from synapforge.training import NeuroMCPMixin
+            neuromcp_mixin = NeuroMCPMixin(
+                model,
+                hidden=model.d,
+                codebook_size=int(args.neuromcp_codebook_size),
+                action_dim=int(args.neuromcp_action_dim),
+            )
+            if neuromcp_mixin.head is None:
+                _log("[mixin] NeuroMCPMixin head failed to build; disabling")
+                neuromcp_mixin = None
+            else:
+                # Push the head's parameters into the optimizer so the
+                # synaptic mask + codebook prototypes actually train. We
+                # add a fresh param group so existing per-group LR /
+                # weight-decay state stays untouched.
+                try:
+                    optim.add_param_group({
+                        "params": list(neuromcp_mixin.parameters()),
+                        "lr": float(args.lr),
+                        "weight_decay": 0.0,
+                    })
+                except Exception as _exc:
+                    _log(f"[mixin] NeuroMCP param-group add failed (head still "
+                         f"runs forward but won't update): {_exc!r}")
+                _log(f"[mixin] NeuroMCPMixin enabled: weight={args.neuromcp_weight} "
+                     f"codebook_size={args.neuromcp_codebook_size} "
+                     f"action_dim={args.neuromcp_action_dim} "
+                     f"hidden={model.d} initial_density={neuromcp_mixin.density:.3f} "
+                     f"initial_K={neuromcp_mixin.K}")
+        except Exception as exc:
+            _log(f"[mixin] NeuroMCPMixin DISABLED: {exc}")
+            neuromcp_mixin = None
+    else:
+        _log("[mixin] neuromcp: disabled (weight=0)")
 
     # ---------------- training ----------------
     # P3: track BOTH val_ppl_ttt (set TTT trains on; drops artificially
@@ -1748,7 +2054,8 @@ def main() -> int:
                 # path so we can pass `text_hidden` into the mixin without a
                 # second forward. Default path (no mixin) is unchanged.
                 need_hidden = (modal_mixin is not None
-                               or curiosity_mixin is not None)
+                               or curiosity_mixin is not None
+                               or neuromcp_mixin is not None)
                 if need_hidden:
                     text_hidden = model.encode(x)              # (B, T, d)
                     logits = F.linear(text_hidden, model.tok_embed.weight) \
@@ -1847,6 +2154,21 @@ def main() -> int:
                     except Exception as exc:
                         _log(f"[mixin] curiosity step {step} skipped: {exc}")
                         cur_aux = torch.zeros((), device=logits.device)
+                # ---- NeuroMCPMixin contribution (default OFF) ----
+                # action_loss runs the LM hidden through SparseSynapticLayer +
+                # DynamicActionCodebook and CE-trains the head against a
+                # placeholder action target derived from y. Pass y_next so
+                # the mixin can synthesise targets without a 2nd forward.
+                neuromcp_aux = torch.zeros((), device=logits.device)
+                if neuromcp_mixin is not None and text_hidden is not None:
+                    try:
+                        neuromcp_aux = neuromcp_mixin.action_loss(
+                            text_hidden, y_next=y,
+                        )
+                        loss = loss + args.neuromcp_weight * neuromcp_aux
+                    except Exception as exc:
+                        _log(f"[mixin] neuromcp step {step} skipped: {exc}")
+                        neuromcp_aux = torch.zeros((), device=logits.device)
 
             # T2.5: spike-rate-target auxiliary loss (graph-attached).
             # MUST run inside inner loop, BEFORE backward, while graph alive.
@@ -1917,6 +2239,18 @@ def main() -> int:
 
         optim.step()
 
+        # ---- NeuroMCP plasticity tick (after optim.step per the
+        # OBSERVE/DELTA/APPLY contract documented in
+        # synapforge.action.neuromcp.NeuroMCPHead.step_plasticity).
+        # Grows the SparseSynapticLayer mask via co-activation EMA and
+        # the DynamicActionCodebook prototype set via cosine novelty.
+        # Cheap (no_grad, only when mixin enabled).
+        if neuromcp_mixin is not None:
+            try:
+                neuromcp_mixin.step_plasticity()
+            except Exception as exc:
+                _log(f"[mixin] neuromcp step_plasticity step {step} failed: {exc}")
+
         # T8.4 — EMA update right after optim.step() (model params now reflect
         # the just-applied gradient). No-op when --ema-decay 0.0 (default).
         if ema_tracker is not None:
@@ -1943,6 +2277,18 @@ def main() -> int:
         _step_z = accum_z / accum_done
         _step_modal_aux = accum_modal_aux / accum_done
         _step_cur_aux = accum_cur_aux / accum_done
+
+        # ---- NeuroMCP periodic stats (every 100 steps when enabled) ----
+        # Reads cheap counters from the mixin: density, K, last_action_loss,
+        # last_hit_rate. Logged separately from the per-step `_log` line so
+        # parsers don't need to handle a variable-width column.
+        if neuromcp_mixin is not None and step % 100 == 0:
+            _nstats = neuromcp_mixin.stats()
+            _log(
+                f"  [neuromcp] step={step} density={_nstats['density']:.4f} "
+                f"K={int(_nstats['K'])} action_loss={_nstats['last_action_loss']:.3f} "
+                f"hit_rate={_nstats['last_hit_rate']:.3f}"
+            )
 
         # ---- adaptive --kd-every: recompute schedule every N steps ----
         # Only mutates ``effective_kd_every``; ``args.kd_every`` (the
@@ -1980,6 +2326,11 @@ def main() -> int:
                 mixin_str += f" modal={_step_modal_aux:.4f}"
             if curiosity_mixin is not None:
                 mixin_str += f" cur={float(cur_aux.detach()):.4f}"
+            if neuromcp_mixin is not None:
+                mixin_str += (
+                    f" nmcp={float(neuromcp_aux.detach()):.4f}"
+                    f"|d={neuromcp_mixin.density:.3f}|K={neuromcp_mixin.K}"
+                )
             if args.spike_target_loss_weight > 0:
                 mixin_str += f" stl={float(spike_target_loss.detach()):.4f}"
             # T5.1 — loss component %. Computed from the per-step accumulator
@@ -2182,6 +2533,38 @@ def main() -> int:
                 f"VAL step {step}: val_ppl_ttt={ppl_ttt:.2f} "
                 f"val_ppl_holdout={ppl_holdout:.2f} (honest)"
             )
+            # T9.3 -- multi-seq-len VAL + monotonic-quality flag.
+            # Default OFF (--val-seq-lens empty); when set, run
+            # evaluate() at every requested length with auto-scaled
+            # batch and emit the user 铁律 flag. Fail-soft: any error
+            # (OOM at long seq, malformed CSV) logs and falls through.
+            try:
+                _vsl_pairs = _parse_val_seq_lens(
+                    val_seq_lens_csv=str(getattr(args, "val_seq_lens", "") or ""),
+                    val_seq_lens_bs_csv=str(getattr(args, "val_seq_lens_bs", "") or ""),
+                    train_seq_len=int(args.seq_len),
+                    train_batch_size=int(args.batch_size),
+                    auto_scale=bool(getattr(args, "val_seq_lens_auto_scale", True)),
+                )
+            except ValueError as exc:
+                _log(f"  [multi-seq-val] arg parse failed (skipping): {exc}")
+                _vsl_pairs = []
+            if _vsl_pairs:
+                try:
+                    _per_seq_ppl = _eval_at_seq_lens(
+                        model, _vsl_pairs,
+                        val_glob=(args.val_glob or args.data_glob),
+                        data_glob=args.data_glob,
+                        tokenizer_name=args.tokenizer_name,
+                        n_batches=16,
+                        remote_warehouse=_warehouse,
+                    )
+                    _grows = _monotonic_quality_grows(_per_seq_ppl)
+                    _log(_format_per_seq_log(step, _per_seq_ppl, _grows))
+                    metrics.setdefault("ppl_eval_per_seq", {})[step] = _per_seq_ppl
+                    metrics.setdefault("quality_grows_with_seq", {})[step] = bool(_grows)
+                except Exception as exc:  # pragma: no cover
+                    _log(f"  [multi-seq-val] eval failed step={step}: {exc!r}")
             # T5.4 -- maintain best_step_*.pt link/copy. Fail-soft: any
             # error (disk full, missing src ckpt, FS without symlinks) is
             # logged but does not interrupt training.
