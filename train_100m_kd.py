@@ -878,6 +878,24 @@ def _parse_args() -> argparse.Namespace:
                         "clamp_threshold every 100 steps to prevent "
                         "threshold drift past the input distribution. "
                         "Set this flag to A/B-disable for diagnosis.")
+    # ---- Run 5 PLIF-dead fixes (default OFF; see docs/PLIF_DEAD_DIAGNOSIS.md) ----
+    p.add_argument("--plif-dense-bypass-steps", type=int, default=0,
+                   help="Run 5 PLIF-dead fix #1: emit continuous "
+                        "tanh(v_t - thr) instead of binary spikes for the "
+                        "first N training steps. After step N the cell "
+                        "switches back to binary spike + ATan surrogate. "
+                        "0 disables (Run 5 baseline). Recommended: 5000 "
+                        "for a 60k-step run; lifts the LM gradient through "
+                        "synapse(s) so liquid weights don't decay to 0 "
+                        "before spikes wake up.")
+    p.add_argument("--sew-shortcut", action="store_true", default=False,
+                   help="Run 5 PLIF-dead fix #3 (arxiv:2102.04159 SEW): "
+                        "spike branch becomes synapse(s + h) * sigmoid(...), "
+                        "providing a non-zero LM-gradient path through "
+                        "the LiquidCell output even when s=0. Default OFF "
+                        "keeps Run 5 bit-identical. Strongly recommended "
+                        "with --plif-dense-bypass-steps 0 (gradient-only "
+                        "fix without forward-time mode change).")
     # ---- Perf knobs (2026-05-01; see docs/PERF_KNOBS.md) ------------------
     p.add_argument("--z-loss-topk", type=int, default=2048,
                    help="top-K logits used for sparse z-loss logsumexp; "
@@ -988,6 +1006,56 @@ def _parse_args() -> argparse.Namespace:
                         "opt-in once your run isn't unfreezing params "
                         "mid-training (NeuroMCP plasticity, phase-aware "
                         "exit-101 reload). Re-cache fires on phase change.")
+    # ---- Speedup audit 2026-05-02 knobs (3 ships, see
+    # docs/SPEEDUP_AUDIT_2026-05-02.md) ----
+    # Each default OFF (back-compat: identical Run 5 step semantics).
+    p.add_argument("--lazy-host-sync-accum", action="store_true",
+                   default=False, dest="lazy_host_sync_accum",
+                   help="defer per-microbatch loss-component .item() calls "
+                        "to log boundary. The 6 .item() calls in the inner "
+                        "accum loop (loss/ce/kd/z/modal/cur) each implicit-"
+                        "syncs stream 0; at accum=2 that's 12 host stalls/"
+                        "step just for logging. When ON, replace "
+                        "``accum_X += float(t.item())`` with GPU tensor "
+                        "accumulators and only materialize Python floats at "
+                        "log boundaries. Default OFF; opt-in for ~2-4 % "
+                        "step-time win on Ultra. NaN/inf surfaces unchanged "
+                        "at log boundary. The kd-every-adaptive ce window "
+                        "still calls .item() directly (intentional, runs "
+                        "every step).")
+    p.add_argument("--fused-adamw", action="store_true", default=False,
+                   dest="fused_adamw",
+                   help="when ON and no plasticity sources are wired into "
+                        "any model parameter (i.e. every requires_grad "
+                        "param has only _sf_grad_source=['bp'] or no tag), "
+                        "build torch.optim.AdamW(fused=True) instead of "
+                        "PlasticityAwareAdamW. Numerically equivalent to "
+                        "vanilla AdamW (Adam moment update is "
+                        "kernel-implementation-independent) but fused "
+                        "kernel is ~3x faster than the per-param Python "
+                        "loop in PlasticityAwareAdamW.step. Default OFF "
+                        "(preserves PlasticityAwareAdamW path). Opt-in "
+                        "buys ~2-3 % step-time on Ultra (~535M, ~340 "
+                        "params). Auto-falls back to PlasticityAwareAdamW "
+                        "if any param is plasticity-tagged. Warmstart "
+                        "compat: ckpts saved by PlasticityAwareAdamW have "
+                        "different state_dict keys (m/v vs exp_avg/"
+                        "exp_avg_sq); fused-adamw cold-starts moments on "
+                        "v1 ckpt warmstart (one-step penalty, then "
+                        "bit-exact).")
+    p.add_argument("--skip-warmstart-eval-N", type=int, default=0,
+                   dest="skip_warmstart_eval_n",
+                   help="when warmstarting from a known-good ckpt, skip "
+                        "the first N val evaluations. Each val pass on "
+                        "Ultra costs ~30s (2 evals: ttt + holdout); on a "
+                        "phase-aware exit-101 relaunch chain this runs "
+                        "many times for no quality benefit (we already "
+                        "know the baseline ppl). Default 0 = current "
+                        "behaviour (every eval-every step does both ttt "
+                        "and holdout val). N=1 typical for a single "
+                        "relaunch; N=2 if you also want to skip the "
+                        "second eval boundary. Step counter, save_every, "
+                        "chat samples are unaffected.")
     # ---- Remote data warehouse (mohuanfang) -----------------------------
     # Tiered storage: rental SSD = compute-only with bounded LRU cache,
     # mohuanfang holds the canonical corpus. See
@@ -1082,6 +1150,43 @@ def _parse_args() -> argparse.Namespace:
 
 def _safe_mkdir(p: str) -> None:
     os.makedirs(p, exist_ok=True)
+
+
+def _detect_optim_state_layout(state: dict) -> str:
+    """Speedup audit 2026-05-02 (Ship #2): detect optimizer state_dict layout.
+
+    PlasticityAwareAdamW uses ``state[<id>] = {"step": int, "m": Tensor, "v":
+    Tensor}`` (see synapforge/optim.py:279-280). torch.optim.AdamW uses
+    ``state[<id>] = {"step": Tensor, "exp_avg": Tensor, "exp_avg_sq": Tensor}``
+    (PyTorch upstream). When swapping between the two via ``--fused-adamw``
+    the cross-load is unsafe -- ``optim.load_state_dict`` silently ignores
+    mismatched keys and the result is a moment cold-start. Detect the
+    layout up front so the trainer can warn + skip instead.
+
+    Args:
+        state: A ``optim.state_dict()`` dict with a top-level ``"state"`` key.
+
+    Returns:
+        ``"torch_adamw"`` if the per-param state has ``exp_avg`` /
+        ``exp_avg_sq``; ``"plasticity_adamw"`` if it has ``m`` / ``v``;
+        ``"unknown"`` if neither pattern matches (empty state dict or a
+        third-party optimizer's state -- skip the load and warn).
+    """
+    if not isinstance(state, dict):
+        return "unknown"
+    inner = state.get("state", state)
+    if not isinstance(inner, dict) or not inner:
+        return "unknown"
+    # Sample the first per-param entry to identify the layout.
+    for _pid, pstate in inner.items():
+        if not isinstance(pstate, dict):
+            continue
+        keys = set(pstate.keys())
+        if "exp_avg" in keys or "exp_avg_sq" in keys:
+            return "torch_adamw"
+        if "m" in keys and "v" in keys:
+            return "plasticity_adamw"
+    return "unknown"
 
 
 @torch.no_grad()
@@ -1648,6 +1753,7 @@ def main() -> int:
         lm_head_pre_ln=bool(args.lm_head_pre_ln),
         weight_quant_cfc=str(args.quant_cfc_weights),
         latent_k=int(args.latent_k),
+        sew_shortcut=bool(args.sew_shortcut),
     )
     n_params = model.num_parameters()
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
@@ -1788,19 +1894,82 @@ def main() -> int:
              f"(device={DEVICE}, teacher={'set' if teacher else 'None'})")
 
     # ---------------- optimizer ----------------
-    optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
+    # Speedup audit 2026-05-02 (Ship #2): when --fused-adamw is ON AND no
+    # parameter is tagged with a non-bp plasticity source, build vanilla
+    # torch.optim.AdamW(fused=True) instead of PlasticityAwareAdamW. The
+    # fused kernel is ~3x faster than the per-param Python loop in
+    # PlasticityAwareAdamW.step on Ultra (~340 trainable params).
+    # Numerically equivalent to vanilla AdamW (Adam moment update is
+    # kernel-implementation-independent). Detection rule: any param with
+    # ``_sf_grad_source`` set to anything other than ``["bp"]`` (or with
+    # plasticity sources mixed in) forces the safe PlasticityAwareAdamW
+    # fallback so STDP / Hebb gradients are not silently dropped.
+    _use_fused_adamw = bool(getattr(args, "fused_adamw", False))
+    _fused_adamw_safe = True
+    if _use_fused_adamw:
+        _bad_param_names: list[str] = []
+        for pname, p in model.named_parameters():
+            if not p.requires_grad:
+                continue
+            sources = getattr(p, "_sf_grad_source", None)
+            if sources is None:
+                continue
+            if list(sources) != ["bp"]:
+                _fused_adamw_safe = False
+                _bad_param_names.append(f"{pname}={list(sources)}")
+        if not _fused_adamw_safe:
+            _log("[fused-adamw] plasticity sources detected on "
+                 f"{len(_bad_param_names)} params (e.g. "
+                 f"{_bad_param_names[:3]!r}); falling back to "
+                 "PlasticityAwareAdamW for correctness.")
+        elif DEVICE != "cuda":
+            _log("[fused-adamw] requires CUDA; falling back to "
+                 "PlasticityAwareAdamW.")
+            _fused_adamw_safe = False
+    if _use_fused_adamw and _fused_adamw_safe:
+        # Vanilla fused AdamW. WEIGHT_DECAY mirrors build_optimizer's default.
+        optim = torch.optim.AdamW(
+            [p for p in model.parameters() if p.requires_grad],
+            lr=peak_lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=WEIGHT_DECAY,
+            fused=True,
+        )
+        _log("[fused-adamw] using torch.optim.AdamW(fused=True) "
+             "(ms_param_table absent; plasticity ticks must rely on "
+             "model-side state, not optim.ms_param_table).")
+    else:
+        optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     print(f"optimizer: {type(optim).__name__} lr={peak_lr} wd={WEIGHT_DECAY}")
 
     # Load optimizer state from warmstart ckpt (preserves Adam m/v momentum;
     # without this, warmstart loses momentum state and the run cold-starts
     # the moment estimates -- a known cause of warmstart-divergence as seen
     # in v1.2 b80 (loss 5.45 -> 6.34 in 500 steps).
+    # Ship #2: fused AdamW uses ``exp_avg`` / ``exp_avg_sq`` keys; vanilla
+    # PlasticityAwareAdamW uses ``m`` / ``v``. Cross-load is unsafe (silently
+    # ignored by torch.optim) so we detect a layout mismatch and warn instead
+    # of crashing -- moments cold-start is a one-step penalty.
     if warm_ckpt and os.path.exists(warm_ckpt):
         try:
             _ck = torch.load(warm_ckpt, map_location="cpu")
             if isinstance(_ck, dict) and "optim_state" in _ck:
-                optim.load_state_dict(_ck["optim_state"])
-                _log(f"warmstart: loaded optim state from {warm_ckpt}")
+                _ck_state = _ck["optim_state"]
+                _state_layout = _detect_optim_state_layout(_ck_state)
+                _running_layout = (
+                    "torch_adamw"
+                    if isinstance(optim, torch.optim.AdamW)
+                    else "plasticity_adamw"
+                )
+                if _state_layout != "unknown" and _state_layout != _running_layout:
+                    _log(f"warmstart: optim_state layout mismatch "
+                         f"(ckpt={_state_layout}, running={_running_layout}); "
+                         "skipping load (Adam moments will cold-start; "
+                         "one-step momentum penalty)")
+                else:
+                    optim.load_state_dict(_ck_state)
+                    _log(f"warmstart: loaded optim state from {warm_ckpt}")
             else:
                 _log(f"warmstart: no optim_state in ckpt (legacy ckpt; momentum cold-start)")
         except Exception as exc:
@@ -2094,7 +2263,50 @@ def main() -> int:
              f"-> bs_eff = {args.batch_size * accum_steps} "
              f"(VRAM stays at bs={args.batch_size})")
 
+    # Speedup audit 2026-05-02 (Ship #1): cache the lazy-host-sync flag once.
+    # When True the inner-loop accumulators are GPU tensors; when False they
+    # are Python floats (current behaviour). The branch is per-step (not
+    # per-microbatch) so the cost is one int compare/step, free.
+    _lazy_host_sync_accum = bool(getattr(args, "lazy_host_sync_accum", False))
+    if _lazy_host_sync_accum:
+        _log("[lazy-host-sync-accum] ON: 6 .item() calls/microbatch deferred "
+             "to log boundary (saves ~12 host-syncs/step at accum=2)")
+    # Skip-warmstart-eval-N (Ship #3): track how many evals to skip.
+    _skip_eval_remaining = max(0, int(getattr(args, "skip_warmstart_eval_n", 0)))
+    if _skip_eval_remaining > 0:
+        if warm_ckpt and os.path.exists(warm_ckpt):
+            _log(f"[skip-warmstart-eval-N] will skip first "
+                 f"{_skip_eval_remaining} val evaluation(s) "
+                 f"(warmstart from {warm_ckpt})")
+        else:
+            _log(f"[skip-warmstart-eval-N] requested {_skip_eval_remaining} "
+                 "but no warmstart ckpt -- ignoring (every eval will run)")
+            _skip_eval_remaining = 0
+
+    # Run 5 PLIF-dead fix #1: capture dense-bypass window so the toggle
+    # below is O(1) per step.  When --plif-dense-bypass-steps == 0 the
+    # window is empty and PLIFCell.dense_bypass stays False forever.
+    _plif_dense_bypass_steps = int(getattr(args, "plif_dense_bypass_steps", 0))
+    if _plif_dense_bypass_steps > 0:
+        for _m in plif_cells:
+            _m.dense_bypass = True
+        _log(f"[plif-fix #1] dense-bypass ON for steps 1..{_plif_dense_bypass_steps} "
+             f"({len(plif_cells)} PLIF cells emit tanh(v - thr) instead of binary spikes; "
+             f"breaks dead-PLIF positive feedback per docs/PLIF_DEAD_DIAGNOSIS.md)")
+    if bool(getattr(args, "sew_shortcut", False)):
+        # T2.5/T2.6 cross-check: count blocks that built the SEW residual.
+        from synapforge.model_100m import HybridBlock as _HB
+        _n_sew = sum(1 for m in model.modules() if isinstance(m, _HB) and getattr(m, "sew_shortcut", False))
+        _log(f"[plif-fix #3] SEW (Spike-Element-Wise) shortcut ENABLED on {_n_sew} HybridBlocks "
+             f"(arxiv:2102.04159; gated = synapse(s + h) * sigmoid(...))")
+
     for step in range(1, n_steps + 1):
+        # Run 5 PLIF-dead fix #1 -- toggle dense_bypass off at the boundary.
+        if _plif_dense_bypass_steps > 0 and step == _plif_dense_bypass_steps + 1:
+            for _m in plif_cells:
+                _m.dense_bypass = False
+            _log(f"[plif-fix #1] dense-bypass OFF at step {step} "
+                 f"-- PLIF cells now emit binary spikes + ATan surrogate")
         cur_lr = lr_at(step, peak_lr, args.warmup, n_steps, args.lr_decay)
         for pg in optim.param_groups:
             pg["lr"] = cur_lr
@@ -2104,6 +2316,24 @@ def main() -> int:
         # equivalent single-batch run. (Sum-and-divide because each
         # micro-batch's loss is already pre-divided by accum_steps before
         # backward; for logging we want the un-scaled mean.)
+        # Speedup audit 2026-05-02 (Ship #1): when --lazy-host-sync-accum is
+        # ON, accumulators are GPU tensors (no .item() in inner loop) and
+        # only materialize at log boundary; when OFF, accumulators are
+        # Python floats (current behaviour).
+        if _lazy_host_sync_accum:
+            # Lazy mode: GPU tensor scalars. Initialised to fp32 zeros on
+            # DEVICE; tensor adds keep them on-stream. Materialised once
+            # per global step below.
+            _device_for_accum = torch.device(DEVICE) if DEVICE != "cpu" else torch.device("cpu")
+            accum_total_loss_t = torch.zeros((), dtype=torch.float32,
+                                              device=_device_for_accum)
+            accum_ce_t = torch.zeros_like(accum_total_loss_t)
+            accum_kd_t = torch.zeros_like(accum_total_loss_t)
+            accum_z_t = torch.zeros_like(accum_total_loss_t)
+            accum_modal_aux_t = torch.zeros_like(accum_total_loss_t)
+            accum_cur_aux_t = torch.zeros_like(accum_total_loss_t)
+        # Always-defined (used by both modes; default-mode reads them, lazy
+        # mode rebinds to materialised values after the inner loop).
         accum_total_loss = 0.0
         accum_ce = 0.0
         accum_kd = 0.0
@@ -2278,12 +2508,24 @@ def main() -> int:
             # Track raw (un-scaled) loss components for logging. We sum
             # then divide by accum_steps_done so the logged value equals
             # the un-divided per-batch mean (comparable to bs=B*N runs).
-            accum_total_loss += float(loss.detach().item())
-            accum_ce += float(ce_loss.detach().item())
-            accum_kd += float(kd.detach().item())
-            accum_z += float(z_loss.detach().item())
-            accum_modal_aux += float(modal_aux.detach().item())
-            accum_cur_aux += float(cur_aux.detach().item())
+            # Speedup audit 2026-05-02 (Ship #1): when --lazy-host-sync-accum
+            # is ON, sum the detached tensors on GPU (no host stall).
+            # When OFF, sum the materialised Python floats (current
+            # behaviour, 6 .item() host syncs per microbatch).
+            if _lazy_host_sync_accum:
+                accum_total_loss_t = accum_total_loss_t + loss.detach().float()
+                accum_ce_t = accum_ce_t + ce_loss.detach().float()
+                accum_kd_t = accum_kd_t + kd.detach().float()
+                accum_z_t = accum_z_t + z_loss.detach().float()
+                accum_modal_aux_t = accum_modal_aux_t + modal_aux.detach().float()
+                accum_cur_aux_t = accum_cur_aux_t + cur_aux.detach().float()
+            else:
+                accum_total_loss += float(loss.detach().item())
+                accum_ce += float(ce_loss.detach().item())
+                accum_kd += float(kd.detach().item())
+                accum_z += float(z_loss.detach().item())
+                accum_modal_aux += float(modal_aux.detach().item())
+                accum_cur_aux += float(cur_aux.detach().item())
 
         # Compute the number of micro-batches actually run this step
         # (StopIteration mid-accum partial step). We still optim.step on
@@ -2362,6 +2604,20 @@ def main() -> int:
         # T2.7: count tokens across all completed micro-batches this step.
         # When accum_steps=1, accum_done=1 (back-compat).
         cum_tok += args.batch_size * seq_len * accum_done
+
+        # Speedup audit 2026-05-02 (Ship #1): when --lazy-host-sync-accum is
+        # ON, materialise the GPU tensor accumulators to Python floats here
+        # (one host-sync per step instead of 6×accum_steps host-syncs/step).
+        # Done at the natural sync boundary -- after optim.step() and the
+        # cuda.synchronize gate. The 6 .item() calls below run on the
+        # already-syncrhonised stream so they are essentially free.
+        if _lazy_host_sync_accum:
+            accum_total_loss = float(accum_total_loss_t.item())
+            accum_ce = float(accum_ce_t.item())
+            accum_kd = float(accum_kd_t.item())
+            accum_z = float(accum_z_t.item())
+            accum_modal_aux = float(accum_modal_aux_t.item())
+            accum_cur_aux = float(accum_cur_aux_t.item())
 
         # Per-step mean loss components (raw, un-divided) for logging.
         # These mirror what bs=B*N would log in a single big batch.
@@ -2608,6 +2864,27 @@ def main() -> int:
                 _log(f"[phase-aware] poll failed (continuing): {exc}")
 
         if step % eval_every == 0 or step == n_steps:
+            # Speedup audit 2026-05-02 (Ship #3): when warmstarting from a
+            # known-good ckpt, skip the first N val evaluations. We already
+            # know the baseline ppl from the prior run's metrics.json --
+            # re-running eval at step 10500 (when warm-loaded from
+            # step_10000) is wall-time waste (~30s/eval × 2 evals = ~60s).
+            # Default behaviour (N=0) preserved: every eval-every step
+            # still runs both ttt + holdout val. Step counter, save_every,
+            # multi-seq val, chat samples, best-ckpt tracking unaffected.
+            # NOTE: keeping ``step == n_steps`` as a hard force so the
+            # final-step eval ALWAYS runs (otherwise a short relaunch
+            # could finish without persisting any val_ppl_holdout in
+            # metrics.json).
+            if _skip_eval_remaining > 0 and step != n_steps:
+                _log(f"VAL step {step}: SKIPPED "
+                     f"(--skip-warmstart-eval-N "
+                     f"{int(args.skip_warmstart_eval_n)}, "
+                     f"{_skip_eval_remaining - 1} remaining after this)")
+                _skip_eval_remaining -= 1
+                # Continue to save/phase-aware paths below; just bypass
+                # the (expensive) eval + best-ckpt update.
+                continue
             # P3: TWO val ppls. ttt is the set --self-learn-ttt trains
             # on (artificially low after TTT inner step). holdout is
             # the leak-free signal phase_manager gates on. Both are
