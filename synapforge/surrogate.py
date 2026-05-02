@@ -335,6 +335,22 @@ class PLIFCell(nn.Module):
                 h2 = hidden // 2
                 vec[:h2] = math.log(fast_t)
                 vec[h2:] = math.log(slow_t)
+            elif tau_init == "trimodal":
+                # NeurIPS 2025 (Fang et al., arXiv:2505.18608) A3 -- short
+                # / mid / long tau split.  Forces the layer to span the
+                # full frequency range from initialization rather than
+                # relying on training to discover it.  Channel split:
+                #   30% short (tau=0.5, high-pass band)
+                #   40% mid   (tau=2.0, band-pass)
+                #   30% long  (tau=8.0, low-pass band)
+                short_t, mid_t, long_t = 0.5, 2.0, 8.0
+                vec = torch.empty(hidden)
+                n_short = (hidden * 30) // 100
+                n_long = (hidden * 30) // 100
+                n_mid = hidden - n_short - n_long
+                vec[:n_short] = math.log(short_t)
+                vec[n_short:n_short + n_mid] = math.log(mid_t)
+                vec[n_short + n_mid:] = math.log(long_t)
             elif tau_init == "log_uniform":
                 vec = torch.rand(hidden) * (math.log(50.0) - math.log(2.0)) + math.log(2.0)
             else:

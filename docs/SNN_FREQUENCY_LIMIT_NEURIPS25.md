@@ -78,3 +78,70 @@ This is also a paper angle. We can claim **first joint frequency-domain analysis
 ### Out of scope (intentionally)
 - We do **not** swap CfC for a high-pass cell. CfC is a load-bearing pitch element. Fix the frequency at the *boundary* (input embed + PLIF residual), keep CfC core unchanged.
 - We do **not** delete Avg-Pool entirely; we add Max-Pool *alongside* (concat). Avg still useful for slow context.
+
+## §6. Implementation notes (auto-snn-freq-fixes — feature/snn-freq-fixes)
+
+All three knobs landed on `feature/snn-freq-fixes` and default OFF so the
+historical baseline is bit-identical until a flag is passed.
+
+### A1 — `synapforge/modal/byte_patch.py`
+A new reusable `BytePatch(in_feat, hidden, patch, pool)` primitive:
+- `pool="avg"` (default): single `Linear(patch * in_feat -> hidden)` over
+  the flattened window.  Bit-equivalent to the legacy reshape+Linear
+  byte-patch projection.
+- `pool="max"`: `amax` along the patch axis, `Linear(in_feat -> hidden)`.
+- `pool="max+avg"`: concat avg + max, single `Linear(2 * in_feat -> hidden)`
+  (the Max-Former 1x1 mix recipe).
+
+Trainer flag: `--byte-patch-pool {avg|max|max+avg}`, default `avg`.
+
+### A2 — High-pass residual on `HybridBlock`
+`synapforge/model_100m.py::HybridBlock` gained two ctor kwargs:
+- `high_pass_residual_weight: float = 0.0` (default OFF).
+- `high_pass_kernel_size: int = 3`.
+
+When the weight is non-zero, the block instantiates:
+- `hp_lowpass`: depth-wise causal `Conv1d(d, d, kernel_size=k, groups=d)`,
+  weight initialised to `1/k` (uniform-average smoother), bias zero.
+- `hp_lambda`: per-channel learnable `nn.Parameter(d,)` initialised to the
+  passed scalar (so a single global init scalar still lets each channel
+  diverge during training).
+
+Forward becomes:
+```
+x_in = x
+... (legacy CfC -> PLIF -> Synapse -> FFN body) ...
+if hp_lowpass is not None:
+    x = x + lambda * (x_in - LowPass(x_in))
+```
+
+LowPass is causal (left-padded with `k-1` zeros) so the high-pass residual
+is order-preserving and works at any sequence length.
+
+Trainer flag: `--high-pass-residual-weight 0.0`, default OFF.
+
+### A3 — Tri-modal tau init for PLIF
+`synapforge/surrogate.py::PLIFCell` `tau_init` now accepts `"trimodal"`:
+- 30% of channels initialised to `tau = 0.5` (short / high-pass band).
+- 40% to `tau = 2.0` (mid / band-pass).
+- 30% to `tau = 8.0` (long / low-pass band).
+
+This forces the layer to span the full frequency range from the first
+forward, instead of relying on training to discover heterogeneity.
+
+Trainer flag: `--plif-tau-init {unimodal|bimodal|trimodal|log_uniform}`,
+default `unimodal` (legacy `tau=2.5` uniform).
+
+### Tests
+`tests/integration/test_snn_frequency_fixes.py` — four CPU-only tests:
+1. A1: each `pool` variant runs, output shape correct, no NaN.
+2. A2: default OFF -> no extra modules; ON -> output differs.
+3. A3: trimodal init produces exactly 3 tau bands with the documented
+   30/40/30 split.
+4. All-on smoke: `build_synapforge_100m(plif_tau_init="trimodal",
+   high_pass_residual_weight=0.05)` forwards cleanly end-to-end.
+
+### Branch
+`feature/snn-freq-fixes`, commit
+`auto-snn-freq-fixes: A1+A2+A3 from Fang et al. NeurIPS 2025 — Max-Pool +
+high-pass residual + tri-modal tau init + tests`.

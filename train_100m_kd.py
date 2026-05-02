@@ -710,6 +710,42 @@ def _parse_args() -> argparse.Namespace:
                         "sampling) before ln_f. Default 0 disables (zero "
                         "overhead, identity behaviour vs pre-T2.9). Recipe "
                         "from arxiv:2412.06769 / DEEP_MAINT_QUEUE.md T2.9.")
+    # ---- NeurIPS 2025 (Fang et al., arXiv:2505.18608) frequency fixes ----
+    # See docs/SNN_FREQUENCY_LIMIT_NEURIPS25.md.  All three flags default
+    # to OFF / legacy behaviour so existing launch scripts are unaffected.
+    p.add_argument("--byte-patch-pool", default="avg",
+                   choices=["avg", "max", "max+avg"],
+                   dest="byte_patch_pool",
+                   help="A1 (Fang et al. 2505.18608): pool branch in the "
+                        "BytePatch primitive (synapforge.modal.byte_patch). "
+                        "'avg' (default) preserves the legacy low-pass "
+                        "behaviour.  'max' adds a high-pass / edge-detector "
+                        "branch.  'max+avg' concatenates both and lets a "
+                        "1x1 conv learn the mix.  Wired into multimodal "
+                        "callers; for text-only LM training this currently "
+                        "has no effect (recorded in the trainer config and "
+                        "honoured by callers that build UnifiedEmbed via "
+                        "BytePatch).")
+    p.add_argument("--high-pass-residual-weight", type=float, default=0.0,
+                   dest="high_pass_residual_weight",
+                   help="A2 (Fang et al. 2505.18608): per-block high-pass "
+                        "residual lambda init.  When > 0 the HybridBlock "
+                        "wraps its forward as out = block(x) + lambda * "
+                        "(x - LowPass(x)) where LowPass is a depth-wise "
+                        "causal Conv1d (kernel=3 default) and lambda is "
+                        "per-channel learnable initialised to this scalar. "
+                        "Default 0.0 = OFF (zero new params, zero new "
+                        "modules; bit-identical to the legacy code path).")
+    p.add_argument("--plif-tau-init", default="unimodal",
+                   choices=["unimodal", "bimodal", "trimodal", "log_uniform"],
+                   dest="plif_tau_init",
+                   help="A3 (Fang et al. 2505.18608): PLIF tau init mode. "
+                        "'unimodal' (default) keeps the legacy 2.5-uniform "
+                        "init bit-for-bit.  'bimodal' = DA-LIF fast/slow "
+                        "split.  'trimodal' = short(0.5)/mid(2.0)/long(8.0) "
+                        "30/40/30 split spanning the full frequency band "
+                        "from init.  'log_uniform' = uniform in log-space "
+                        "over [2, 50].")
     p.add_argument("--lr-min", type=float, default=1e-5)
     p.add_argument("--skip-spike", action="store_true", default=True)
     p.add_argument("--z-loss-weight", type=float, default=1e-4,
@@ -1374,7 +1410,9 @@ def _load_teacher(name: str, fallback_ckpt: str = "") -> "torch.nn.Module":
                 vocab=151936, d=512, n_layers=10, loop_depth=1,
                 max_seq=SEQ_LEN, ffn_ratio=8.0, sparsity=0.95, dropout=0.0,
                 use_grad_checkpoint=False,
-            )
+            ,
+        plif_tau_init=(2.5 if getattr(args, "plif_tau_init", "unimodal") == "unimodal" else getattr(args, "plif_tau_init", "unimodal")),
+        high_pass_residual_weight=getattr(args, "high_pass_residual_weight", 0.0))
             t_model.load_state_dict(sd, strict=False)
             t_model.eval()
             for p in t_model.parameters():
