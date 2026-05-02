@@ -243,3 +243,19 @@ contradict the LNN+SNN thesis and make the paper unsubmittable. See
 Base nor Pro Synap-1 ckpts are ready by demo day, the fallback is a smaller
 native Synap-1 (30M-50M LNN+SNN, faster training) **or** an honest replay
 of the last healthy v4.x ckpt — never a transformer base.
+
+## The ppl 10 target — Synap-1 Ultra (535M)
+
+Ultra is the next variant after Pro and the **first artifact we believe can
+sit next to the Qwen 0.5B teacher on raw next-token prediction** (val ppl 10
+band — GPT-2 medium / SmolLM2-360M class, see
+[BASELINE_COMPARISON.md](BASELINE_COMPARISON.md)). Run 5 currently sits at
+val_ppl_holdout 5456 @ step 10000 — a 6.3 log-unit gap from the ambition.
+The roadmap to close it is a 4-phase campaign (LM continuation → SFT →
+GRPO RL → self-distill) costed at **25-35 GPU-h, $175-245 rental, 2-3 days
+wall-clock**, with cross-domain eval (T9.6) gating every phase boundary
+and explicit abort-criteria at the architecture-cap risk. Honest read on
+risk: ~190× sub-Chinchilla data starvation is the dominant gap, and PLIF
+dead 16/16 means the SNN benefit is unrealized in training; both are
+addressed in the plan but neither is solved. The full roadmap, math, and
+decision matrix live in [PPL_10_MASTER_PLAN.md](PPL_10_MASTER_PLAN.md).
