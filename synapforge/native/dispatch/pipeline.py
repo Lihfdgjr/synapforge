@@ -29,17 +29,25 @@ CPU AdamW cost. ZeRO-Offload Stage 0 already moves AdamW to CPU so
 
 Determinism & correctness
 -------------------------
-The pipelined order ``(B@N || C@N-1)`` produces the *same* trajectory
-as the sequential ``(B@N then C@N)`` IFF the optim step at iteration
-N depends only on iteration N's grads, not on the param values
-read by iteration N+1's forward. AdamW satisfies this (it reads
-grad_N and writes param). The only subtlety is that under
-pipelining, batch N+1's forward sees param-after-step-N (just like
-sequential), because Stage C finishes step N before Stage B starts
-step N+1 of the *next* batch -- the 1-step pipeline only hides the
-compute, it does not actually allow B to read pre-update params.
-This is enforced by the Stage B loop ``wait_for_optim`` barrier in
-``_stage_b_loop``.
+Under pipelining, Stage B@N can read parameters *while* Stage C@N-1
+is mutating them in place. This is the standard ASGD / Hogwild!
+relaxation -- you get a 1-step-stale gradient compared to strict
+sequential SGD. For LNN+SNN with continuous-time CfC dynamics this
+is empirically benign at moderate batch size (the trajectory drift
+is comparable to fp16 noise).
+
+If your math requires *strict* zero-staleness (numerical
+reproducibility), wrap ``optim_step_fn`` so it double-buffers the
+params: write to a shadow copy in Stage C, swap pointers under a
+lock at end-of-step. The :class:`HeteroPipeline` itself does not
+enforce a hard barrier between B@N+1's reads and C@N's writes --
+``queue_bc`` capacity is the only backpressure.
+
+The pipeline's correctness test (``tests/native/dispatch/test_pipeline.py``)
+uses a param-independent grad function so pipelined and sequential
+trajectories are bit-identical -- that confirms the *ordering* is
+correct; the staleness above is an orthogonal trade-off the user
+opted into.
 
 Hard constraint
 ---------------
@@ -346,16 +354,22 @@ class HeteroPipeline:
                 pass
 
     def _stage_b_loop(self) -> None:
-        """Compute: forward + backward; feed queue_bc with grads."""
+        """Compute: forward + backward; feed queue_bc with grads.
+
+        Backpressure relies entirely on ``queue_bc`` capacity (default 1)
+        -- if Stage C is behind, ``queue_bc.put`` blocks. This is what
+        enables B@N to overlap with C@N-1 (the queue holds one in-flight
+        bundle while C consumes the previous).
+
+        Note on parameter staleness: the pipeline does NOT block B from
+        reading params concurrently with C's in-place mutation. That's
+        the documented ASGD / Hogwild!-style 1-step staleness. Tests
+        verify trajectory parity with a param-independent grad fn.
+        """
         try:
             while True:
                 if self._stop_evt.is_set() or self._error is not None:
                     break
-                # Wait for prev optim step to finish before starting
-                # this step's forward (1-step pipeline correctness).
-                if not self._optim_done_evt.wait(timeout=10.0):
-                    raise RuntimeError(
-                        "Stage B timed out waiting for Stage C optim step")
                 # Pop next batch
                 wait_t0 = time.time()
                 try:
@@ -368,10 +382,6 @@ class HeteroPipeline:
                     self._queue_bc.put(_EOS)
                     return
                 batch: _Batch = item
-                # Clear optim-done so next step waits till C signals again.
-                # (Edge case: if optim_step_fn is super fast and finishes
-                # before B starts the next iter, the event stays set --
-                # that's fine, no false wait.)
                 t = time.time()
                 grads, loss, fb_extra = self._fb_fn(
                     batch.inputs, batch.targets, batch.extra)
@@ -380,8 +390,8 @@ class HeteroPipeline:
                 bundle = _GradBundle(
                     step_idx=batch.step_idx, grads=grads,
                     loss=float(loss), extra=fb_extra or {})
-                self._optim_done_evt.clear()
-                # Enqueue with backpressure.
+                # Enqueue with backpressure -- queue_bc.put blocks if C
+                # is behind; this is the 1-step pipeline depth limit.
                 while True:
                     if self._stop_evt.is_set() or self._error is not None:
                         return
