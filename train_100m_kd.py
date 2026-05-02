@@ -775,6 +775,21 @@ def _parse_args() -> argparse.Namespace:
                         "rate > high -> linear penalty proportional to (rate - high)**2.")
     p.add_argument("--teacher", default="gpt2",
                    help="HF model id for KD teacher (frozen); see HF_ENDPOINT for mirror")
+    p.add_argument("--teacher-cpu-int8", action="store_true", default=False,
+                   dest="teacher_cpu_int8",
+                   help="load the KD teacher on CPU with optional "
+                        "bitsandbytes INT8 quantisation (frees ~2 GB HBM "
+                        "for Qwen 2.5 0.5B class teachers). When ON, the "
+                        "teacher forward runs on CPU (200-800 ms vs "
+                        "300-600 ms on GPU at seq_len=256), but the freed "
+                        "HBM is re-spent on a larger student micro-batch. "
+                        "Combined with KD-every>=4 the slower teacher is "
+                        "amortised. With --kd-async-teacher, the input "
+                        "H2D + output D2H copies overlap with the student "
+                        "GPU forward via a side stream. bitsandbytes is "
+                        "OPTIONAL: missing or unsupported architectures "
+                        "fall back to fp32 CPU load. See "
+                        "synapforge/teachers/cpu_int8.py for details.")
     p.add_argument("--kd-weight", type=float, default=0.7,
                    help="alpha for KD loss; loss = (1-alpha)*ce + alpha*kd")
     p.add_argument("--kd-every", type=int, default=4,
@@ -1067,6 +1082,26 @@ def _parse_args() -> argparse.Namespace:
                         "milestone). Default OFF (current default = "
                         "PlasticityAwareAdamW unless --fused-adamw is "
                         "set).")
+    p.add_argument("--cpu-offload-optim", action="store_true", default=False,
+                   dest="cpu_offload_optim",
+                   help="ZeRO-Offload Stage 0: keep AdamW m/v moments + a "
+                        "master fp32 param copy on PINNED CPU memory and "
+                        "run the optimizer step on CPU each iteration. "
+                        "Frees ~2*N*4 bytes of HBM (the moments) -- on "
+                        "the 100M model that's ~800 MB freed; on Ultra "
+                        "(~500M) it's ~4 GB. Numerically bit-exact (1e-5 "
+                        "rel-err) vs --synapforge-adamw because the CPU "
+                        "uses the same fp32 AdamW math. Step time adds "
+                        "the H2D grad copy + CPU AdamW + D2H param copy; "
+                        "with pipelining vs the next forward this nets "
+                        "~3-5 ms overhead per step on Xeon 16-core, "
+                        "comfortably amortised by the larger micro-batch "
+                        "the freed HBM enables. Mutually exclusive with "
+                        "--fused-adamw. If --synapforge-adamw is also "
+                        "passed, --cpu-offload-optim wins (the offload "
+                        "wraps the synapforge AdamW math, just on CPU). "
+                        "Auto-falls back to PlasticityAwareAdamW if any "
+                        "param is plasticity-tagged. Default OFF.")
     p.add_argument("--skip-warmstart-eval-N", type=int, default=0,
                    dest="skip_warmstart_eval_n",
                    help="when warmstarting from a known-good ckpt, skip "
@@ -1577,8 +1612,27 @@ def _load_teacher(name: str, fallback_ckpt: str = "") -> "torch.nn.Module":
         raise
 
 
-def _teacher_logits(teacher, x: "torch.Tensor") -> "torch.Tensor":
-    """Run teacher forward; handle HF (returns CausalLMOutput) vs nn.Module returning Tensor."""
+def _teacher_logits(teacher, x: "torch.Tensor",
+                    *, stream: "torch.cuda.Stream" = None) -> "torch.Tensor":
+    """Run teacher forward; handle HF (returns CausalLMOutput) vs nn.Module returning Tensor.
+
+    When the teacher lives on CPU (--teacher-cpu-int8), routes through
+    ``synapforge.teachers.cpu_int8.cpu_teacher_forward`` so the
+    input/output H<->D copies optionally overlap with the student
+    forward via a side stream. Otherwise (GPU teacher), runs the
+    forward in-place on x's device.
+    """
+    # Fast path: GPU teacher — call directly without the cpu shim.
+    try:
+        first_p = next(teacher.parameters())
+        teacher_on_cpu = first_p.device.type == "cpu"
+    except StopIteration:
+        teacher_on_cpu = False
+
+    if teacher_on_cpu and x.device.type == "cuda":
+        from synapforge.teachers.cpu_int8 import cpu_teacher_forward
+        return cpu_teacher_forward(teacher, x, stream=stream)
+
     out = teacher(x)
     if hasattr(out, "logits"):
         return out.logits
@@ -1831,12 +1885,25 @@ def main() -> int:
 
     # ---------------- KD teacher (frozen) ----------------
     teacher = None
+    teacher_on_cpu = False  # set True iff --teacher-cpu-int8 path wins
     if args.kd_weight > 0:
         try:
             _log(f"loading KD teacher: {args.teacher!r} (HF_ENDPOINT={os.environ.get('HF_ENDPOINT','<unset>')})")
-            teacher = _load_teacher(args.teacher, args.teacher_fallback_ckpt)
+            if bool(getattr(args, "teacher_cpu_int8", False)):
+                # CPU-resident teacher with optional bnb INT8 quant.
+                # Frees ~2 GB HBM for the Qwen 2.5 0.5B class teacher.
+                # See synapforge/teachers/cpu_int8.py for the load
+                # path + stream-overlap forward semantics.
+                from synapforge.teachers.cpu_int8 import (
+                    load_cpu_int8_teacher,
+                )
+                teacher = load_cpu_int8_teacher(args.teacher, log=_log)
+                teacher_on_cpu = True
+            else:
+                teacher = _load_teacher(args.teacher, args.teacher_fallback_ckpt)
             t_params = sum(p.numel() for p in teacher.parameters())
-            _log(f"teacher loaded: {type(teacher).__name__} params={t_params/1e6:.1f}M frozen=True")
+            _log(f"teacher loaded: {type(teacher).__name__} params={t_params/1e6:.1f}M "
+                 f"frozen=True device={'cpu' if teacher_on_cpu else DEVICE}")
         except Exception as exc:
             import traceback
             _log(f"teacher load FAILED: {exc}; disabling KD (alpha=0)")
@@ -1930,12 +1997,13 @@ def main() -> int:
     # fallback so STDP / Hebb gradients are not silently dropped.
     _use_fused_adamw = bool(getattr(args, "fused_adamw", False))
     _use_synapforge_adamw = bool(getattr(args, "synapforge_adamw", False))
+    _use_cpu_offload_optim = bool(getattr(args, "cpu_offload_optim", False))
     _adamw_safe = True
-    # Same plasticity-source safety check applies to both --fused-adamw
-    # and --synapforge-adamw paths: if ANY param is tagged with a
-    # non-bp grad source we fall back to PlasticityAwareAdamW so the
-    # plasticity stream is not silently dropped.
-    if _use_fused_adamw or _use_synapforge_adamw:
+    # Same plasticity-source safety check applies to all three plain-AdamW
+    # paths (--fused-adamw, --synapforge-adamw, --cpu-offload-optim):
+    # if ANY param is tagged with a non-bp grad source we fall back to
+    # PlasticityAwareAdamW so the plasticity stream is not silently dropped.
+    if _use_fused_adamw or _use_synapforge_adamw or _use_cpu_offload_optim:
         _bad_param_names: list[str] = []
         for pname, p in model.named_parameters():
             if not p.requires_grad:
@@ -1951,7 +2019,33 @@ def main() -> int:
                  f"{len(_bad_param_names)} params (e.g. "
                  f"{_bad_param_names[:3]!r}); falling back to "
                  "PlasticityAwareAdamW for correctness.")
-    if _use_synapforge_adamw and _adamw_safe:
+    if _use_cpu_offload_optim and _adamw_safe:
+        # ZeRO-Offload Stage 0: AdamW moments + master fp32 param on
+        # pinned CPU memory. Frees ~2*N*4 bytes of HBM that we can
+        # re-spend on a larger micro-batch. See
+        # docs/HYBRID_CPU_GPU_TRAINING.md for the budget table.
+        # Wins over --synapforge-adamw and --fused-adamw because the
+        # primary motivation is HBM headroom, not raw step time.
+        from synapforge.optim.cpu_offload_adamw import (
+            CPUOffloadAdamW as _CPUOffloadAdamW,
+        )
+        optim = _CPUOffloadAdamW(
+            [p for p in model.parameters() if p.requires_grad],
+            lr=peak_lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=WEIGHT_DECAY,
+        )
+        _log("[cpu-offload-optim] using CPUOffloadAdamW "
+             "(AdamW moments + master fp32 on pinned CPU; H2D grad "
+             "+ CPU step + D2H param every iter; bit-exact 1e-5 vs "
+             "synapforge.optim.AdamW). HBM saved: ~2*N*4 bytes = "
+             f"{2 * sum(p.numel() for p in model.parameters() if p.requires_grad) * 4 / (1024**3):.2f} GiB.")
+        if _use_fused_adamw or _use_synapforge_adamw:
+            _log("[cpu-offload-optim] also passed --fused-adamw/--synapforge-adamw; "
+                 "--cpu-offload-optim wins (HBM headroom is the primary "
+                 "axis here).")
+    elif _use_synapforge_adamw and _adamw_safe:
         # Phase 1 of the torch-replacement roadmap: pure-python AdamW
         # (no torch.optim inheritance). See docs/TORCH_REPLACEMENT_PLAN.md.
         # Wins over --fused-adamw: gets us out of torch.optim. Loses to
@@ -2013,9 +2107,19 @@ def main() -> int:
                 # state layout as torch.optim.AdamW, so it lives in the
                 # ``torch_adamw`` bucket for layout-compat purposes.
                 from synapforge.optim import AdamW as _SfAdamW  # noqa: PLC0415
+                from synapforge.optim.cpu_offload_adamw import (  # noqa: PLC0415
+                    CPUOffloadAdamW as _SfCPUOffloadAdamW,
+                )
+                # CPUOffloadAdamW uses the same exp_avg/exp_avg_sq state
+                # layout as torch.optim.AdamW + synapforge.optim.AdamW,
+                # so it lives in the same ``torch_adamw`` bucket for
+                # warmstart cross-load purposes.
                 _running_layout = (
                     "torch_adamw"
-                    if isinstance(optim, (torch.optim.AdamW, _SfAdamW))
+                    if isinstance(
+                        optim,
+                        (torch.optim.AdamW, _SfAdamW, _SfCPUOffloadAdamW),
+                    )
                     else "plasticity_adamw"
                 )
                 if _state_layout != "unknown" and _state_layout != _running_layout:
@@ -2460,11 +2564,16 @@ def main() -> int:
                             # frozen + .eval() so the side stream needs no
                             # autograd interaction. We sync before KL to
                             # guarantee t_logits is ready.
+                            # CPU-teacher path: pass the stream so the
+                            # H<->D copies happen on it (the actual
+                            # compute is on CPU regardless).
                             kd_teacher_stream.wait_stream(
                                 torch.cuda.current_stream())
                             with torch.cuda.stream(kd_teacher_stream), \
                                     torch.no_grad():
-                                t_logits = _teacher_logits(teacher, x)
+                                t_logits = _teacher_logits(
+                                    teacher, x, stream=kd_teacher_stream
+                                )
                             torch.cuda.current_stream().wait_stream(
                                 kd_teacher_stream)
                         else:

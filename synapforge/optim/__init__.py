@@ -30,9 +30,11 @@ from ._legacy import (
     build_optimizer,
 )
 from .adamw import AdamW
+from .cpu_offload_adamw import CPUOffloadAdamW
 
 __all__ = [
     "AdamW",
+    "CPUOffloadAdamW",
     "MultiSourceParam",
     "Param",
     "PlasticityAwareAdamW",
