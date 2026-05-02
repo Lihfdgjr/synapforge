@@ -93,10 +93,10 @@ Two trained tiers, same recipe (FineWeb-en + alpaca-zh + GSM8K, KD from
 Qwen2.5-0.5B), differing only in backbone capacity:
 
 - **Synap-1 Base (100M)**: vocab=151936, d=512, n_layers=10, loop_depth=1.
-  After Qwen embedding (~75M), the **useful backbone is ~25M**.
-- **Synap-1 Pro (300M)**: vocab=151936, d=1024, n_layers=14, loop_depth=2.
-  After Qwen embedding, the **useful backbone is ~175M** — **7× more
-  capacity** than Base for everything that isn't the lookup table.
+  After Qwen embedding (~75M at d=512), the **useful backbone is ~25M**.
+- **Synap-1 Pro (~325M)**: vocab=151936, d=1024, n_layers=14, loop_depth=2,
+  ffn_ratio=2.5. The d=1024 embedding (151936×1024) is ~155.6M alone, so
+  the **useful backbone is ~169M — 7× the ~25M useful backbone in Base**.
 
 - **Evidence**: Triton-fused HybridBlock kernel at 22k tok/s on a
   single A800 80GB. Run 3l/3m/3n on Base plateaued at val ppl ~3700
