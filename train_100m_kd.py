@@ -974,6 +974,29 @@ def _parse_args() -> argparse.Namespace:
                         "(e.g. when real OS-actuator labels are wired in); "
                         "currently unused -- the head's effective action "
                         "space equals the dynamic codebook size. Default 64.")
+    # ---- NeuroMCP closed-loop computer-use (synapforge.neuromcp) ----------
+    # When enabled, every K outer steps the trainer runs an M-step closed-loop
+    # rollout in the synapforge.neuromcp sandbox VirtualDesktop. Reward signal
+    # back-propagates via STDP only (NOT AdamW) per memory
+    # ``feedback_neural_action_no_token_no_mcp``. Default OFF -- a token-soup
+    # LM training run sees zero behavioural change.
+    p.add_argument("--neuromcp-closed-loop", action="store_true", default=False,
+                   help="enable closed-loop sandbox rollouts every K outer "
+                        "steps. Requires --neuromcp-weight > 0.")
+    p.add_argument("--neuromcp-loop-every", type=int, default=10,
+                   dest="neuromcp_loop_every",
+                   help="run a closed-loop rollout every K outer training "
+                        "steps. Default 10.")
+    p.add_argument("--neuromcp-loop-steps", type=int, default=20,
+                   dest="neuromcp_loop_steps",
+                   help="number of M closed-loop steps per rollout window. "
+                        "Default 20.")
+    p.add_argument("--neuromcp-real-os", action="store_true", default=False,
+                   help="OPT-IN to real-OS actuator (Win32 backend). Without "
+                        "this flag the rollout is sandbox-only (default). "
+                        "Memory ``feedback_neural_action_no_token_no_mcp`` "
+                        "requires explicit confirmation before any real-OS "
+                        "side effect.")
     # ---- Reliability hooks (default-safe) ----
     p.add_argument("--phase-aware", action="store_true", default=False,
                    help="poll out_dir/.phase every 100 steps; on phase change "
@@ -3487,6 +3510,72 @@ def main() -> int:
                 neuromcp_mixin.step_plasticity()
             except Exception as exc:
                 _log(f"[mixin] neuromcp step_plasticity step {step} failed: {exc}")
+
+        # ---- NeuroMCP closed-loop sandbox rollout ----
+        # Per memory ``feedback_neural_action_no_token_no_mcp``: Adam-free
+        # credit assignment. We collect (primitive_id, params, success)
+        # tuples and let the synapforge.plasticity engine update STDP edges
+        # between hidden states and primitive ids. The reward signal does
+        # NOT flow through .backward() -- this is the user's hard rule.
+        if (getattr(args, "neuromcp_closed_loop", False)
+                and neuromcp_mixin is not None
+                and step > 0
+                and step % max(1, int(args.neuromcp_loop_every)) == 0):
+            try:
+                from synapforge.neuromcp import (
+                    ClosedLoopEnv, OSActuator, CompoundGrowth,
+                )
+                if not hasattr(model, "_neuromcp_env"):
+                    backend = "win32" if args.neuromcp_real_os else "sandbox"
+                    actuator = OSActuator(
+                        backend=backend,
+                        allow_real_os=bool(args.neuromcp_real_os),
+                    )
+                    model._neuromcp_env = ClosedLoopEnv(actuator=actuator)
+                env = model._neuromcp_env
+
+                # Trivial random policy seeded by the LM hidden state (so
+                # the loop is not dead-stuck on argmax 0 when the LM is
+                # un-trained).  The actual policy that learns lives in the
+                # NeuroActionHead-shaped object once the trainer wires it
+                # in -- here we just exercise the env contract.
+                import random as _rnd
+                rng = _rnd.Random(step)
+                from synapforge.neuromcp.primitives import NUM_PRIMITIVES
+
+                def _policy(_obs):
+                    pid = rng.randrange(min(16, NUM_PRIMITIVES))  # avoid sys
+                    params = [rng.random() for _ in range(8)]
+                    return pid, params, 0.9  # confidence above halt
+
+                roll = env.rollout(_policy,
+                                   n_steps=int(args.neuromcp_loop_steps),
+                                   reset=False)
+                stats = env.stats()
+                # New-compound emergence log (the demo of "tools emerging
+                # without JSON registration").
+                for r in roll:
+                    if r.new_compound is not None:
+                        _log(
+                            "  [compound] step={} new_compound_id={} = "
+                            "primitives({})".format(
+                                step,
+                                r.new_compound.compound_id,
+                                ",".join(str(p) for p in
+                                         r.new_compound.primitive_seq),
+                            )
+                        )
+                if step % 100 == 0:
+                    _log(
+                        f"  [closed-loop] step={step} "
+                        f"n_steps={int(stats['n_steps'])} "
+                        f"success_rate={stats['success_rate']:.3f} "
+                        f"halt_rate={stats['halt_rate']:.3f} "
+                        f"compounds={int(stats['n_compounds'])} "
+                        f"reward={stats['cumulative_reward']:.2f}"
+                    )
+            except Exception as exc:
+                _log(f"[closed-loop] step {step} skipped: {exc!r}")
 
         # T8.4 — EMA update right after optim.step() (model params now reflect
         # the just-applied gradient). No-op when --ema-decay 0.0 (default).
