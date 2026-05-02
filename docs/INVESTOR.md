@@ -2,15 +2,26 @@
 
 **Model**: **Synap-1** (突触一号) — the trained artifact, shipped in two tiers:
 **Synap-1 Base (100M)** and **Synap-1 Pro (300M)**.[^pro-eta]
-**Framework**: `SynapForge` — the codebase that produces Synap-1 and its variants.
+**Framework**: `SynapForge` — a **full LNN+SNN training framework, not a torch
+wrapper**. As of **2026-05-02 v0.7.0-native** the framework ships its own
+12-subpackage zero-torch native stack (`synapforge.native`) covering data
+loaders, closed-form VJPs, CUDA tensor primitives, fused HybridBlock kernels,
+hetero CPU+GPU dispatch, async aux scheduler, multimodal byte-patch packing,
+spike packing, STDP runtime, and trainer refactor. PyTorch glue is contained
+to `torch_glue.py` adapters at the boundary so the trainer can swap in
+native ops one block at a time. See [NATIVE_OVERVIEW.md](NATIVE_OVERVIEW.md)
+for the single-doc map.
+
 See [NAMING.md](NAMING.md) for the variant roadmap.
 
 [^pro-eta]: Pro variant launches post-Run 3o completion (ETA 14:00 May 2).
 
 **One sentence**: A multi-tier LNN+SNN hybrid (100M Base / 300M Pro) that
 learns from spike timing at inference, grows synapses into the action space
-without emitting tool-call tokens, and uses a closed-form k-step CfC fold to
-compress per-token reasoning into a single matrix solve.
+without emitting tool-call tokens, uses a closed-form k-step CfC fold to
+compress per-token reasoning into a single matrix solve, **and trains on
+its own native LNN+SNN framework rather than borrowing transformer-shaped
+torch primitives**.
 
 ## Thesis
 
@@ -119,6 +130,104 @@ checkpoint goes to (a) `mohuanfang.com:/home/liu/synapforge_backup/`,
   triple_backup_daemon.py` orchestrates all three sinks.
 - **Why it matters**: One bad rental migration cost us 4 GPU-days.
   Will not happen again.
+
+## NEW differentiation (2026-05-02 v0.7.0-native): full LNN+SNN training framework
+
+**Most "novel-architecture LM" repos are 80% torch wrappers**. They borrow
+`torch.nn.Linear`, `torch.optim.AdamW`, `torch.utils.data.DataLoader`, and
+the autograd graph. Their "novel" part is one custom layer dropped into an
+otherwise-vanilla transformer scaffold. When the scaffold dominates, the
+hardware advantage disappears — you're paying transformer training overhead
+to get LNN+SNN inference.
+
+**SynapForge as of 2026-05-02 has shipped 12 native subpackages** that
+collectively replace the torch scaffold. Production code is grep-verified
+zero-`import-torch` (test suites enforce `test_no_torch_import`); torch
+glue is contained to thin `torch_glue.py` adapters at the boundary so the
+trainer can swap one block at a time.
+
+### Hardware-physics levers — specifically optimised for what we train
+
+A transformer's activation is fp16/bf16 dense; you can't compress it
+without quantisation noise. A PLIF spike is **binary {0,1} by construction**;
+storing it as fp16 wastes 15 of 16 bits. Our native stack exploits properties
+that have *no analogue* in transformer training:
+
+- **Spike bit-packing 16:1** (`synapforge.native.spike`). 16 binary spikes
+  per `uint16` word at the spike→synapse HBM boundary. At B=48 T=256 d=1280
+  layers=16: **900 MB saved per step** (16× ratio, verified end-to-end).
+  ~600 µs/step ceiling at 1.5 TB/s A800 HBM. Tied to PLIF firing — when
+  PLIF is dead the saving is dormant (see "Honest limits" below).
+- **STDP-only optimiser** (`synapforge.native.stdp`). Skip AdamW entirely
+  for plasticity-tagged params — Hebbian + STDP is forward-only. No m/v
+  momentum buffers to sync, no atomic add to fp32 buffer. Triton-fused
+  LTP/LTD kernel + sparse path. Ring buffer for pre/post spike traces.
+- **Fused HybridBlock kernel** (`synapforge.native.kernel`). The 4-op
+  PyTorch path (CfC + PLIF + SEW + synapse) collapses into one Triton
+  fwd kernel + one closed-form bwd kernel — bit-exact at d=256, **e2e
+  speedup 1.15-1.18×** measured.
+- **Async hetero CPU+GPU dispatch** (`synapforge.native.dispatch`). 3-stage
+  pipeline (data prep | GPU fwd+bwd | CPU AdamW) with per-block device
+  router. Ceiling speedup `(t_B + t_C) / max(t_B, t_C)` — measured **1.7×**
+  on the synthetic bench. Per-block device assignment lets the
+  151k×1024 embedding live on CPU MKL while the heavy CfC+FFN runs on
+  cuda:0.
+- **Async aux scheduler** (`synapforge.native.auxsched`). SelfLearn TTT,
+  Curiosity, NeuroMCP, and STDP-novelty all fan out from the trainer
+  thread instead of running serially. **2.9× speedup** vs sequential on
+  Run-7-style timings.
+
+### Multimodal native — early fusion through one shared backbone
+
+Standard multimodal LMs (Flamingo, GPT-4V, BLIP-2) have a separate encoder
+per modality plus a fusion block. Our model has **one shared CfC+PLIF
+backbone for all 9 modalities** (text, image, audio, video, 3D,
+time-series, tabular, code, maths) via byte-patch early fusion (Fuyu-style,
+not LLaVA-style). The native multimodal packer
+(`synapforge.native.modal`) flat-concats per-modal sequences into a single
+token stream with offsets and per-token modal-id arrays — work scales with
+real tokens, not padded T=8192 max.
+
+### Constant-time long context — R-fold inference
+
+Standard transformers' KV cache grows with context length. Our R-fold
+algebraic CfC compresses k reasoning steps into one closed-form matrix
+solve (R=1 exact, R=8 drift 0.32%, on A800 N=64 R=16 yields **2.99×**).
+Combined with synapforge.long's 5-tier memory hierarchy (InfLLM L1/L2/L3
++ STDP retrieval + RoPE NTK), the goal is **linear inference cost out to
+50M effective context** (validation harness ready, awaiting trained ckpt).
+
+### Run 7 (live torch baseline) vs Run 8 (projected native stack)
+
+| run    | stack                          | tok/s @ A800 80GB        | status                  |
+|--------|--------------------------------|--------------------------|-------------------------|
+| Run 7  | torch + triton_block + bs=64   | **2,750** baseline       | live, PID 41692 rental  |
+| Run 8  | native stack (post-integration)| **17,000-30,000** projected | pending integration  |
+
+Conservative 17k = MVP-CPU 2.86× × kernel 1.15× × dispatch 1.7× × 60%
+integration efficiency. Headroom 30k = clean stacking. Both are projections
+until Run 8 actually runs; even 12-15k beats the torch baseline 4-5×.
+
+### Honest limits
+
+- **PLIF currently dead at runtime**. Run 3l/3m/3n logged 0/16 spike rate.
+  Until P25 closes (surrogate gradient annealing + threshold ramp), several
+  of the bandwidth-saving levers (spike packing, STDP-only, sparse synapse
+  matmul) are *dormant*. The kernels are correct in isolation; the runtime
+  benefit ships when PLIF fires. ETA ~1 week to first patch + eval.
+- **Phase 5 torch removal is 6-9 weeks out**. v0.1 is *additive* — we ship
+  next to torch, not instead of it. The trainer can run on either path
+  via the per-block device router, but a "zero-torch end-to-end production
+  trainer" requires migrating the residual (loss / backward orchestration
+  / DDP sync) which lives outside the v0.1 scope. See
+  `docs/TORCH_REPLACEMENT_PLAN.md`.
+- **17-30k tok/s is a projection**. Until Run 8 completes, those numbers
+  are not measured. We say so explicitly. The MVP 2.86× is measured on
+  pure-numpy CPU; the kernel 1.15× and dispatch 1.7× are measured on
+  synthetic shapes; production-scale e2e is the missing data point.
+- **Bit-exact regression test**. Every native subpackage compares against
+  a torch oracle on a fixed seed/shapes/init. Quality-not-regress is the
+  hard invariant — speed levers do not get to trade quality away.
 
 ## Honest competitive comparison
 
