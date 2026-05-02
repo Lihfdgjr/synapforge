@@ -46,11 +46,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import random
 import sys
 import time
+from multiprocessing import Pool
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 try:
     import numpy as np
@@ -192,22 +194,74 @@ def gen_sequence(domain: str, rng: "random.Random") -> Tuple[List[int], str]:
     return _quantize_to_int8(raw), CAPTIONS[domain]
 
 
+def _row_seed(seed: int, i: int) -> int:
+    """Per-row deterministic seed used by both single- and multi-process paths.
+
+    Same formula as ``synth_image_pretrain`` / ``synth_audio_pretrain``: the
+    row at index ``i`` only depends on ``(seed, i)``, so chunked workers and
+    the sequential loop emit byte-identical output for the same global seed.
+    """
+    return (seed * 1_000_003 + i) & 0xFFFFFFFF
+
+
+def _gen_one_row(seed: int, i: int) -> dict:
+    """Build one row with a fresh ``random.Random`` seeded by ``(seed, i)``.
+
+    Round-robin domain rotation is preserved so n=30 always covers all
+    three domains.
+    """
+    rng = random.Random(_row_seed(seed, i))
+    domain = DOMAINS[i % len(DOMAINS)]
+    ts, caption = gen_sequence(domain, rng)
+    return dict(
+        timestamps=ts,
+        domain=domain,
+        caption=caption,
+        text=caption,
+    )
+
+
 def _generate_rows(n: int, seed: int) -> List[dict]:
-    """Generate ``n`` rows with deterministic domain rotation."""
-    rng = random.Random(seed)
+    """Sequential generator (single-process path).
+
+    Uses per-row seeding so output matches the multi-worker path
+    byte-for-byte.
+    """
+    return [_gen_one_row(seed, i) for i in range(n)]
+
+
+def _worker_gen_chunk(args: Tuple[int, int, int]) -> List[dict]:
+    """Pool worker: build rows for ``[start, end)`` with global ``seed``.
+
+    Module-level so it pickles cleanly under spawn (Windows-safe).
+    """
+    start, end, seed = args
+    return [_gen_one_row(seed, i) for i in range(start, end)]
+
+
+def _generate_rows_parallel(
+    n: int, seed: int, num_workers: int,
+    chunk_size: Optional[int] = None,
+) -> List[dict]:
+    """Generate ``n`` time-series rows across ``num_workers`` processes.
+
+    ``num_workers <= 1`` -> falls through to ``_generate_rows``.
+    """
+    if num_workers <= 1:
+        return _generate_rows(n, seed)
+
+    if chunk_size is None:
+        chunk_size = max(1, n // (num_workers * 4))
+
+    chunks: List[Tuple[int, int, int]] = []
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        chunks.append((start, end, seed))
+
     rows: List[dict] = []
-    for i in range(n):
-        # Round-robin through DOMAINS so n=30 always covers all three.
-        domain = DOMAINS[i % len(DOMAINS)]
-        ts, caption = gen_sequence(domain, rng)
-        rows.append(
-            dict(
-                timestamps=ts,
-                domain=domain,
-                caption=caption,
-                text=caption,  # alias for ParquetTokenStream's "text" column
-            )
-        )
+    with Pool(processes=num_workers) as pool:
+        for chunk_rows in pool.imap(_worker_gen_chunk, chunks):
+            rows.extend(chunk_rows)
     return rows
 
 
@@ -246,11 +300,17 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--smoke", action="store_true",
                     help="Generate just 10 sequences and exit")
+    ap.add_argument("--num-workers", type=int, default=8,
+                    help="Worker processes for row generation (default 8). "
+                         "Set to 1 to disable multiprocessing.")
     args = ap.parse_args(argv)
 
     n = 10 if args.smoke else args.n
+    nw = max(1, int(args.num_workers))
+    if nw > n:
+        nw = max(1, n)
     t0 = time.time()
-    rows = _generate_rows(n, args.seed)
+    rows = _generate_rows_parallel(n, args.seed, nw)
 
     if not _HAVE_ARROW:
         # JSONL fallback so callers still get *something*.

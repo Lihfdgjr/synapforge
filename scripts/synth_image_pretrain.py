@@ -41,8 +41,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
+from multiprocessing import Pool
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -280,6 +282,88 @@ def gen_row(seed: int, tokenizer) -> dict:
     }
 
 
+# --- worker (multiprocessing) ----------------------------------------------
+# Module-level state for fork/spawn workers. Each worker process keeps a
+# single tokenizer instance to avoid re-loading on every row.
+_WORKER_TOKENIZER = None
+_WORKER_TOKENIZER_NAME: Optional[str] = None
+
+
+def _worker_init(tokenizer_name: str) -> None:
+    """Pool initializer: load the tokenizer once per worker process.
+
+    Cross-platform safe (works with spawn on Windows) because this only
+    references module-level state, not a closure variable.
+    """
+    global _WORKER_TOKENIZER, _WORKER_TOKENIZER_NAME
+    _WORKER_TOKENIZER_NAME = tokenizer_name
+    _WORKER_TOKENIZER = _load_tokenizer(tokenizer_name)
+
+
+def _worker_gen_chunk(args: Tuple[int, int, int]) -> List[dict]:
+    """Worker entry: generate rows for ``[start, end)`` with global seed.
+
+    Each row uses the same per-row seed formula as single-process mode,
+    so multi-worker output is byte-identical to single-worker output for
+    the same ``--seed``.
+    """
+    start, end, base_seed = args
+    tok = _WORKER_TOKENIZER
+    if tok is None:
+        # Fallback when init wasn't run (e.g., direct call in tests).
+        tok = _StubTokenizer()
+    out: List[dict] = []
+    for i in range(start, end):
+        out.append(gen_row(base_seed * 1_000_003 + i, tok))
+    return out
+
+
+def _generate_rows_parallel(
+    n: int, seed: int, num_workers: int, tokenizer, tokenizer_name: str,
+    chunk_size: Optional[int] = None,
+) -> List[dict]:
+    """Run row generation across ``num_workers`` processes.
+
+    ``num_workers <= 1`` falls through to single-process generation, which
+    keeps the existing tokenizer object alive (avoids reloading it).
+    """
+    if num_workers <= 1:
+        rows: List[dict] = []
+        t0 = time.time()
+        for i in range(n):
+            rows.append(gen_row(seed * 1_000_003 + i, tokenizer))
+            if (i + 1) % 5000 == 0:
+                print(f"[synth_img] {i + 1:,}/{n:,} "
+                      f"({time.time() - t0:.1f}s)", flush=True)
+        return rows
+
+    if chunk_size is None:
+        # Aim for ~4 chunks/worker so progress feedback is reasonable and
+        # stragglers don't dominate (Pool.imap balances naturally).
+        chunk_size = max(1, n // (num_workers * 4))
+
+    chunks: List[Tuple[int, int, int]] = []
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        chunks.append((start, end, seed))
+
+    rows: List[dict] = []
+    t0 = time.time()
+    done = 0
+    print(f"[synth_img] spawning {num_workers} workers "
+          f"({len(chunks)} chunks of ~{chunk_size} rows)", flush=True)
+    with Pool(processes=num_workers,
+              initializer=_worker_init,
+              initargs=(tokenizer_name,)) as pool:
+        for chunk_rows in pool.imap(_worker_gen_chunk, chunks):
+            rows.extend(chunk_rows)
+            done += len(chunk_rows)
+            if done % 5000 < chunk_size:
+                print(f"[synth_img] {done:,}/{n:,} "
+                      f"({time.time() - t0:.1f}s)", flush=True)
+    return rows
+
+
 # --- write side -------------------------------------------------------------
 def _write_parquet(rows: Sequence[dict], out_path: str) -> int:
     if not _HAVE_ARROW:  # pragma: no cover
@@ -333,6 +417,9 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                     help="Override --n to 10 for fast end-to-end check")
     ap.add_argument("--tokenizer", default="Qwen/Qwen2.5-0.5B",
                     help="HF tokenizer id; falls back to stub on failure")
+    ap.add_argument("--num-workers", type=int, default=8,
+                    help="Worker processes for row generation (default 8). "
+                         "Set to 1 to disable multiprocessing.")
     return ap.parse_args(argv)
 
 
@@ -347,15 +434,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     tokenizer = _load_tokenizer(args.tokenizer)
     tok_src = getattr(tokenizer, "name_or_path", "stub") or "stub"
 
+    # Clamp num_workers to a sensible range; 0 / negative -> 1.
+    nw = max(1, int(args.num_workers))
+    # Don't oversubscribe for tiny n.
+    if nw > args.n:
+        nw = max(1, args.n)
+
     t0 = time.time()
-    rows: List[dict] = []
-    for i in range(args.n):
-        # Per-row seed = (args.seed * 1_000_003 + i): determinism + low
-        # collision so adding rows leaves earlier ones byte-stable.
-        rows.append(gen_row(args.seed * 1_000_003 + i, tokenizer))
-        if (i + 1) % 5000 == 0:
-            print(f"[synth_img] {i + 1:,}/{args.n:,} "
-                  f"({time.time() - t0:.1f}s)", flush=True)
+    rows = _generate_rows_parallel(
+        n=args.n, seed=args.seed, num_workers=nw,
+        tokenizer=tokenizer, tokenizer_name=args.tokenizer,
+    )
+    print(f"[synth_img] gen done {len(rows):,} rows "
+          f"in {time.time() - t0:.1f}s ({nw} workers)", flush=True)
 
     n = _write_parquet(rows, args.output)
     print(f"[synth_img] wrote {n:,} rows -> {args.output} "

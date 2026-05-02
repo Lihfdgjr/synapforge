@@ -45,10 +45,12 @@ import base64
 import hashlib
 import json
 import math
+import os
 import sys
 import time
+from multiprocessing import Pool
 from pathlib import Path
-from typing import Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -307,6 +309,65 @@ def generate_row(seed_int: int) -> dict:
     }
 
 
+# --- worker (multiprocessing) ---------------------------------------------
+def _worker_gen_chunk(args: Tuple[int, int, int]) -> List[dict]:
+    """Worker entry: generate audio rows for ``[start, end)`` with seed.
+
+    Pure module-level function so it pickles cleanly under ``spawn`` (Windows).
+    Same per-row seed formula as single-process mode -> byte-identical output
+    regardless of worker count.
+    """
+    start, end, base_seed = args
+    out: List[dict] = []
+    for i in range(start, end):
+        row_seed = (base_seed * 1_000_003 + i) & 0xFFFFFFFF
+        out.append(generate_row(int(row_seed)))
+    return out
+
+
+def _generate_rows_parallel(
+    n: int, seed: int, num_workers: int,
+    chunk_size: Optional[int] = None,
+) -> List[dict]:
+    """Generate ``n`` audio rows across ``num_workers`` processes.
+
+    ``num_workers <= 1`` -> single-process loop (preserves the existing
+    progress-print cadence in main()).
+    """
+    if num_workers <= 1:
+        rows: List[dict] = []
+        t0 = time.time()
+        for i in range(n):
+            row_seed = (seed * 1_000_003 + i) & 0xFFFFFFFF
+            rows.append(generate_row(int(row_seed)))
+            if (i + 1) % 5000 == 0:
+                print(f"[synth_audio] generated {i + 1:,}/{n:,} "
+                      f"({time.time() - t0:.1f}s)")
+        return rows
+
+    if chunk_size is None:
+        chunk_size = max(1, n // (num_workers * 4))
+
+    chunks: List[Tuple[int, int, int]] = []
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        chunks.append((start, end, seed))
+
+    rows: List[dict] = []
+    t0 = time.time()
+    done = 0
+    print(f"[synth_audio] spawning {num_workers} workers "
+          f"({len(chunks)} chunks of ~{chunk_size} rows)")
+    with Pool(processes=num_workers) as pool:
+        for chunk_rows in pool.imap(_worker_gen_chunk, chunks):
+            rows.extend(chunk_rows)
+            done += len(chunk_rows)
+            if done % 5000 < chunk_size:
+                print(f"[synth_audio] generated {done:,}/{n:,} "
+                      f"({time.time() - t0:.1f}s)")
+    return rows
+
+
 # --- writer ---------------------------------------------------------------
 def write_audio_parquet(rows: Sequence[dict], out_path: str) -> int:
     """Write the rows to parquet. JSONL fallback when pyarrow missing."""
@@ -369,6 +430,9 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--smoke", action="store_true",
                     help="Override --n to 10 for fast end-to-end check.")
+    ap.add_argument("--num-workers", type=int, default=8,
+                    help="Worker processes for row generation (default 8). "
+                         "Set to 1 to disable multiprocessing.")
     return ap.parse_args(argv)
 
 
@@ -376,16 +440,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = _parse_args(argv)
     n = 10 if args.smoke else args.n
 
+    nw = max(1, int(args.num_workers))
+    if nw > n:
+        nw = max(1, n)
+
     t0 = time.time()
-    rows: list = []
-    for i in range(n):
-        # Per-row seed mixes the global seed with the row index so the row
-        # set is order-stable AND each row independently reproducible.
-        row_seed = (args.seed * 1_000_003 + i) & 0xFFFFFFFF
-        rows.append(generate_row(int(row_seed)))
-        if (i + 1) % 5000 == 0:
-            print(f"[synth_audio] generated {i + 1:,}/{n:,} "
-                  f"({time.time() - t0:.1f}s)")
+    rows = _generate_rows_parallel(
+        n=n, seed=args.seed, num_workers=nw,
+    )
 
     n_written = write_audio_parquet(rows, args.out)
     write_manifest(args.out, n_written, args.seed)
