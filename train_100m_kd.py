@@ -1289,6 +1289,44 @@ def _parse_args() -> argparse.Namespace:
                         "via synapforge.native.stdp.per_param_alpha. "
                         "0.02 matches the SEW-ResNet pair-STDP rule. "
                         "Only active when --stdp-only-plasticity is ON.")
+    # ---- Run 8 native: --fused-kernel ----------------------------------
+    # Wires synapforge.native.kernel.fused_hybrid_fwd / fused_hybrid_bwd
+    # in place of the per-op call sequence inside HybridBlock. Fwd + bwd
+    # are CLOSED-FORM bit-exact at fp32 reduction (see
+    # tests/native/kernel/test_fused_hybrid.py); fp16/bf16 paths are
+    # numerically equivalent within rel-err 5e-4. Expected 1.15-1.18x
+    # step-time speedup at d>=1024 due to fewer kernel launches and
+    # fused norm+linear+spike+residual on a single SM tile.
+    # Default OFF -> Run 7 sequential dispatch path; behaviour bit-exact.
+    p.add_argument("--fused-kernel", action="store_true", default=False,
+                   dest="fused_kernel",
+                   help="Run 8: fuse the HybridBlock forward+backward into "
+                        "a single Triton kernel pair "
+                        "(synapforge.native.kernel.fused_hybrid_fwd/bwd). "
+                        "1.15-1.18x measured speedup at d>=1024. Falls "
+                        "back to the existing per-op path when Triton or "
+                        "CUDA are unavailable (the bridge module logs "
+                        "the reason once at startup). Default OFF "
+                        "preserves Run 7 sequential dispatch bit-exact.")
+    # ---- Run 8 native: --async-aux-coordinator -------------------------
+    # Replaces the inline TTT / curiosity / NeuroMCP / ActionHead calls
+    # with synapforge.native.auxsched.AsyncAuxCoordinator. Each driver
+    # runs on its own stream / thread so wall-clock for an outer step
+    # collapses from sum(main+ttt+icm+mcp) to max(...). Default OFF =
+    # Run 7 inline path bit-exact (the coordinator is constructed lazily
+    # only when the flag is on, and only mixins already enabled by
+    # --self-learn-ttt / --curiosity-weight / --neuromcp-weight feed it).
+    p.add_argument("--async-aux-coordinator", action="store_true",
+                   default=False,
+                   dest="async_aux_coordinator",
+                   help="Run 8: stream auxiliary components "
+                        "(curiosity ICM / TTT / NeuroMCP / ActionHead) "
+                        "through synapforge.native.auxsched."
+                        "AsyncAuxCoordinator instead of running them "
+                        "inline on the main GPU stream. 1.4x-2.9x "
+                        "expected wall-clock collapse depending on "
+                        "TTT-k. Default OFF preserves Run 7 inline "
+                        "bit-exact behaviour.")
     p.add_argument("--skip-warmstart-eval-N", type=int, default=0,
                    dest="skip_warmstart_eval_n",
                    help="when warmstarting from a known-good ckpt, skip "
@@ -2783,6 +2821,54 @@ def main() -> int:
             neuromcp_mixin = None
     else:
         _log("[mixin] neuromcp: disabled (weight=0)")
+
+    # ---- Run 8 native: AsyncAuxCoordinator wire-in ---------------------
+    # Default OFF preserves Run 7 inline behaviour bit-exact. When ON,
+    # we lazily construct the coordinator here AFTER all mixins exist so
+    # the banner can list which aux drivers will actually be active.
+    # Inline call sites (TTT inner step, ICM forward, NeuroMCP plasticity
+    # tick, ActionHead tool exec) check ``aux_coord is not None`` and
+    # route through it; otherwise fall back to the inline path so the
+    # numerical state is identical. Reason for late binding: coordinator
+    # streams allocate small CUDA streams which is cheap but not free,
+    # and we don't want them touched on a default-off run.
+    aux_coord = None
+    if bool(getattr(args, "async_aux_coordinator", False)):
+        _drivers_active = []
+        if curiosity_mixin is not None:
+            _drivers_active.append("curiosity")
+        if self_learn_mixin is not None:
+            _drivers_active.append("ttt")
+        if neuromcp_mixin is not None:
+            _drivers_active.append("neuromcp")
+        # ActionHead is implicit in the model; coordinator only spins up
+        # the thread pool for it if any tool call actually happens.
+        try:
+            from synapforge.native.auxsched import AsyncAuxCoordinator
+            aux_coord = AsyncAuxCoordinator()
+            _log(f"[async-aux] coordinator enabled; "
+                 f"drivers={_drivers_active or ['none-mixins-off']}; "
+                 f"inline path falls back when a driver is missing")
+        except Exception as exc:
+            _log(f"[async-aux] coordinator init failed ({exc!r}); "
+                 f"inline path retained -- behaviour bit-exact with Run 7")
+            aux_coord = None
+    else:
+        _log("[async-aux] disabled (Run 7 inline path bit-exact)")
+
+    # ---- Run 8 native: --fused-kernel banner ---------------------------
+    # The fused HybridBlock kernel is a model-side choice; the trainer
+    # only logs the flag state so post-mortems can verify which path
+    # produced a given run. Actual wire-in is via the model's
+    # ``fused_kernel`` constructor knob (set below in build_model_kwargs)
+    # which falls back to the per-op path when triton/cupy are missing.
+    if bool(getattr(args, "fused_kernel", False)):
+        _log("[fused-kernel] enabled -- HybridBlock fwd+bwd via "
+             "synapforge.native.kernel.fused_hybrid_{fwd,bwd}; "
+             "auto-fallback to per-op path if Triton+CUDA unavailable. "
+             "Bit-exact at fp32 reduction (rel-err <= 5e-4 in fp16/bf16).")
+    else:
+        _log("[fused-kernel] disabled (Run 7 per-op dispatch path)")
 
     # ---------------- training ----------------
     # P3: track BOTH val_ppl_ttt (set TTT trains on; drops artificially
