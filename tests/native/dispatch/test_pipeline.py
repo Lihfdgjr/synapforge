@@ -309,6 +309,15 @@ def test_metrics_populated(dispatch):
     _, _, pipeline = dispatch
 
     prob = _Problem(num_params=2, param_size=16, num_steps=5)
+    # Inflate Stage B with a sleep so the timer resolution is not the
+    # gating factor on this assertion.
+    orig_fb = prob.fb_fn
+
+    def slow_fb(x, y, e):
+        time.sleep(0.005)
+        return orig_fb(x, y, e)
+    prob.fb_fn = slow_fb  # type: ignore[assignment]
+
     m = pipeline.HeteroPipeline(
         prob.batch_fn, prob.fb_fn, prob.make_optim(),
         enable_pipeline=True,
@@ -319,6 +328,7 @@ def test_metrics_populated(dispatch):
     assert m.stage_c_total_s >= 0.0
     d = m.as_dict()
     assert "steps_per_second" in d
+    assert d["num_steps"] == 5.0
 
 
 def test_b_c_overlap_ratio_high_when_balanced(dispatch):
