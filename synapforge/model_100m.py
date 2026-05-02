@@ -152,13 +152,31 @@ class HybridBlock(Module):
         # feedback loop that collapses LiquidCell weights under weight
         # decay.  Default False keeps Run 5 behaviour bit-identical.
         sew_shortcut: bool = False,
+        # 2026-05-02 math-simplification pack: --rfold dispatches the
+        # LiquidCell internal time-axis loop to a chunked closed-form
+        # parallel scan (synapforge.cells.rfold.liquid_rfold). Numerically
+        # equivalent to the sequential reference for chunk<=16 (verified
+        # by tests/cells/test_rfold_equivalence.py). Default OFF.
+        rfold: bool = False,
+        rfold_chunk: int = 16,
+        # 2026-05-02 math-simplification pack: top-K activation gate
+        # (k-WTA, biologically plausible). Replaces the dense
+        # ``sigmoid(gate(s))`` with a sparse top-K selector that keeps
+        # the K largest sigmoid values and zeros the rest. Backward uses
+        # straight-through estimation on the top-K only (the bottom (D-K)
+        # gate slots receive zero grad). Default 0 disables (legacy
+        # SwiGLU-style dense sigmoid). K = D // 10 (~10% sparsity) is a
+        # reasonable starting point.
+        kwta_k: int = 0,
     ) -> None:
         super().__init__()
         self.d = int(d)
 
         self.ln1 = _RMSNorm(d)
         self.liquid = LiquidCell(d, d, init="hasani",
-                                 weight_quant=weight_quant)
+                                 weight_quant=weight_quant,
+                                 rfold=rfold,
+                                 rfold_chunk=rfold_chunk)
         # tau_init=2.5 (was 1.5): 1-decay = 0.33 (was 0.49), so per-step
         # input drive is smaller but membrane integrates over more steps,
         # which is the textbook LIF behavior (Fang 2021 uses tau~2-4).
@@ -190,6 +208,14 @@ class HybridBlock(Module):
         self.high_pass_kernel_size = int(high_pass_kernel_size)
         # Run 5 PLIF-dead fix #3 -- SEW (Spike-Element-Wise) shortcut.
         self.sew_shortcut = bool(sew_shortcut)
+        # 2026-05-02 math-simplification pack -- top-K activation gate.
+        self.kwta_k = int(kwta_k)
+        if self.kwta_k < 0:
+            raise ValueError(f"kwta_k must be >= 0, got {kwta_k}")
+        if self.kwta_k > self.d:
+            raise ValueError(
+                f"kwta_k={self.kwta_k} exceeds hidden dim {self.d}"
+            )
         if self.high_pass_residual_weight != 0.0:
             if self.high_pass_kernel_size < 1:
                 raise ValueError(
@@ -252,7 +278,23 @@ class HybridBlock(Module):
             spike_input = s + h
         else:
             spike_input = s
-        gated = self.synapse(spike_input) * torch.sigmoid(self.gate(spike_input))
+        gate_pre = torch.sigmoid(self.gate(spike_input))
+        if self.kwta_k > 0:
+            # k-WTA: only the K largest gate values fire; rest are zeroed.
+            # The mask is constructed from topk indices (a constant w.r.t.
+            # autograd), so backward gradient flows only through the
+            # top-K positions; the bottom (D-K) receive zero grad. This
+            # matches biological k-WTA and lets the downstream
+            # ``self.synapse`` propagate sparsity. See docs/MASTER_PLAN.md
+            # "math simplification" pack 2026-05-02.
+            k = self.kwta_k
+            # gate_pre: (B, T, d). topk over the last dim.
+            topk_vals, topk_idx = torch.topk(gate_pre, k=k, dim=-1)
+            mask = torch.zeros_like(gate_pre).scatter_(-1, topk_idx, 1.0)
+            gate_out = gate_pre * mask
+        else:
+            gate_out = gate_pre
+        gated = self.synapse(spike_input) * gate_out
         x = x + self.drop(gated)
 
         # ---- SwiGLU FFN ---- (residual #2)
@@ -336,6 +378,15 @@ class SynapForge100M(Module):
         # Run 5 PLIF-dead fix #3 -- SEW (Spike-Element-Wise) shortcut
         # in every HybridBlock.  Default False keeps the Run 5 code path
         # bit-identical.  See HybridBlock ctor for full rationale.
+        rfold: bool = False,
+        rfold_chunk: int = 16,
+        # 2026-05-02 math-simplification pack -- closed-form parallel scan
+        # for LiquidCell internals (replaces the per-token Python loop).
+        # Default False keeps Run 6 baseline.
+        kwta_k: int = 0,
+        # 2026-05-02 math-simplification pack -- top-K activation gate.
+        # Default 0 disables; D=512 -> K=51 (~10% sparsity) is a sane start,
+        # D=1280 (Ultra) -> K=128.
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -359,8 +410,19 @@ class SynapForge100M(Module):
         self.high_pass_residual_weight = float(high_pass_residual_weight)
         self.latent_k = int(latent_k)
         self.sew_shortcut = bool(sew_shortcut)
+        self.rfold = bool(rfold)
+        self.rfold_chunk = int(rfold_chunk)
+        self.kwta_k = int(kwta_k)
         if self.latent_k < 0:
             raise ValueError(f"latent_k must be >= 0, got {latent_k}")
+        if self.rfold_chunk < 1:
+            raise ValueError(f"rfold_chunk must be >= 1, got {rfold_chunk}")
+        if self.kwta_k < 0:
+            raise ValueError(f"kwta_k must be >= 0, got {kwta_k}")
+        if self.kwta_k > self.d:
+            raise ValueError(
+                f"kwta_k={self.kwta_k} exceeds hidden dim {self.d}"
+            )
 
         self.tok_embed = nn.Embedding(vocab, d)
         nn.init.normal_(self.tok_embed.weight, std=0.02)
@@ -378,7 +440,10 @@ class SynapForge100M(Module):
                         weight_quant=self.weight_quant_cfc,
                         plif_tau_init=self.plif_tau_init,
                         high_pass_residual_weight=self.high_pass_residual_weight,
-                        sew_shortcut=self.sew_shortcut)
+                        sew_shortcut=self.sew_shortcut,
+                        rfold=self.rfold,
+                        rfold_chunk=self.rfold_chunk,
+                        kwta_k=self.kwta_k)
             for _ in range(n_layers)
         )
         self.ln_f = _RMSNorm(d)
@@ -584,6 +649,9 @@ def build_synapforge_100m(
     high_pass_residual_weight: float = 0.0,
     latent_k: int = 0,
     sew_shortcut: bool = False,
+    rfold: bool = False,
+    rfold_chunk: int = 16,
+    kwta_k: int = 0,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
@@ -599,6 +667,9 @@ def build_synapforge_100m(
         high_pass_residual_weight=high_pass_residual_weight,
         latent_k=latent_k,
         sew_shortcut=sew_shortcut,
+        rfold=rfold,
+        rfold_chunk=rfold_chunk,
+        kwta_k=kwta_k,
     )
 
 

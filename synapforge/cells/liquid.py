@@ -71,12 +71,28 @@ class LiquidCell(Module):
         init: str = "hasani",
         bound: bool = True,
         weight_quant: str = "none",
+        rfold: bool = False,
+        rfold_chunk: int = 16,
     ) -> None:
         super().__init__()
         self.in_dim = int(in_dim)
         self.hidden_dim = int(hidden_dim)
         self.bound = bool(bound)
         self.weight_quant = str(weight_quant)
+        # 2026-05-02 / docs/MASTER_PLAN.md "math simplification" pack:
+        # rfold replaces the per-token Python ``for t in range(T)`` loop
+        # in ``forward`` with a chunked closed-form parallel scan
+        # (synapforge.cells.rfold.liquid_rfold). Numerically equivalent
+        # to the sequential reference up to fp32 round-off for chunk<=16
+        # (verified by tests/cells/test_rfold_equivalence.py). Default
+        # OFF -- opt-in via the ``--rfold`` flag in the trainer to keep
+        # Run 6 byte-identical to the historical sequential path.
+        self.rfold = bool(rfold)
+        if rfold_chunk < 1:
+            raise ValueError(
+                f"rfold_chunk must be >= 1, got {rfold_chunk}"
+            )
+        self.rfold_chunk = int(rfold_chunk)
         if self.weight_quant not in ("none", "ternary"):
             raise ValueError(
                 f"unknown weight_quant {weight_quant!r}; "
@@ -137,11 +153,22 @@ class LiquidCell(Module):
         B, T, D = A_f.shape
         h_prev = (h0.float() if h0 is not None else
                   A_f.new_zeros(B, D))
-        h_chunks = []
-        for t in range(T):
-            h_prev = A_f[:, t] * h_prev + b_f[:, t]
-            h_chunks.append(h_prev)
-        h_full = torch.stack(h_chunks, dim=1)
+        if self.rfold:
+            # Math simplification path: ONE closed-form parallel scan per
+            # chunk (default chunk=16) instead of T Python iterations. On
+            # GPU this swaps T kernel launches for T/chunk launches, which
+            # is the dominant cost at small per-step compute. See
+            # synapforge.cells.rfold.liquid_rfold for the math.
+            from .rfold import liquid_rfold
+            h_full = liquid_rfold(
+                A_f, b_f, h_prev, chunk=self.rfold_chunk,
+            )
+        else:
+            h_chunks = []
+            for t in range(T):
+                h_prev = A_f[:, t] * h_prev + b_f[:, t]
+                h_chunks.append(h_prev)
+            h_full = torch.stack(h_chunks, dim=1)
 
         out = h_full.to(x.dtype)
         return torch.tanh(out) if self.bound else out
