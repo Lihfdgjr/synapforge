@@ -750,7 +750,7 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit**: ``auto-T8.3: curriculum learning sort by Qwen 0.5B ppl + tests``.
 
 ## T8.4 — EMA weights at inference
-- [x] (08:28, hash-pending, EMA wrapper + trainer wire + chat_demo --use-ema + 4 tests)
+- [x] (08:28, f80590b, EMA wrapper + trainer wire + chat_demo --use-ema + 4 tests)
 - **Steps**: maintain `model_ema = 0.999 * model_ema + 0.001 * model` during training; load ema for inference.
 - **Done 2026-05-02 08:28**:
   - `synapforge/training/ema.py` (canonical) + `synapforge/learn/ema.py` (re-export at spec import path) — `EMATracker` (legacy name) and `ModelEMA` (spec name) point at the same class. CPU-fp32 shadow state so a 100M-param run pays ~400 MB RAM, no extra VRAM. `update(model, decay)` is the standard timm/SmolLM2 recurrence, `swap(model)` is a context manager that restores live weights bit-exact even on exception, `save(path)` / `load(path)` round-trip the state plus auxiliary metadata.
