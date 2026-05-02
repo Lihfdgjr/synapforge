@@ -23,6 +23,7 @@ from __future__ import annotations
 from .per_param_lr import per_param_alpha
 from .spike_buffer import SpikeRingBuffer
 from .stdp_optimizer import STDPOnlyOptimizer
+from .triton_kernel import stdp_update_triton, triton_available
 
 # hybrid_optim_dispatch imports torch via a lazy import — keep optional so
 # callers using only stdp_optimizer (no AdamW group) don't pay the cost.
@@ -36,4 +37,6 @@ __all__ = [
     "HybridOptimizerDispatcher",
     "SpikeRingBuffer",
     "per_param_alpha",
+    "stdp_update_triton",
+    "triton_available",
 ]

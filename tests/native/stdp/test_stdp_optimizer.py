@@ -282,3 +282,32 @@ def test_observe_unknown_layer_is_noop():
 def test_construct_empty_groups_raises():
     with pytest.raises(ValueError, match="at least one"):
         STDPOnlyOptimizer([])
+
+
+# ---------------------------------------------------------------------- T10
+
+def test_sparse_path_matches_dense_path():
+    """sparse=True and sparse=False must produce identical weight updates."""
+    rng = np.random.default_rng(42)
+    out_dim, in_dim = 16, 32
+
+    def _run(sparse: bool) -> np.ndarray:
+        p = _NPParam(np.zeros((out_dim, in_dim), dtype=np.float32))
+        g = STDPParamGroup(
+            param=p, name="w",
+            buffer=SpikeRingBuffer(in_dim=in_dim, out_dim=out_dim, window=10),
+            alpha=0.05, a_plus=0.05, a_minus=0.03, clip=10.0,
+        )
+        opt = STDPOnlyOptimizer([g])
+        for _ in range(15):
+            pre = (rng.uniform(0, 1, size=in_dim) < 0.3).astype(np.uint8)
+            post = (rng.uniform(0, 1, size=out_dim) < 0.3).astype(np.uint8)
+            opt.observe("w", pre, post)
+            opt.step(sparse=sparse)
+        return p._np_data.copy()
+
+    rng_state = rng.bit_generator.state
+    w_sparse = _run(sparse=True)
+    rng.bit_generator.state = rng_state
+    w_dense = _run(sparse=False)
+    np.testing.assert_allclose(w_sparse, w_dense, rtol=1e-5, atol=1e-6)
