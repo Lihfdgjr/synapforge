@@ -876,6 +876,47 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit template**:
   `auto-multi-seq-val: per-seq-length VAL + monotonic-quality-grows check + tests`.
 
+## T9.8 — PPL_10 master plan (Synap-1 Ultra → val ppl ≤ 10)
+- [x] (feature/ppl-10-plan, doc-only landed; downstream training tasks owned by T9.4/9.5/9.6/9.7) **Status**: planning artifact shipped.
+- **Goal**: canonical, honest roadmap to drive Run 5 (Synap-1 Ultra 535M, val_ppl_holdout 5456 @ step 10000) to **val ppl ≤ 10** across 4 phases.
+- **Why a doc and not a script**: the campaign spans 4 trainers (LM cont./SFT/GRPO/self-distill) owned by 4 sister agents (T9.4/9.5/9.6/9.7). One source of truth for phase gates / abort criteria / verification protocol prevents the "each agent has its own ppl target" failure mode we hit in v4.0/4.1.
+- **Files**:
+  - `docs/PPL_10_MASTER_PLAN.md` (~250 LOC): §1 target rationale (Qwen 0.5B / GPT-2 medium parity band), §2 math (5456 → 10 = 6.3 log-units; ~190× sub-Chinchilla), §3 4-phase plan with knobs + targets per phase, §4 risk register (data scarcity, arch cap, PLIF dead 16/16, eval contamination), §5 cross-domain holdout protocol (WT-103 + C4-en + C4-zh + general-ZH), §6 ETA 25-35 GPU-h / $175-245 / 2-3 days, §7 decision matrix (advance / abort criteria per phase).
+  - `docs/INVESTOR.md`: new section "The ppl 10 target — Synap-1 Ultra (535M)" cross-linking the master plan; honest about the 6.3 log-unit gap and the 190× Chinchilla data deficit.
+- **Cross-references**: `SCALING_RATIONALE.md` (why Ultra is bigger), `SNN_FREQUENCY_LIMIT_NEURIPS25.md` (Run 6 freq-residual knobs to address PLIF dead 16/16), `RUN3L_DIAGNOSIS.md` (Run-3c-class divergence threshold reused as Phase 1 abort), `PHASE_TRAINING.md` (existing phase gates extended), `MASTER_PLAN.md` §3 (phase-3 trigger ppl-60 → reframed as Ultra-class ppl-10).
+- **Verification**: doc passes the same 5-line honest-claim filter as `INVESTOR.md` ("What's NOT a claim" section): claims are bounded by abort criteria, no overrating, every phase has a numeric gate, every gate is multi-domain.
+- **Next training trigger**: Phase 1 launches via `scripts/launch_synap1_ultra_run6.sh` once `step_010000.pt` is backup-confirmed (mohuanfang + GitHub release) AND the 1B-token diverse corpus is pre-tokenized at `/workspace/data/diverse_1b_qwen_tokenized.parquet`. T9.6 cross-domain eval harness must be running before step 5000 so Phase 1's gate is enforceable, not aspirational.
+- **Commit**: `auto-ppl10-plan: 4-phase roadmap + verification protocol + ETA + risk register`.
+
+## T9.4 — Phase 2 SFT trainer ready to run on rental
+- [x] (feature/sft-trainer, ~520 LOC trainer + ~370 LOC sft_loop module + 4 tests; default ON for --response-only-loss) **Status**: shipped on `feature/sft-trainer`.
+- **Goal**: production trainer (`train_100m_sft.py`) breaks the LM-only val ppl plateau (~1000-2000 per scaling laws on raw text) toward <= 10 by switching to instruction-tune SFT on `alpaca_zh_qwen_tokenized.parquet`. The Phase autopilot (H5 phase trigger table) expected this entry point on disk -- it's now first-class.
+- **Files**:
+  - `synapforge/training/sft_loop.py` (~370 LOC): `InstructionParquetStream` (auto-detects two parquet schemas: prompt_input_ids+response_input_ids OR input_ids+response_mask), `response_only_ce_loss` (masked CE that degrades to full-CE when mask is all-ones), `write_synth_alpaca_parquet` (test helper).
+  - `synapforge/training/__init__.py`: re-exports the three SFT helpers so the trainer can `from synapforge.training import InstructionParquetStream`.
+  - `train_100m_sft.py` (~520 LOC): trainer entry point. Reuses model build + warmstart contract from `train_100m_kd.py` exactly so SFT ckpts are bidirectional warmstart with KD ckpts. Adds in-domain alpaca holdout (5%, deterministic row-modulo split) + optional cross-domain val (`--cross-val`) for honest ppl reporting.
+  - `tests/integration/test_sft_trainer.py` (4 tests, ~370 LOC, CPU-only, ~3.4s):
+    1. `test_response_only_loss_masks_prompt` -- prompt label swaps don't change loss; full-mask = F.cross_entropy.
+    2. `test_warmstart_compat_with_kd_ckpt` -- KD ckpt loads into SFT model; SFT ckpt loads back into a fresh KD-style model; phase tag persists.
+    3. `test_smoke_5_steps_runs_clean` -- end-to-end 5-step run on synth parquet, no warmstart, tiny d=32 model, ckpt+metrics.json land on disk.
+    4. `test_eval_alpaca_holdout_emits_ppl` -- 5%% holdout produces finite ppl; train/holdout row sets disjoint.
+- **CLI** (per spec):
+  - `--data <parquet_path>` (default `/workspace/data/alpaca_zh_qwen_tokenized.parquet`).
+  - `--response-only-loss` / `--no-response-only-loss` (default ON; the off-path is documented as ablation).
+  - `--warmstart <ckpt>` (default `/workspace/runs/synap1_ultra/best_step.pt`); `--no-warmstart` for cold-start ablation.
+  - `--lr 1e-4 --warmup 200 --steps 5000` defaults match the spec.
+  - All Synap-1 architecture flags from `train_100m_kd.py` (lm-head-spectral-norm, lm-head-pre-ln, latent-k, plif-tau-init, freeze-vocab-tail, ...) carry the same name + default so launch scripts can swap entry points without other changes.
+- **CPU-safety note**: PyTorch 2.0.1 raises on `torch.amp.autocast(device_type='cpu', dtype=fp32, enabled=False)` even when disabled, so the trainer skips the autocast context manager entirely on CPU. Tests pin the device to `cpu` and exercise the fp32 path.
+- **Default behaviour**: SFT ckpts have the same dict shape as KD ckpts plus a `config['phase']='sft'` tag, so the chat_demo loader and the KD trainer's `adv_warmstart` accept them without code change. Optimizer state (Adam m/v) is loaded from the warmstart ckpt to preserve momentum across the Phase 1 -> Phase 2 hand-off.
+- **Verification**:
+  ```
+  python -m pytest tests/integration/test_sft_trainer.py tests/integration/test_neuromcp_trainer_mixin.py tests/integration/test_ttt_val_split.py -v
+  # 15 passed, 1 skipped (transformers unavailable in CI/dev) in 4.01s
+  ```
+- **Next step**: launch on rental with `--data /workspace/data/alpaca_zh_qwen_tokenized.parquet --warmstart /workspace/runs/synap1_ultra/best_step_*.pt --steps 5000`. Track `metrics.ppl_alpaca_holdout` -- target <= 10 by step 5000 (vs ~1500 LM-only floor). Phase autopilot will then trigger Phase 3 (modal byte-patch) on ppl <= 100 per H5 phase trigger table.
+- **Commit template**:
+  `auto-T9.4: train_100m_sft.py response-only loss + tests + warmstart compat with kd ckpts`.
+
 ---
 
 ## Rules summary

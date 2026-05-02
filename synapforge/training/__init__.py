@@ -12,5 +12,18 @@ from __future__ import annotations
 
 from .ema import EMATracker, ModelEMA, load_ema
 from .neuromcp_mixin import NeuroMCPMixin
+from .sft_loop import (
+    InstructionParquetStream,
+    response_only_ce_loss,
+    write_synth_alpaca_parquet,
+)
 
-__all__ = ["EMATracker", "ModelEMA", "load_ema", "NeuroMCPMixin"]
+__all__ = [
+    "EMATracker",
+    "InstructionParquetStream",
+    "ModelEMA",
+    "NeuroMCPMixin",
+    "load_ema",
+    "response_only_ce_loss",
+    "write_synth_alpaca_parquet",
+]
