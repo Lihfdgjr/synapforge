@@ -174,6 +174,22 @@ def safe_mkdir(p: str) -> None:
         pass
 
 
+def autocast_ctx(device: str, dtype: torch.dtype, enabled: bool):
+    """Return a torch.amp.autocast context, or a no-op context.
+
+    Workaround for PyTorch 2.0.x where
+    ``torch.amp.autocast(device_type='cpu', dtype=float32, enabled=False)``
+    still calls ``torch.set_autocast_cpu_dtype`` and crashes because
+    cpu autocast only supports bfloat16. We return an explicit no-op
+    context when autocast is not actually enabled, so callers don't
+    have to special-case CPU paths.
+    """
+    if not enabled:
+        import contextlib
+        return contextlib.nullcontext()
+    return torch.amp.autocast(device_type=device, dtype=dtype, enabled=True)
+
+
 def log_metrics(
     step: int,
     metrics: dict,
@@ -502,11 +518,7 @@ class BaseTrainer:
         x, y = batch[0], batch[1]
         x = x.to(self.device)
         y = y.to(self.device)
-        with torch.amp.autocast(
-            device_type=self.device,
-            dtype=self.dtype,
-            enabled=self.device == "cuda",
-        ):
+        with autocast_ctx(self.device, self.dtype, self.device == "cuda"):
             logits = self.model(x)
             loss = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)).float(),

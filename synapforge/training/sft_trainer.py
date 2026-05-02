@@ -42,7 +42,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .core_trainer import BaseTrainer, TrainerConfig
+from .core_trainer import BaseTrainer, TrainerConfig, autocast_ctx
 from .sft_loop import response_only_ce_loss
 
 
@@ -110,11 +110,7 @@ class SFTTrainer(BaseTrainer):
         log format.
         """
         x, y, mask = batch
-        with torch.amp.autocast(
-            device_type=self.device,
-            dtype=self.dtype,
-            enabled=self.device == "cuda",
-        ):
+        with autocast_ctx(self.device, self.dtype, self.device == "cuda"):
             logits = self.model(x)
             ce = response_only_ce_loss(
                 logits.float(),
@@ -131,11 +127,7 @@ class SFTTrainer(BaseTrainer):
     def val_step(self, batch) -> dict:
         """Validation: same response-only CE."""
         x, y, mask = batch
-        with torch.amp.autocast(
-            device_type=self.device,
-            dtype=self.dtype,
-            enabled=self.device == "cuda",
-        ):
+        with autocast_ctx(self.device, self.dtype, self.device == "cuda"):
             logits = self.model(x)
             ce = response_only_ce_loss(
                 logits.float(),

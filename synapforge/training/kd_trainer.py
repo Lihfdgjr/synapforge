@@ -44,7 +44,7 @@ from typing import Callable, Iterator, Optional
 import torch
 import torch.nn.functional as F
 
-from .core_trainer import BaseTrainer, TrainerConfig
+from .core_trainer import BaseTrainer, TrainerConfig, autocast_ctx
 from .kd_math import kd_loss
 
 
@@ -116,11 +116,7 @@ class KDTrainer(BaseTrainer):
         x = x.to(self.device)
         y = y.to(self.device)
 
-        with torch.amp.autocast(
-            device_type=self.device,
-            dtype=self.dtype,
-            enabled=self.device == "cuda",
-        ):
+        with autocast_ctx(self.device, self.dtype, self.device == "cuda"):
             logits = self.model(x)
             flat_logits = logits.reshape(-1, logits.size(-1)).float()
             flat_y = y.reshape(-1)
