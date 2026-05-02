@@ -876,6 +876,18 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Commit template**:
   `auto-multi-seq-val: per-seq-length VAL + monotonic-quality-grows check + tests`.
 
+## T9.8 — PPL_10 master plan (Synap-1 Ultra → val ppl ≤ 10)
+- [x] (feature/ppl-10-plan, doc-only landed; downstream training tasks owned by T9.4/9.5/9.6/9.7) **Status**: planning artifact shipped.
+- **Goal**: canonical, honest roadmap to drive Run 5 (Synap-1 Ultra 535M, val_ppl_holdout 5456 @ step 10000) to **val ppl ≤ 10** across 4 phases.
+- **Why a doc and not a script**: the campaign spans 4 trainers (LM cont./SFT/GRPO/self-distill) owned by 4 sister agents (T9.4/9.5/9.6/9.7). One source of truth for phase gates / abort criteria / verification protocol prevents the "each agent has its own ppl target" failure mode we hit in v4.0/4.1.
+- **Files**:
+  - `docs/PPL_10_MASTER_PLAN.md` (~250 LOC): §1 target rationale (Qwen 0.5B / GPT-2 medium parity band), §2 math (5456 → 10 = 6.3 log-units; ~190× sub-Chinchilla), §3 4-phase plan with knobs + targets per phase, §4 risk register (data scarcity, arch cap, PLIF dead 16/16, eval contamination), §5 cross-domain holdout protocol (WT-103 + C4-en + C4-zh + general-ZH), §6 ETA 25-35 GPU-h / $175-245 / 2-3 days, §7 decision matrix (advance / abort criteria per phase).
+  - `docs/INVESTOR.md`: new section "The ppl 10 target — Synap-1 Ultra (535M)" cross-linking the master plan; honest about the 6.3 log-unit gap and the 190× Chinchilla data deficit.
+- **Cross-references**: `SCALING_RATIONALE.md` (why Ultra is bigger), `SNN_FREQUENCY_LIMIT_NEURIPS25.md` (Run 6 freq-residual knobs to address PLIF dead 16/16), `RUN3L_DIAGNOSIS.md` (Run-3c-class divergence threshold reused as Phase 1 abort), `PHASE_TRAINING.md` (existing phase gates extended), `MASTER_PLAN.md` §3 (phase-3 trigger ppl-60 → reframed as Ultra-class ppl-10).
+- **Verification**: doc passes the same 5-line honest-claim filter as `INVESTOR.md` ("What's NOT a claim" section): claims are bounded by abort criteria, no overrating, every phase has a numeric gate, every gate is multi-domain.
+- **Next training trigger**: Phase 1 launches via `scripts/launch_synap1_ultra_run6.sh` once `step_010000.pt` is backup-confirmed (mohuanfang + GitHub release) AND the 1B-token diverse corpus is pre-tokenized at `/workspace/data/diverse_1b_qwen_tokenized.parquet`. T9.6 cross-domain eval harness must be running before step 5000 so Phase 1's gate is enforceable, not aspirational.
+- **Commit**: `auto-ppl10-plan: 4-phase roadmap + verification protocol + ETA + risk register`.
+
 ---
 
 ## Rules summary
