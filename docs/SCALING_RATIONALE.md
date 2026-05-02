@@ -249,6 +249,85 @@ preconfigure flags for each known failure mode.
 
 ---
 
+## §5.5 ppl 10 verification protocol
+
+**Why this section exists.** A `val ppl 10` reading from the trainer is
+*not* sufficient evidence to claim "Synap-Pro 300M is at chat-grade".
+The training/val splits both come from the same alpaca-zh + synth-zh
+mix (Run 3e config) plus a wikitext-103 train slice. Memorisation of the
+training distribution can drag the on-mix val ppl down to 8–15 without
+any actual generalisation gain — see PROGRESS.md §"v2.5 wikitext leak"
+for the historical fingerprint of this failure mode.
+
+Before any of:
+* the investor pitch deck headline number,
+* the README.md "TL;DR" line,
+* the LICENSE-adjacent CHANGELOG entry,
+* a public release-notes blog post,
+
+mentions a perplexity ≤ 50, the **cross-domain harness** at
+`scripts/eval_cross_domain_ppl.py` (T9.6) MUST run on the candidate
+checkpoint and report a weighted-average ppl on a **held-out** mix the
+model has never trained on.
+
+### Run command (rental side)
+
+```bash
+python scripts/eval_cross_domain_ppl.py \
+    --ckpt /workspace/runs/synappro/best_step_NNNNN.pt \
+    --domains wikitext,c4,gsm8k,humaneval,zh_news \
+    --max-tokens-per-domain 100000 \
+    --device cuda \
+    --tokenizer Qwen/Qwen2.5-0.5B \
+    --out runs/synappro/cross_domain.json
+```
+
+The output JSON has:
+
+* `domains.<name>.ppl` — per-domain held-out ppl
+* `weighted_avg_ppl` — `sum(w_i * ppl_i) / sum(w_i)` across `status: "ok"`
+  domains. The weight defaults are `{wikitext: 1.0, c4: 1.0, gsm8k: 0.5,
+  humaneval: 0.3, zh_news: 0.7}` -- WT103 + C4 carry full weight because
+  they are the cleanest LM holdout; reasoning + code are downweighted
+  because a 100M-class LM is not expected to fit them.
+
+### Acceptance gate
+
+| Trainer val ppl  | Required cross-domain ppl     | Action if exceeded |
+|------------------|-------------------------------|--------------------|
+| ≤ 50  (chat grade) | ≤ **75** weighted-avg        | Block any public claim citing the val number; flag for re-train |
+| ≤ 30  (strong)     | ≤ **50** weighted-avg        | Block; usually means alpaca-zh leakage |
+| ≤ 10  (extraordinary) | ≤ **20** weighted-avg     | **Mandatory** human review of training data + tokenizer split |
+
+The cross-domain ppl will *always* be higher than the train-mix val
+because the held-out distribution is genuinely harder. The point of the
+gate is to catch the case where the val number drops fast but the
+held-out number stays flat — that pattern is overfitting, not learning.
+
+### Smoke check (CI / agent runs)
+
+```bash
+python scripts/eval_cross_domain_ppl.py --smoke --out /tmp/eval.json
+```
+
+Synthetic fixtures, no HF download, runs in <1s, exercises the JSON
+schema + weighted-average math + per-domain OOM containment. The four
+mandatory tests in `tests/integration/test_eval_cross_domain.py` all
+exercise this path and run on CPU.
+
+### What this protocol blocks (worked examples)
+
+* **Hypothetical**: "Synap-Pro hit ppl 12!" — without cross-domain
+  numbers we cannot tell whether the model learned WT-103 or just
+  memorised the alpaca-zh response prefixes. The headline gets held
+  until the harness produces a JSON with `weighted_avg_ppl ≤ 25`.
+* **Hypothetical**: "We beat SmolLM2-360M on perplexity" — only valid
+  if both stacks were measured on the **same** held-out mix at the
+  same `max-tokens-per-domain` budget. Reproduction lives in
+  `docs/BASELINE_COMPARISON.md` §1's Cross-domain ppl column.
+
+---
+
 ## §6 Decision summary
 
 * **What we know**: Synap-1 100M plateaued at val ~3700 with only 25M of
