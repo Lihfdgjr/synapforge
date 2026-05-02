@@ -82,6 +82,12 @@ class _SyntheticWorkload:
     num_param_tensors: int
     param_count: int
     b_iters: int = 1  # repeat the matmul-tanh-matmul k times to balance with C
+    # If >0, Stage B sleeps for this many seconds instead of CPU matmul.
+    # Simulates Stage B running on a real GPU (releases GIL, doesn't
+    # contend for CPU cores). On a CPU-only host this is the only way
+    # to get a clean speedup measurement; on a real A800 host the GPU
+    # IS asynchronous w.r.t. the CPU optim thread.
+    b_simulated_gpu_s: float = 0.0
 
     # State (allocated in __post_init__)
     params: List[np.ndarray] = None  # type: ignore[assignment]
@@ -109,12 +115,18 @@ class _SyntheticWorkload:
     def fb_fn(self, x: np.ndarray, _y: Any, _extra: Dict[str, Any]
               ) -> Tuple[List[np.ndarray], float, Dict[str, Any]]:
         # Stage-B: synthetic forward+backward.
-        h = x
-        for _ in range(self.b_iters):
-            h = h @ self.matmul_W
-            h = np.tanh(h)
-            h = h @ self.matmul_W.T
-        loss = float(h.var())
+        if self.b_simulated_gpu_s > 0.0:
+            # Simulate a GPU-bound stage: sleep releases the GIL so
+            # Stage C can run uncontested in parallel.
+            time.sleep(self.b_simulated_gpu_s)
+            loss = 0.0
+        else:
+            h = x
+            for _ in range(self.b_iters):
+                h = h @ self.matmul_W
+                h = np.tanh(h)
+                h = h @ self.matmul_W.T
+            loss = float(h.var())
         grads = [
             np.full_like(p, 1e-3 * (1.0 + 0.1 * (i % 7)))
             for i, p in enumerate(self.params)
@@ -187,6 +199,7 @@ def run_bench(
     cpu_pool_workers: int = 4,
     use_pool: bool = True,
     b_iters: int = 0,             # 0 = auto-balance vs Stage C
+    b_simulated_gpu_s: float = 0.0,
     seed: int = 0,
 ) -> Tuple[BenchResult, BenchResult]:
     """Run sequential then pipelined bench.
@@ -202,7 +215,7 @@ def run_bench(
     """
     np.random.seed(seed)
 
-    if b_iters <= 0:
+    if b_simulated_gpu_s <= 0.0 and b_iters <= 0:
         b_iters = _auto_balance_b_iters(
             batch=batch, seq=seq, d_model=d_model,
             num_param_tensors=num_param_tensors,
@@ -214,11 +227,13 @@ def run_bench(
     wl_seq = _SyntheticWorkload(
         batch=batch, seq=seq, d_model=d_model,
         num_param_tensors=num_param_tensors, param_count=param_count,
-        b_iters=b_iters)
+        b_iters=b_iters,
+        b_simulated_gpu_s=b_simulated_gpu_s)
     wl_pipe = _SyntheticWorkload(
         batch=batch, seq=seq, d_model=d_model,
         num_param_tensors=num_param_tensors, param_count=param_count,
-        b_iters=b_iters)
+        b_iters=b_iters,
+        b_simulated_gpu_s=b_simulated_gpu_s)
 
     pool = CpuWorkerPool(num_workers=cpu_pool_workers, name="bench") if use_pool else None
     try:
@@ -361,6 +376,12 @@ def main() -> int:
                         help="Disable CpuWorkerPool (single-thread Stage C)")
     parser.add_argument("--b-iters", type=int, default=0,
                         help="Stage B matmul iterations per step (0=auto-balance)")
+    parser.add_argument("--b-simulated-gpu-s", type=float, default=0.0,
+                        help=("Simulate Stage B as a GPU-bound stage by "
+                              "sleeping for this many seconds per step. "
+                              "Releases the GIL so Stage C runs uncontested. "
+                              "Use this to model A800 production behaviour "
+                              "on a CPU-only dev host."))
     parser.add_argument("--json-only", action="store_true",
                         help="Emit only the JSON line; suppress markdown table")
     args = parser.parse_args()
@@ -373,6 +394,7 @@ def main() -> int:
         cpu_pool_workers=args.cpu_pool_workers,
         use_pool=not args.no_pool,
         b_iters=args.b_iters,
+        b_simulated_gpu_s=args.b_simulated_gpu_s,
     )
     speedup = (seq.wallclock_s / pipe.wallclock_s) if pipe.wallclock_s > 0 else float("nan")
     payload = {
