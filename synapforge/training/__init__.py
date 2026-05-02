@@ -10,6 +10,11 @@ without pulling in optimiser construction.
 """
 from __future__ import annotations
 
+from .cuda_graphs import (
+    GraphedBlockCfg,
+    GraphedHybridBlock,
+    cross_entropy_loss as graphed_cross_entropy_loss,
+)
 from .ema import EMATracker, ModelEMA, load_ema
 from .grpo import (
     GRPOStats,
@@ -34,10 +39,13 @@ from .sft_loop import (
 __all__ = [
     "EMATracker",
     "GRPOStats",
+    "GraphedBlockCfg",
+    "GraphedHybridBlock",
     "InstructionParquetStream",
     "ModelEMA",
     "NeuroMCPMixin",
     "VERIFIERS",
+    "graphed_cross_entropy_loss",
     "ast_verifier",
     "compute_advantages",
     "extract_final_number",

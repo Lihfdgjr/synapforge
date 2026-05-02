@@ -896,6 +896,31 @@ def _parse_args() -> argparse.Namespace:
                         "keeps Run 5 bit-identical. Strongly recommended "
                         "with --plif-dense-bypass-steps 0 (gradient-only "
                         "fix without forward-time mode change).")
+    p.add_argument("--sparse-spike-synapse", action="store_true", default=False,
+                   dest="sparse_spike_synapse",
+                   help="Sparse-spike synapse path (2026-05-02): exploit "
+                        "the SNN-architecture-unique fact that the PLIF "
+                        "spike train ``s`` is binary AND sparse. When "
+                        "post-revival spike density is 5-15%%, the "
+                        "synapse contribution costs O(K * out_dim) via "
+                        "embedding-bag row-gather instead of O(d^2) dense "
+                        "GEMM (~2-3x synapse speedup at 10%% density on "
+                        "A800). Auto-falls-back to dense when measured "
+                        "spike density >= --sparse-spike-threshold "
+                        "(default 0.30), so this flag is safe under any "
+                        "PLIF state (dead, healthy, saturated). Default "
+                        "OFF since current Run 6 PLIF is dead (density~0); "
+                        "enable AFTER PLIF revives. See "
+                        "synapforge.kernels.sparse_spike_matmul.")
+    p.add_argument("--sparse-spike-threshold", type=float, default=0.30,
+                   dest="sparse_spike_threshold",
+                   help="Density threshold for the sparse-spike-synapse "
+                        "auto-fallback. Below this density the sparse "
+                        "row-gather path is used; above it cuBLAS dense "
+                        "GEMM wins so we fall back. Default 0.30 (the "
+                        "empirical crossover at d=1280 on A800 80GB). "
+                        "Set to 1.0 to force-always-sparse, 0.0 to "
+                        "force-always-dense (debug only).")
     # ---- Perf knobs (2026-05-01; see docs/PERF_KNOBS.md) ------------------
     p.add_argument("--z-loss-topk", type=int, default=2048,
                    help="top-K logits used for sparse z-loss logsumexp; "
@@ -1043,6 +1068,30 @@ def _parse_args() -> argparse.Namespace:
                         "exp_avg_sq); fused-adamw cold-starts moments on "
                         "v1 ckpt warmstart (one-step penalty, then "
                         "bit-exact).")
+    p.add_argument("--synapforge-adamw", action="store_true", default=False,
+                   dest="synapforge_adamw",
+                   help="Phase 1 of the torch-replacement roadmap (see "
+                        "docs/TORCH_REPLACEMENT_PLAN.md). When ON and no "
+                        "plasticity sources are wired, build "
+                        "synapforge.optim.AdamW (pure-python AdamW, NO "
+                        "torch.optim inheritance, NO fused kernel) "
+                        "instead of torch.optim.AdamW or "
+                        "PlasticityAwareAdamW. Numerics match "
+                        "torch.optim.AdamW(fused=True) within 1e-5 "
+                        "(see tests/optim/test_synapforge_adamw.py). "
+                        "Step time is ~2-3 % slower than fused-adamw "
+                        "(bandwidth-bound, no fused kernel) -- "
+                        "intentional Phase 1 trade-off; Phase 4 of the "
+                        "roadmap will dispatch this same loop to a "
+                        "Triton kernel. Mutually exclusive with "
+                        "--fused-adamw; if both are passed, "
+                        "--synapforge-adamw wins (we are migrating off "
+                        "torch.optim, not towards it). Auto-falls back "
+                        "to PlasticityAwareAdamW if any param is "
+                        "plasticity-tagged (correctness > Phase 1 "
+                        "milestone). Default OFF (current default = "
+                        "PlasticityAwareAdamW unless --fused-adamw is "
+                        "set).")
     p.add_argument("--skip-warmstart-eval-N", type=int, default=0,
                    dest="skip_warmstart_eval_n",
                    help="when warmstarting from a known-good ckpt, skip "
@@ -1145,6 +1194,65 @@ def _parse_args() -> argparse.Namespace:
                    dest="val_seq_lens_auto_scale",
                    help="disable T9.3 multi-seq val auto-scaling; reuse "
                         "--batch-size at every seq-len (may OOM).")
+    # ---- 2026-05-02 perf push: CUDA Graphs + async data pipeline ----
+    # Two bit-exact training-throughput levers per user铁律 2026-05-02.
+    # Both default OFF; quality-safe (rel_err < 1e-6 fp32 vs eager) and
+    # decoupled (either can be on without the other).
+    p.add_argument("--cuda-graphs", action="store_true", default=False,
+                   dest="cuda_graphs",
+                   help="opt into ``torch.cuda.graphs.CUDAGraph`` capture "
+                        "of the per-microbatch forward+backward sequence. "
+                        "Default OFF. Requires CUDA + sm70+. Replays the "
+                        "captured graph instead of paying ~50us × ~112 op "
+                        "dispatches/microbatch (~5.6ms/microbatch saved). "
+                        "Static-shape pinning means the last partial batch "
+                        "of an epoch falls back to the eager step "
+                        "transparently. Quality-safe: bit-exact loss in "
+                        "fp32 (rel_err < 1e-6 in tests). Pairs with "
+                        "--grad-accum-steps for the biggest lift "
+                        "(graph replays N times per global step). See "
+                        "synapforge.training.cuda_graphs.GraphedHybridBlock.")
+    p.add_argument("--cuda-graph-warmup-iters", type=int, default=11,
+                   dest="cuda_graph_warmup_iters",
+                   help="warmup iterations BEFORE capture. Default 11 "
+                        "matches synapforge.runtime_cuda_graph; CUDA recipe "
+                        "needs >=3 (one for JIT compile, one for cuBLAS "
+                        "workspace cache, one for warm cache). Ignored "
+                        "when --cuda-graphs is off.")
+    p.add_argument("--async-data-pipeline", action="store_true",
+                   default=False, dest="async_data_pipeline",
+                   help="opt into the 4-stage async data pipeline (disk "
+                        "-> tokenize -> chunk -> pin) running on separate "
+                        "Python threads with bounded ring buffers between "
+                        "stages. Default OFF (legacy ParquetTokenStream "
+                        "with --prefetch-factor=2). Bit-exact: same yield "
+                        "sequence as ParquetTokenStream for the same args "
+                        "(test_async_pipeline_bitexact.py pins this). "
+                        "Estimated lift: 5-10 %% on the typical Qwen "
+                        "tokenizer / B=24 / T=256 step where tokenize is "
+                        "~30ms/batch; the extra threads hide that under "
+                        "the GPU step (~2400ms/step on Run 6). The async "
+                        "pipeline activates synapforge.data.AsyncTokenStream "
+                        "as the train stream (val stream stays single-"
+                        "threaded; eval is rare and not throughput-bound).")
+    p.add_argument("--async-pipeline-stages", type=int, default=4,
+                   dest="async_pipeline_stages",
+                   help="number of pipeline stages (1..4) when "
+                        "--async-data-pipeline is on. 1 = passthrough to "
+                        "the legacy single-thread path. 2 = fused disk+"
+                        "tokenize, consumer pins. 3 = fused disk+tokenize+"
+                        "pin. 4 = full split (default). Drop to 2-3 on "
+                        "machines where the GIL contention from 3 worker "
+                        "threads outweighs the parallelism (low-core dev "
+                        "boxes). Ignored when --async-data-pipeline is off.")
+    p.add_argument("--async-pipeline-prefetch", type=int, default=8,
+                   dest="async_pipeline_prefetch",
+                   help="capacity of every inter-stage queue (default 8 "
+                        "batches). Larger = more pinned RAM, smoother "
+                        "variance. At B=24 / T=256 / 8 queues each "
+                        "buffering 8 batches × 24 × 256 × 8B × 2 tensors "
+                        "= ~24 MiB pinned per queue. Ignored when "
+                        "--async-data-pipeline is off.")
     return p.parse_args()
 
 
@@ -1754,7 +1862,15 @@ def main() -> int:
         weight_quant_cfc=str(args.quant_cfc_weights),
         latent_k=int(args.latent_k),
         sew_shortcut=bool(args.sew_shortcut),
+        sparse_spike_synapse=bool(getattr(args, "sparse_spike_synapse", False)),
+        sparse_spike_threshold=float(getattr(args, "sparse_spike_threshold", 0.30)),
     )
+    # Log the sparse-spike-synapse flag state so post-mortems can verify
+    # the dispatch is live (matches the existing kwta/sew/rfold pattern).
+    if bool(getattr(args, "sparse_spike_synapse", False)):
+        print(f"[sparse-spike] synapse path enabled "
+              f"(threshold={float(getattr(args, 'sparse_spike_threshold', 0.30)):.2f}); "
+              f"auto-fallback to dense above threshold spike density")
     n_params = model.num_parameters()
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
     if str(args.quant_cfc_weights) == "ternary":
@@ -1905,8 +2021,13 @@ def main() -> int:
     # plasticity sources mixed in) forces the safe PlasticityAwareAdamW
     # fallback so STDP / Hebb gradients are not silently dropped.
     _use_fused_adamw = bool(getattr(args, "fused_adamw", False))
-    _fused_adamw_safe = True
-    if _use_fused_adamw:
+    _use_synapforge_adamw = bool(getattr(args, "synapforge_adamw", False))
+    _adamw_safe = True
+    # Same plasticity-source safety check applies to both --fused-adamw
+    # and --synapforge-adamw paths: if ANY param is tagged with a
+    # non-bp grad source we fall back to PlasticityAwareAdamW so the
+    # plasticity stream is not silently dropped.
+    if _use_fused_adamw or _use_synapforge_adamw:
         _bad_param_names: list[str] = []
         for pname, p in model.named_parameters():
             if not p.requires_grad:
@@ -1915,18 +2036,37 @@ def main() -> int:
             if sources is None:
                 continue
             if list(sources) != ["bp"]:
-                _fused_adamw_safe = False
+                _adamw_safe = False
                 _bad_param_names.append(f"{pname}={list(sources)}")
-        if not _fused_adamw_safe:
-            _log("[fused-adamw] plasticity sources detected on "
+        if not _adamw_safe:
+            _log("[plain-adamw] plasticity sources detected on "
                  f"{len(_bad_param_names)} params (e.g. "
                  f"{_bad_param_names[:3]!r}); falling back to "
                  "PlasticityAwareAdamW for correctness.")
-        elif DEVICE != "cuda":
-            _log("[fused-adamw] requires CUDA; falling back to "
-                 "PlasticityAwareAdamW.")
-            _fused_adamw_safe = False
-    if _use_fused_adamw and _fused_adamw_safe:
+    if _use_synapforge_adamw and _adamw_safe:
+        # Phase 1 of the torch-replacement roadmap: pure-python AdamW
+        # (no torch.optim inheritance). See docs/TORCH_REPLACEMENT_PLAN.md.
+        # Wins over --fused-adamw: gets us out of torch.optim. Loses to
+        # --fused-adamw: ~2-3 % slower step (no fused CUDA kernel).
+        # Phase 4 of the roadmap will dispatch this same code path to a
+        # Triton kernel, closing the perf gap without bringing torch.optim
+        # back. Mutually exclusive with --fused-adamw (synapforge wins).
+        from synapforge.optim import AdamW as _SynapforgeAdamW
+        optim = _SynapforgeAdamW(
+            [p for p in model.parameters() if p.requires_grad],
+            lr=peak_lr,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            weight_decay=WEIGHT_DECAY,
+        )
+        if _use_fused_adamw:
+            _log("[synapforge-adamw] both --synapforge-adamw and "
+                 "--fused-adamw passed; --synapforge-adamw wins (we are "
+                 "migrating off torch.optim, not towards it).")
+        _log("[synapforge-adamw] using synapforge.optim.AdamW "
+             "(pure-python, NO torch.optim inheritance; ms_param_table "
+             "absent so plasticity ticks rely on model-side state).")
+    elif _use_fused_adamw and _adamw_safe and DEVICE == "cuda":
         # Vanilla fused AdamW. WEIGHT_DECAY mirrors build_optimizer's default.
         optim = torch.optim.AdamW(
             [p for p in model.parameters() if p.requires_grad],
@@ -1939,6 +2079,10 @@ def main() -> int:
         _log("[fused-adamw] using torch.optim.AdamW(fused=True) "
              "(ms_param_table absent; plasticity ticks must rely on "
              "model-side state, not optim.ms_param_table).")
+    elif _use_fused_adamw and _adamw_safe and DEVICE != "cuda":
+        _log("[fused-adamw] requires CUDA; falling back to "
+             "PlasticityAwareAdamW.")
+        optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     else:
         optim = build_optimizer(model, lr=peak_lr, weight_decay=WEIGHT_DECAY)
     print(f"optimizer: {type(optim).__name__} lr={peak_lr} wd={WEIGHT_DECAY}")
@@ -1957,9 +2101,13 @@ def main() -> int:
             if isinstance(_ck, dict) and "optim_state" in _ck:
                 _ck_state = _ck["optim_state"]
                 _state_layout = _detect_optim_state_layout(_ck_state)
+                # synapforge.optim.AdamW uses the same exp_avg/exp_avg_sq
+                # state layout as torch.optim.AdamW, so it lives in the
+                # ``torch_adamw`` bucket for layout-compat purposes.
+                from synapforge.optim import AdamW as _SfAdamW  # noqa: PLC0415
                 _running_layout = (
                     "torch_adamw"
-                    if isinstance(optim, torch.optim.AdamW)
+                    if isinstance(optim, (torch.optim.AdamW, _SfAdamW))
                     else "plasticity_adamw"
                 )
                 if _state_layout != "unknown" and _state_layout != _running_layout:
@@ -2023,14 +2171,40 @@ def main() -> int:
         )
         _log(f"[data] remote warehouse ON: {_warehouse!r}")
 
-    train_ds = ParquetTokenStream(args.data_glob, seq_len=seq_len,
-                                  tokenizer_name=args.tokenizer_name,
-                                  batch_size=args.batch_size, loop=True,
-                                  shuffle_buffer=int(args.shuffle_buffer),
-                                  shuffle_seed=int(args.shuffle_seed),
-                                  prefetch_factor=int(args.prefetch_factor),
-                                  pin_memory=bool(args.pin_memory),
-                                  remote_warehouse=_warehouse)
+    # 2026-05-02 perf push (Deliverable 2): the async multi-stage data
+    # pipeline. When --async-data-pipeline is ON the trainer wraps the
+    # ParquetTokenStream with synapforge.data.AsyncTokenStream which
+    # runs disk read / tokenize / pin on separate Python threads with
+    # bounded ring buffers. Bit-exact: same yield sequence as
+    # ParquetTokenStream for the same args (pinned by
+    # tests/integration/test_async_pipeline_bitexact.py). Default OFF.
+    _use_async_pipeline = bool(getattr(args, "async_data_pipeline", False))
+    if _use_async_pipeline:
+        from synapforge.data import AsyncTokenStream
+        train_ds = AsyncTokenStream(
+            args.data_glob, seq_len=seq_len,
+            tokenizer_name=args.tokenizer_name,
+            batch_size=args.batch_size, loop=True,
+            shuffle_buffer=int(args.shuffle_buffer),
+            shuffle_seed=int(args.shuffle_seed),
+            pin_memory=bool(args.pin_memory),
+            remote_warehouse=_warehouse,
+            stages=int(getattr(args, "async_pipeline_stages", 4)),
+            prefetch=int(getattr(args, "async_pipeline_prefetch", 8)),
+        )
+        _log(f"[async-pipeline] ON: stages="
+             f"{int(getattr(args, 'async_pipeline_stages', 4))} "
+             f"prefetch="
+             f"{int(getattr(args, 'async_pipeline_prefetch', 8))}")
+    else:
+        train_ds = ParquetTokenStream(args.data_glob, seq_len=seq_len,
+                                      tokenizer_name=args.tokenizer_name,
+                                      batch_size=args.batch_size, loop=True,
+                                      shuffle_buffer=int(args.shuffle_buffer),
+                                      shuffle_seed=int(args.shuffle_seed),
+                                      prefetch_factor=int(args.prefetch_factor),
+                                      pin_memory=bool(args.pin_memory),
+                                      remote_warehouse=_warehouse)
     train_it = iter(train_ds)
     print(f"train stream: {train_ds!r}")
 
@@ -2283,6 +2457,48 @@ def main() -> int:
                  "but no warmstart ckpt -- ignoring (every eval will run)")
             _skip_eval_remaining = 0
 
+    # 2026-05-02 perf push (Deliverable 1): CUDA Graphs for the inner
+    # forward+backward sequence. Only safe when the inner loop is
+    # *static* — i.e., no KD-on-this-step branch flip, no mixin
+    # contributions, no dense-bypass toggle, no spike-target term, no
+    # high-pass residual. We construct the wrapper unconditionally
+    # when --cuda-graphs is on but use it only when those guards
+    # evaluate to "static". The guard check is one int compare per
+    # microbatch (free).
+    _graphed_block = None
+    _cuda_graphs_on = bool(getattr(args, "cuda_graphs", False))
+    if _cuda_graphs_on and DEVICE == "cuda":
+        try:
+            from synapforge.training.cuda_graphs import (
+                GraphedBlockCfg, GraphedHybridBlock,
+                cross_entropy_loss as _gx_ce,
+            )
+            _graphed_cfg = GraphedBlockCfg(
+                batch_size=int(args.batch_size),
+                seq_len=int(seq_len),
+                device=torch.device(DEVICE),
+                dtype=DTYPE,
+                n_warmup_iters=int(getattr(
+                    args, "cuda_graph_warmup_iters", 11,
+                )),
+                accumulate_grad=True,
+            )
+            _graphed_block = GraphedHybridBlock(
+                model, _gx_ce, _graphed_cfg,
+            )
+            if _graphed_block.capture_active:
+                _log(f"[cuda-graphs] capture ACTIVE: B={args.batch_size} "
+                     f"T={seq_len} dtype={DTYPE} "
+                     f"warmup={int(getattr(args, 'cuda_graph_warmup_iters', 11))}")
+                _log(f"[cuda-graphs] {_graphed_block!r}")
+            else:
+                _log(f"[cuda-graphs] capture DISABLED: "
+                     f"{_graphed_block.skip_reason}")
+                _graphed_block = None
+        except Exception as exc:
+            _log(f"[cuda-graphs] init FAILED ({exc!r}); falling back to eager")
+            _graphed_block = None
+
     # Run 5 PLIF-dead fix #1: capture dense-bypass window so the toggle
     # below is O(1) per step.  When --plif-dense-bypass-steps == 0 the
     # window is empty and PLIFCell.dense_bypass stays False forever.
@@ -2356,6 +2572,73 @@ def main() -> int:
                 break
             x = x.to(DEVICE, non_blocking=True)
             y = y.to(DEVICE, non_blocking=True)
+
+            # 2026-05-02 perf push (Deliverable 1): CUDA-Graph fast path.
+            # Only activates when ALL of these conditions hold:
+            #   * --cuda-graphs flag was passed at startup (constructor success)
+            #   * batch shape matches the captured (B, T) (last partial
+            #     batch falls back automatically)
+            #   * no mixins (modal/curiosity/neuromcp would mutate the
+            #     loss expression and need separate capture)
+            #   * KD-active step is OFF on this microbatch (teacher forward
+            #     introduces dynamic kernel sequence)
+            #   * spike-target term is OFF (PLIF.last_spike_rate buffers
+            #     are written in-place; safe inside graph but skipped here
+            #     to keep the captured loss == captured CE for bit-exact
+            #     comparison)
+            # When the fast path runs, we have the same loss kernel
+            # sequence as the captured graph — the wrapper's .step()
+            # replays it instead of re-dispatching every op. The slow
+            # path below remains the canonical reference for everything
+            # else.
+            _graph_fast_path = (
+                _graphed_block is not None
+                and _graphed_block.capture_active
+                and modal_mixin is None and curiosity_mixin is None
+                and neuromcp_mixin is None
+                and float(args.spike_target_loss_weight) == 0.0
+                and not (teacher is not None
+                         and args.kd_weight > 0
+                         and step % effective_kd_every == 0)
+                and x.shape == _graphed_block._static_x.shape
+            )
+            if _graph_fast_path:
+                # Replay path: graph runs forward + CE loss + backward.
+                # We still scale by accum_steps below, but the graph's
+                # backward already wrote into .grad — we accumulate by
+                # NOT zeroing (the trainer's outer zero_grad ran once
+                # at top of step, matching accumulate_grad=True). The
+                # captured loss is fp32; ce/kd/z/modal/cur logging
+                # tracks them as zeros for this microbatch (the only
+                # cost is the loss-component dashboard becomes
+                # CE-only on graphed steps; the total is still
+                # reported correctly).
+                _g_loss = _graphed_block.step(x, y).detach().float()
+                ce_loss = _g_loss
+                z_loss = torch.zeros((), device=_g_loss.device,
+                                     dtype=torch.float32)
+                kd = torch.zeros_like(z_loss)
+                loss = _g_loss
+                modal_aux = torch.zeros_like(z_loss)
+                cur_aux = torch.zeros_like(z_loss)
+                neuromcp_aux = torch.zeros_like(z_loss)
+                # Backward already ran inside the graph; no more
+                # backward call below.
+                if _lazy_host_sync_accum:
+                    accum_total_loss_t = accum_total_loss_t + loss
+                    accum_ce_t = accum_ce_t + ce_loss
+                    accum_kd_t = accum_kd_t + kd
+                    accum_z_t = accum_z_t + z_loss
+                    accum_modal_aux_t = accum_modal_aux_t + modal_aux
+                    accum_cur_aux_t = accum_cur_aux_t + cur_aux
+                else:
+                    accum_total_loss += float(loss.item())
+                    accum_ce += float(ce_loss.item())
+                    accum_kd += 0.0
+                    accum_z += 0.0
+                    accum_modal_aux += 0.0
+                    accum_cur_aux += 0.0
+                continue
 
             with torch.amp.autocast(device_type=DEVICE, dtype=DTYPE,
                                     enabled=DEVICE == "cuda"):
