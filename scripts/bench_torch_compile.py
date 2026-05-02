@@ -249,14 +249,27 @@ def _run(args) -> dict:
         compile_supported = False
         compile_skip_reason = msg
     else:
-        c_tok_s, c_step_ms = _time_steps(
-            m_compiled, steps=args.steps, batch_size=args.batch_size,
-            seq_len=args.seq_len, vocab=args.vocab, device=device,
-        )
-        print(f"[bench]   compile:    {c_tok_s:>9,.1f} tok/s  "
-              f"({c_step_ms:.1f} ms/step)", flush=True)
-        compile_supported = True
-        compile_skip_reason = None
+        # The inductor backend can fail at *first call* (not at
+        # ``torch.compile`` construction): e.g. Windows runners that lack
+        # MSVC ``cl.exe``, or boxes without a working C compiler. Trap
+        # those here and degrade to a clean skip rather than crashing
+        # the bench.
+        try:
+            c_tok_s, c_step_ms = _time_steps(
+                m_compiled, steps=args.steps, batch_size=args.batch_size,
+                seq_len=args.seq_len, vocab=args.vocab, device=device,
+            )
+            print(f"[bench]   compile:    {c_tok_s:>9,.1f} tok/s  "
+                  f"({c_step_ms:.1f} ms/step)", flush=True)
+            compile_supported = True
+            compile_skip_reason = None
+        except Exception as exc:
+            msg = (f"compile backend failed at first call: "
+                   f"{type(exc).__name__}: {exc}")
+            print(f"[bench]   compile SKIPPED -- {msg}", flush=True)
+            c_tok_s, c_step_ms = 0.0, 0.0
+            compile_supported = False
+            compile_skip_reason = msg
 
     if compile_supported and nc_tok_s > 0:
         ratio = c_tok_s / nc_tok_s
