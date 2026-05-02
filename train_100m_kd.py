@@ -911,6 +911,31 @@ def _parse_args() -> argparse.Namespace:
                         "keeps Run 5 bit-identical. Strongly recommended "
                         "with --plif-dense-bypass-steps 0 (gradient-only "
                         "fix without forward-time mode change).")
+    p.add_argument("--sparse-spike-synapse", action="store_true", default=False,
+                   dest="sparse_spike_synapse",
+                   help="Sparse-spike synapse path (2026-05-02): exploit "
+                        "the SNN-architecture-unique fact that the PLIF "
+                        "spike train ``s`` is binary AND sparse. When "
+                        "post-revival spike density is 5-15%%, the "
+                        "synapse contribution costs O(K * out_dim) via "
+                        "embedding-bag row-gather instead of O(d^2) dense "
+                        "GEMM (~2-3x synapse speedup at 10%% density on "
+                        "A800). Auto-falls-back to dense when measured "
+                        "spike density >= --sparse-spike-threshold "
+                        "(default 0.30), so this flag is safe under any "
+                        "PLIF state (dead, healthy, saturated). Default "
+                        "OFF since current Run 6 PLIF is dead (density~0); "
+                        "enable AFTER PLIF revives. See "
+                        "synapforge.kernels.sparse_spike_matmul.")
+    p.add_argument("--sparse-spike-threshold", type=float, default=0.30,
+                   dest="sparse_spike_threshold",
+                   help="Density threshold for the sparse-spike-synapse "
+                        "auto-fallback. Below this density the sparse "
+                        "row-gather path is used; above it cuBLAS dense "
+                        "GEMM wins so we fall back. Default 0.30 (the "
+                        "empirical crossover at d=1280 on A800 80GB). "
+                        "Set to 1.0 to force-always-sparse, 0.0 to "
+                        "force-always-dense (debug only).")
     # ---- Perf knobs (2026-05-01; see docs/PERF_KNOBS.md) ------------------
     p.add_argument("--z-loss-topk", type=int, default=2048,
                    help="top-K logits used for sparse z-loss logsumexp; "
@@ -1832,7 +1857,15 @@ def main() -> int:
         weight_quant_cfc=str(args.quant_cfc_weights),
         latent_k=int(args.latent_k),
         sew_shortcut=bool(args.sew_shortcut),
+        sparse_spike_synapse=bool(getattr(args, "sparse_spike_synapse", False)),
+        sparse_spike_threshold=float(getattr(args, "sparse_spike_threshold", 0.30)),
     )
+    # Log the sparse-spike-synapse flag state so post-mortems can verify
+    # the dispatch is live (matches the existing kwta/sew/rfold pattern).
+    if bool(getattr(args, "sparse_spike_synapse", False)):
+        print(f"[sparse-spike] synapse path enabled "
+              f"(threshold={float(getattr(args, 'sparse_spike_threshold', 0.30)):.2f}); "
+              f"auto-fallback to dense above threshold spike density")
     n_params = model.num_parameters()
     print(f"model params: {n_params:,} ({n_params/1e6:.2f}M)")
     if str(args.quant_cfc_weights) == "ternary":

@@ -152,6 +152,18 @@ class HybridBlock(Module):
         # feedback loop that collapses LiquidCell weights under weight
         # decay.  Default False keeps Run 5 behaviour bit-identical.
         sew_shortcut: bool = False,
+        # 2026-05-02 sparse-spike pack -- exploit the SNN-architecture-
+        # unique fact that ``s`` is a *binary sparse* tensor.  When the
+        # PLIF spike rate is below ~30%, computing ``synapse(s + h)``
+        # via the embedding-bag-style row-gather is asymptotically
+        # cheaper than the dense GEMM (O(K * out_dim) vs O(d^2)).
+        # See ``synapforge.kernels.sparse_spike_matmul``.  The dispatch
+        # auto-falls-back to dense when measured spike density exceeds
+        # ``sparse_spike_threshold`` so this flag is safe to leave on
+        # even when PLIF is dead/saturated -- in those regimes you just
+        # get the dense path back.  Default False = legacy synapse.
+        sparse_spike_synapse: bool = False,
+        sparse_spike_threshold: float = 0.30,
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -190,6 +202,14 @@ class HybridBlock(Module):
         self.high_pass_kernel_size = int(high_pass_kernel_size)
         # Run 5 PLIF-dead fix #3 -- SEW (Spike-Element-Wise) shortcut.
         self.sew_shortcut = bool(sew_shortcut)
+        # 2026-05-02 sparse-spike pack -- exploit binary-sparse spikes.
+        self.sparse_spike_synapse = bool(sparse_spike_synapse)
+        self.sparse_spike_threshold = float(sparse_spike_threshold)
+        if not 0.0 <= self.sparse_spike_threshold <= 1.0:
+            raise ValueError(
+                f"sparse_spike_threshold must be in [0, 1], "
+                f"got {sparse_spike_threshold}"
+            )
         if self.high_pass_residual_weight != 0.0:
             if self.high_pass_kernel_size < 1:
                 raise ValueError(
@@ -252,7 +272,43 @@ class HybridBlock(Module):
             spike_input = s + h
         else:
             spike_input = s
-        gated = self.synapse(spike_input) * torch.sigmoid(self.gate(spike_input))
+        # Synapse path: dense (default) or sparse-spike-aware (opt-in).
+        # The sparse-spike kernel exploits the fact that ``s`` is
+        # binary AND sparse: instead of casting to fp and running a
+        # dense GEMM ``(s + h) @ W.T`` of cost ``O(d^2)``, it
+        # computes the spike contribution as a row-gather of
+        # ``W[:, k]`` for active spikes (cost ``O(K * out_dim)``,
+        # where ``K`` = active spike count per token, typically 5-15%
+        # of d for a healthy PLIF).  Auto-falls-back to the dense
+        # path when measured density >= ``sparse_spike_threshold`` so
+        # this branch is safe on dead/saturated PLIF too.
+        # Gate path stays dense (small linear; sparsity wins are on
+        # the *synapse* matmul which is the larger and more expensive op).
+        if self.sparse_spike_synapse:
+            from .kernels.sparse_spike_matmul import sparse_spike_linear
+            if self.sew_shortcut:
+                # spike_input == s + h; pass s and h separately so the
+                # kernel can split the dense ``h @ W.T`` from the sparse
+                # spike row-gather contribution.
+                synapse_out = sparse_spike_linear(
+                    s, h, self.synapse,
+                    density_threshold=self.sparse_spike_threshold,
+                )
+            else:
+                # spike_input == s; ``h`` contribution is zero in the
+                # synapse-side accounting.  We pass an explicit zeros
+                # tensor of h's dtype so the kernel still has a clean
+                # reference for its dense bypass GEMM (which collapses
+                # to zero when h=0 -- one tiny cuBLAS launch -- so the
+                # win is preserved).  Density auto-dispatch tracks ``s``.
+                zero_h = torch.zeros_like(s, dtype=h.dtype)
+                synapse_out = sparse_spike_linear(
+                    s, zero_h, self.synapse,
+                    density_threshold=self.sparse_spike_threshold,
+                )
+        else:
+            synapse_out = self.synapse(spike_input)
+        gated = synapse_out * torch.sigmoid(self.gate(spike_input))
         x = x + self.drop(gated)
 
         # ---- SwiGLU FFN ---- (residual #2)
@@ -336,6 +392,12 @@ class SynapForge100M(Module):
         # Run 5 PLIF-dead fix #3 -- SEW (Spike-Element-Wise) shortcut
         # in every HybridBlock.  Default False keeps the Run 5 code path
         # bit-identical.  See HybridBlock ctor for full rationale.
+        sparse_spike_synapse: bool = False,
+        sparse_spike_threshold: float = 0.30,
+        # 2026-05-02 sparse-spike pack -- exploit binary-sparse spikes
+        # in every HybridBlock synapse path.  Default False = legacy
+        # dense GEMM.  Auto-falls-back to dense when measured spike
+        # density >= threshold (default 30%).
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -359,8 +421,15 @@ class SynapForge100M(Module):
         self.high_pass_residual_weight = float(high_pass_residual_weight)
         self.latent_k = int(latent_k)
         self.sew_shortcut = bool(sew_shortcut)
+        self.sparse_spike_synapse = bool(sparse_spike_synapse)
+        self.sparse_spike_threshold = float(sparse_spike_threshold)
         if self.latent_k < 0:
             raise ValueError(f"latent_k must be >= 0, got {latent_k}")
+        if not 0.0 <= self.sparse_spike_threshold <= 1.0:
+            raise ValueError(
+                f"sparse_spike_threshold must be in [0, 1], "
+                f"got {sparse_spike_threshold}"
+            )
 
         self.tok_embed = nn.Embedding(vocab, d)
         nn.init.normal_(self.tok_embed.weight, std=0.02)
@@ -378,7 +447,9 @@ class SynapForge100M(Module):
                         weight_quant=self.weight_quant_cfc,
                         plif_tau_init=self.plif_tau_init,
                         high_pass_residual_weight=self.high_pass_residual_weight,
-                        sew_shortcut=self.sew_shortcut)
+                        sew_shortcut=self.sew_shortcut,
+                        sparse_spike_synapse=self.sparse_spike_synapse,
+                        sparse_spike_threshold=self.sparse_spike_threshold)
             for _ in range(n_layers)
         )
         self.ln_f = _RMSNorm(d)
@@ -584,6 +655,8 @@ def build_synapforge_100m(
     high_pass_residual_weight: float = 0.0,
     latent_k: int = 0,
     sew_shortcut: bool = False,
+    sparse_spike_synapse: bool = False,
+    sparse_spike_threshold: float = 0.30,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
@@ -599,6 +672,8 @@ def build_synapforge_100m(
         high_pass_residual_weight=high_pass_residual_weight,
         latent_k=latent_k,
         sew_shortcut=sew_shortcut,
+        sparse_spike_synapse=sparse_spike_synapse,
+        sparse_spike_threshold=sparse_spike_threshold,
     )
 
 
