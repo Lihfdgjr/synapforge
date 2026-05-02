@@ -15,6 +15,13 @@ Usage:
         --tokenizer-path /workspace/teachers/qwen2.5-0.5b \
         --max-new 60 --temperature 0.7 \
         --save /tmp/chat_HHMM.json
+    # T8.4 — load EMA-smoothed weights at inference (uses sibling
+    # step_<N>_ema.pt next to step_<N>.pt, or `ema_state` key inside
+    # step_<N>.pt — whichever exists):
+    python -m synapforge.demo.chat_demo \
+        --ckpt /workspace/runs/v24h_qwen3/step_004000.pt \
+        --tokenizer-path /workspace/teachers/qwen2.5-0.5b \
+        --use-ema --verbose --save /tmp/chat_HHMM_ema.json
 """
 
 from __future__ import annotations
@@ -117,11 +124,49 @@ _FALLBACK_CFG = {
 }
 
 
+def _resolve_ema_source(ckpt: str, raw_ckpt: dict) -> tuple[str, dict | None]:
+    """Locate EMA weights for ``--use-ema`` (T8.4). Returns ``(source, sd)``.
+
+    Order of resolution:
+      1. ``raw_ckpt["ema_state"]`` — EMA state_dict embedded in the live ckpt
+         (newer trainer behavior). Preferred because it's bit-exact paired
+         with the live model checkpoint.
+      2. Sibling file ``step_<N>_ema.pt`` next to ``ckpt``.
+      3. Bare ``<ckpt>_ema.pt`` next to a non-step-prefixed ckpt name.
+
+    Returns ``("none", None)`` when nothing was found so the caller can
+    log a warning and fall through to the live weights.
+    """
+    if isinstance(raw_ckpt, dict):
+        emb = raw_ckpt.get("ema_state")
+        if isinstance(emb, dict) and emb:
+            return ("embedded", emb)
+
+    p = Path(ckpt)
+    candidates: list[Path] = []
+    # step_<N>.pt -> step_<N>_ema.pt
+    if p.name.endswith(".pt"):
+        candidates.append(p.with_name(p.stem + "_ema.pt"))
+    candidates.append(p.with_name(p.stem + "_ema" + p.suffix))
+
+    for cand in candidates:
+        if cand.is_file():
+            try:
+                import torch
+                ema_raw = torch.load(str(cand), map_location="cpu")
+            except Exception:
+                continue
+            if isinstance(ema_raw, dict) and "model" in ema_raw:
+                return (str(cand), ema_raw["model"])
+    return ("none", None)
+
+
 def _try_load_live(
     ckpt: str,
     tokenizer_path: str | None,
     device: str = "cpu",
     verbose: bool = False,
+    use_ema: bool = False,
 ):
     """Best-effort load of model + tokenizer. Returns (model, tok, meta) or None.
 
@@ -133,6 +178,11 @@ def _try_load_live(
 
     ``meta`` carries auxiliary info (step, ppl, ...) parsed from the ckpt
     dict so callers can stamp it into JSON output.
+
+    ``use_ema`` (T8.4): after the live state_dict is loaded, optionally
+    overlay EMA-smoothed weights from either ``raw_ckpt["ema_state"]``
+    (embedded) or a sibling ``step_<N>_ema.pt`` file. Strict=False so
+    legacy EMA dumps that miss a few keys still apply cleanly.
     """
     if not ckpt or not Path(ckpt).is_file():
         return None
@@ -202,6 +252,49 @@ def _try_load_live(
     except Exception:
         # Unknown device -- fall back to CPU silently rather than crash.
         model = model.to("cpu")
+
+    # ---------------- T8.4 — optional EMA overlay ----------------
+    # When --use-ema is set, replace the live weights with the EMA-smoothed
+    # copy. The trainer writes EMA state to two places (either is fine):
+    #   * ``raw["ema_state"]`` inside step_<N>.pt (embedded form)
+    #   * sibling file step_<N>_ema.pt with format from EMATracker.save()
+    # If neither is present we log and fall through to the live weights so
+    # the demo still works on pre-T8.4 ckpts.
+    ema_source = "none"
+    ema_missing = 0
+    ema_unexpected = 0
+    if use_ema:
+        ema_source, ema_sd = _resolve_ema_source(
+            ckpt, raw if isinstance(raw, dict) else {}
+        )
+        if ema_sd is None:
+            if verbose:
+                print(
+                    "[chat_demo] --use-ema: no EMA weights found "
+                    "(no 'ema_state' key in ckpt + no sibling _ema.pt); "
+                    "falling back to live weights."
+                )
+        else:
+            ema_sd = _strip_module_prefix(ema_sd)
+            try:
+                ema_missing_keys, ema_unexpected_keys = model.load_state_dict(
+                    ema_sd, strict=False
+                )
+                ema_missing = len(ema_missing_keys)
+                ema_unexpected = len(ema_unexpected_keys)
+                if verbose:
+                    print(
+                        f"[chat_demo] EMA loaded from {ema_source} "
+                        f"({ema_missing} missing, {ema_unexpected} unexpected)"
+                    )
+            except Exception as exc:
+                if verbose:
+                    print(
+                        f"[chat_demo] EMA load failed ({exc!r}); "
+                        f"falling back to live weights."
+                    )
+                ema_source = "none"
+
     model.eval()
     meta = {
         "step": int(raw["step"]) if isinstance(raw, dict) and "step" in raw else None,
@@ -209,6 +302,9 @@ def _try_load_live(
         "missing_keys": len(missing),
         "unexpected_keys": len(unexpected),
         "had_config": bool(isinstance(raw, dict) and "config" in raw),
+        "ema_source": ema_source,
+        "ema_missing_keys": ema_missing,
+        "ema_unexpected_keys": ema_unexpected,
     }
     return model, tok, meta
 
@@ -289,6 +385,7 @@ def run_demo(
     verbose: bool = False,
     prompt_set: str = "auto",
     use_template: bool | None = None,
+    use_ema: bool = False,
 ) -> dict:
     """Run the chat demo.
 
@@ -304,12 +401,17 @@ def run_demo(
       - ``None``   : auto — False for ``t1`` (queue prompts are open-ended
                      completions), True for ``legacy`` (instruction-tuned
                      prompts that need the response template).
+
+    ``use_ema`` (T8.4): if the ckpt was trained with ``--ema-decay > 0``,
+      load the EMA-smoothed weights at inference instead of the raw live
+      weights. Looks for ``raw["ema_state"]`` first, then a sibling
+      ``step_<N>_ema.pt`` file. No-op if neither exists.
     """
     ckpt = ckpt or os.environ.get("SYNAPFORGE_CKPT") or _default_ckpt()
     resolved_device = _resolve_device(device)
 
     live = _try_load_live(ckpt, tokenizer_path, device=resolved_device,
-                          verbose=verbose)
+                          verbose=verbose, use_ema=use_ema)
 
     # Pick prompt set after we know whether live mode is available.
     if prompt_set == "auto":
@@ -336,6 +438,9 @@ def run_demo(
             print(f"  tokenizer:   {tokenizer_path}")
             print(f"  device:      {resolved_device}")
             print(f"  prompt_set:  {active_prompt_set}")
+            if use_ema:
+                ema_src = meta.get("ema_source", "none")
+                print(f"  ema:         {ema_src}")
             print()
         for p, lang in prompts:
             try:
@@ -387,6 +492,8 @@ def run_demo(
         "wall_time_s": dt,
         "n_prompts": len(prompts),
         "step": meta.get("step") if meta else None,
+        "use_ema": bool(use_ema),
+        "ema_source": (meta.get("ema_source") if meta else "none"),
         "samples": samples,
         # Back-compat: older callers (cli.py JSON dump, downstream analysis
         # scripts) read out["pairs"] without the "lang" key. Mirror samples
@@ -423,6 +530,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--prompt-set", default="auto",
                     choices=["auto", "t1", "legacy"],
                     help="auto picks t1 for live, legacy for recorded")
+    ap.add_argument("--use-ema", action="store_true", default=False,
+                    dest="use_ema",
+                    help="T8.4: load EMA-smoothed weights (from "
+                         "raw['ema_state'] or sibling step_<N>_ema.pt) "
+                         "in place of the raw live weights at inference. "
+                         "No-op if neither EMA payload exists.")
     args = ap.parse_args(argv)
     run_demo(
         ckpt=args.ckpt,
@@ -433,6 +546,7 @@ def main(argv: list[str] | None = None) -> int:
         device=args.device,
         verbose=args.verbose,
         prompt_set=args.prompt_set,
+        use_ema=args.use_ema,
     )
     return 0
 

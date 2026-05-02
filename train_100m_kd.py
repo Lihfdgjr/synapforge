@@ -906,6 +906,25 @@ def _parse_args() -> argparse.Namespace:
                         "shard size at WT-103 / FineWeb scale, so the "
                         "trainer keeps roughly 1 epoch's worth of "
                         "lookahead resident on local SSD.")
+    # T8.4 (DEEP_MAINT_QUEUE.md) — exponential moving average of weights.
+    # Standard practice in DeepSeek / Llama / SmolLM2: track a shadow
+    # copy ``model_ema = decay·model_ema + (1-decay)·model`` after each
+    # optim.step() and use the EMA at inference. EMA state lives on CPU
+    # in fp32 to avoid bf16 drift (~400MB at 100M params, ~free vs the
+    # GPU live model). Default 0.0 = disabled (zero behaviour change for
+    # existing runs); recommended 0.999 for a 100M-1B class run.
+    p.add_argument("--ema-decay", type=float, default=0.0,
+                   dest="ema_decay",
+                   help="EMA decay for shadow weight tracking (T8.4). "
+                        "Default 0.0 = OFF; 0.999 is the standard recipe. "
+                        "When > 0, after each optim.step() the trainer "
+                        "updates a CPU-fp32 EMA copy. At every "
+                        "--save-every step the EMA state is BOTH "
+                        "embedded inside step_<N>.pt under the "
+                        "``ema_state`` key (preferred path, used by "
+                        "``chat_demo --use-ema``) AND written to a sibling "
+                        "step_<N>_ema.pt file for legacy "
+                        "synapforge.training.ema.load_ema() loaders.")
     return p.parse_args()
 
 
@@ -1439,6 +1458,25 @@ def main() -> int:
         except Exception as exc:
             _log(f"warmstart optim load skipped: {exc}")
 
+    # ---------------- EMA tracker (T8.4) ----------------
+    # Shadow CPU-fp32 copy of model weights, updated after each optim.step()
+    # by ``ema_tracker.update(model)``. Default --ema-decay=0.0 = OFF.
+    # When >0, every --save-every step also dumps step_<N>_ema.pt next to
+    # the live ckpt; chat_demo / chat_repl can swap to the EMA copy via
+    # synapforge.training.ema.load_ema().
+    ema_tracker = None
+    if float(getattr(args, "ema_decay", 0.0)) > 0.0:
+        try:
+            from synapforge.training.ema import EMATracker
+            ema_tracker = EMATracker(model, decay=float(args.ema_decay))
+            _log(f"[ema] tracker enabled: decay={args.ema_decay} "
+                 f"(state on CPU fp32)")
+        except Exception as exc:
+            _log(f"[ema] init FAILED ({exc!r}); disabling EMA")
+            ema_tracker = None
+    else:
+        _log("[ema] disabled (default; pass --ema-decay 0.999 to enable)")
+
     # ---------------- data ----------------
     # P9: data globs and tokenizer are CLI-overridable so the smoke test
     # can point at a tiny synth parquet + the gpt2 tokenizer (no rental
@@ -1858,6 +1896,15 @@ def main() -> int:
 
         optim.step()
 
+        # T8.4 — EMA update right after optim.step() (model params now reflect
+        # the just-applied gradient). No-op when --ema-decay 0.0 (default).
+        if ema_tracker is not None:
+            try:
+                ema_tracker.update(model)
+            except Exception as exc:  # never let EMA error kill training
+                _log(f"[ema] update failed step={step} ({exc!r}); disabling")
+                ema_tracker = None
+
         if DEVICE == "cuda":
             torch.cuda.synchronize()
         step_ms = (time.time() - t_step) * 1000.0
@@ -2002,7 +2049,7 @@ def main() -> int:
 
         if step % save_every == 0:
             ckpt_path = os.path.join(out_dir, f"step_{step:06d}.pt")
-            torch.save({
+            ckpt_payload = {
                 "model": model.state_dict(),
                 "optim_state": optim.state_dict(),
                 "step": step,
@@ -2010,8 +2057,39 @@ def main() -> int:
                 "n_params": n_params,
                 "lr": cur_lr,
                 "config": _build_config_dict(args),
-            }, ckpt_path)
+            }
+            # T8.4 — embed the EMA shadow state inside the live ckpt under
+            # the ``ema_state`` key (per the T8.4 spec). chat_demo's
+            # ``--use-ema`` flag prefers this embedded copy because it's
+            # bit-exact paired with the live state. We ALSO write a
+            # sibling step_<N>_ema.pt below so legacy loaders keep working.
+            if ema_tracker is not None:
+                try:
+                    ckpt_payload["ema_state"] = dict(ema_tracker.state_dict())
+                    ckpt_payload["ema_decay"] = float(ema_tracker.decay)
+                except Exception as exc:
+                    _log(f"[ema] embed in ckpt failed step={step}: {exc!r}")
+            torch.save(ckpt_payload, ckpt_path)
             _log(f"saved ckpt {ckpt_path}")
+            # T8.4 — when EMA is enabled, dump a sibling _ema.pt with the
+            # EMA-smoothed weights using the same dict layout so the ckpt
+            # loaders (chat_demo / chat_repl / load_ema) can consume it
+            # by exactly the same code path.
+            if ema_tracker is not None:
+                try:
+                    ema_path = os.path.join(out_dir, f"step_{step:06d}_ema.pt")
+                    ema_tracker.save(
+                        ema_path,
+                        extra={
+                            "step": step,
+                            "n_params": n_params,
+                            "lr": cur_lr,
+                            "config": _build_config_dict(args),
+                        },
+                    )
+                    _log(f"saved ema ckpt {ema_path}")
+                except Exception as exc:
+                    _log(f"[ema] save failed step={step}: {exc!r}")
 
         # ---- phase-aware polling (default OFF) ----
         # Cheap: read_phase is a stat + ~1KB read. Done every 100 steps.
