@@ -14,6 +14,9 @@
 #   * clip-grad-cache (perf)     -- +0.5-1% throughput
 #   * Spectral norm (T2.6)       -- z-loss bound
 #   * Spike-target-loss (T2.5)   -- PLIF revival aux
+#   * SEW shortcut (PLIF revive) -- fix 16/16 dead PLIF in lite_mixin
+#   * dense bypass 2000 steps    -- warmup window for PLIF gradient
+#   * lazy-host-sync + fused-adamw + skip-1st-eval -- 3-flag speedup pack
 #
 # Resumes from latest Run 5 ckpt (step_010000.pt or whatever's freshest).
 #
@@ -73,6 +76,11 @@ setsid bash -c "cd '${REPO_DIR}' && exec python3 -u train_100m_kd.py \
   --clip-grad-cache \
   --ema-decay 0.999 \
   --phase-aware \
+  --sew-shortcut \
+  --plif-dense-bypass-steps 2000 \
+  --lazy-host-sync-accum \
+  --fused-adamw \
+  --skip-warmstart-eval-N 1 \
   --out '${RUN_DIR}' \
   > '${LOG_FILE}' 2>&1" </dev/null &
 NEW_PID=$!
