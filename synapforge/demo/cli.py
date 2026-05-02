@@ -82,6 +82,8 @@ def cmd_chat(args) -> dict:
         temperature=args.temperature,
         save_path=args.save,
         verbose=True,
+        rfold_inference=getattr(args, "rfold_inference", False),
+        coconut_k=getattr(args, "coconut_k", 0),
     )
 
 
@@ -162,6 +164,19 @@ def main(argv: list[str] | None = None) -> int:
              "Storage: ~/.synapforge/memory/<user_id>/. "
              "Zero VRAM; see docs/MULTI_USER_MEMORY.md.",
     )
+    # R-fold incremental decode + Coconut latent thinking flags.  Both
+    # default OFF -- the legacy per-step model.forward path is preserved
+    # bit-identically when the flags are unset.  See
+    # synapforge/inference/{rfold_chat,coconut_loop}.py.
+    pc.add_argument(
+        "--rfold-inference", dest="rfold_inference",
+        action="store_true", default=False,
+        help="O(1)-per-token decode with carried CfC + PLIF state. "
+             "Bit-identical to default at fp32 + temperature=0.")
+    pc.add_argument(
+        "--coconut-k", dest="coconut_k", type=int, default=0,
+        help="Coconut latent thinking depth (arxiv:2412.06769). 0 = OFF "
+             "(default). Only active when --rfold-inference is also set.")
     pc.set_defaults(fn=cmd_chat)
 
     ps = sub.add_parser("stdp", help="STDP self-organization (no backprop, ~2s)")
@@ -201,6 +216,18 @@ def main(argv: list[str] | None = None) -> int:
             "--mechanism-only", action="store_true", default=False,
             help="skip the chat block; pitch only NeuroMCP+R-fold+STDP "
                  "(docs/INSURANCE_NATIVE.md Option C, demo-day escape hatch)",
+        )
+        # Inference-time R-fold + Coconut hooks (default OFF).  See
+        # synapforge.inference.{rfold_chat, coconut_loop}.
+        parser.add_argument(
+            "--rfold-inference", dest="rfold_inference",
+            action="store_true", default=False,
+            help="constant-time per-token decode (state-carrying); "
+                 "bit-identical to default at fp32 + temperature=0",
+        )
+        parser.add_argument(
+            "--coconut-k", dest="coconut_k", type=int, default=0,
+            help="Coconut latent thinking k (arxiv:2412.06769); 0 = OFF",
         )
 
     pa = sub.add_parser("all", help="Run pitch + button + bench + stdp + chat")

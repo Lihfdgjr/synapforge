@@ -317,8 +317,22 @@ def _generate_one(
     temperature: float,
     use_template: bool = True,
     device: str = "cpu",
+    rfold_inference: bool = False,
+    coconut_k: int = 0,
 ) -> str:
-    """Greedy / temperature-sampled completion. Returns just the suffix."""
+    """Greedy / temperature-sampled completion. Returns just the suffix.
+
+    When ``rfold_inference=True`` the per-token decode goes through
+    :func:`synapforge.inference.generate_rfold` which carries CfC + PLIF
+    state across calls (O(1) per token, no prefix re-processing).
+    Default ``False`` preserves the legacy per-step model.forward path
+    bit-identically.
+
+    When ``coconut_k > 0`` AND ``rfold_inference=True``, the decode is
+    routed through :func:`generate_with_coconut` so the latent thinking
+    loop fires at any ``<bot>`` markers. ``coconut_k=0`` (default) is a
+    strict no-op.
+    """
     import torch
     text = INSTRUCTION_TEMPLATE.format(instruction=prompt) if use_template else prompt
     ids = tok.encode(text, add_special_tokens=False, return_tensors="pt").to(device)
@@ -328,21 +342,52 @@ def _generate_one(
         eos_ids.add(im_end)
 
     base_len = ids.size(1)
-    for _ in range(max_new):
-        if ids.size(1) >= model.max_seq:
-            break
-        with torch.no_grad():
-            logits = model(ids)
-        last = logits[:, -1, :]
-        if temperature <= 0:
-            nxt = last.argmax(dim=-1, keepdim=True)
+
+    if rfold_inference:
+        # New path: stateful incremental decode. Token sequence is bit-
+        # identical to the legacy path at fp32 + temperature=0; verified
+        # in tests/inference/test_rfold_chat.py.
+        if coconut_k > 0:
+            from synapforge.inference import generate_with_coconut
+            bot_id = (
+                tok.convert_tokens_to_ids("<bot>")
+                if hasattr(tok, "convert_tokens_to_ids") else None
+            )
+            eot_id = (
+                tok.convert_tokens_to_ids("<eot>")
+                if hasattr(tok, "convert_tokens_to_ids") else None
+            )
+            bot_id = bot_id if bot_id is not None and bot_id >= 0 else None
+            eot_id = eot_id if eot_id is not None and eot_id >= 0 else None
+            out_ids, _ = generate_with_coconut(
+                model, ids, max_new=max_new,
+                temperature=temperature, coconut_k=coconut_k,
+                bot_id=bot_id, eot_id=eot_id,
+                eos_ids=list(eos_ids),
+            )
         else:
-            probs = (last / temperature).softmax(dim=-1)
-            nxt = torch.multinomial(probs, num_samples=1)
-        if int(nxt.item()) in eos_ids:
-            break
-        ids = torch.cat([ids, nxt], dim=1)
-    out = tok.decode(ids[0, base_len:], skip_special_tokens=True)
+            from synapforge.inference import generate_rfold
+            out_ids, _ = generate_rfold(
+                model, ids, max_new=max_new,
+                temperature=temperature, eos_ids=list(eos_ids),
+            )
+        out = tok.decode(out_ids[0, base_len:], skip_special_tokens=True)
+    else:
+        for _ in range(max_new):
+            if ids.size(1) >= model.max_seq:
+                break
+            with torch.no_grad():
+                logits = model(ids)
+            last = logits[:, -1, :]
+            if temperature <= 0:
+                nxt = last.argmax(dim=-1, keepdim=True)
+            else:
+                probs = (last / temperature).softmax(dim=-1)
+                nxt = torch.multinomial(probs, num_samples=1)
+            if int(nxt.item()) in eos_ids:
+                break
+            ids = torch.cat([ids, nxt], dim=1)
+        out = tok.decode(ids[0, base_len:], skip_special_tokens=True)
     if "###" in out:
         out = out.split("###", 1)[0]
     return out.strip()
@@ -386,6 +431,8 @@ def run_demo(
     prompt_set: str = "auto",
     use_template: bool | None = None,
     use_ema: bool = False,
+    rfold_inference: bool = False,
+    coconut_k: int = 0,
 ) -> dict:
     """Run the chat demo.
 
@@ -449,6 +496,8 @@ def run_demo(
                     temperature=temperature,
                     use_template=effective_use_template,
                     device=resolved_device,
+                    rfold_inference=rfold_inference,
+                    coconut_k=coconut_k,
                 )
             except Exception as e:
                 resp = f"<generation error: {e}>"
@@ -536,6 +585,18 @@ def main(argv: list[str] | None = None) -> int:
                          "raw['ema_state'] or sibling step_<N>_ema.pt) "
                          "in place of the raw live weights at inference. "
                          "No-op if neither EMA payload exists.")
+    ap.add_argument(
+        "--rfold-inference", action="store_true", default=False,
+        dest="rfold_inference",
+        help="Use stateful R-fold incremental decode (constant-time per "
+             "token). Bit-identical to the default sequential path at "
+             "fp32 + temperature=0; default OFF preserves legacy behaviour.")
+    ap.add_argument(
+        "--coconut-k", type=int, default=0,
+        dest="coconut_k",
+        help="Coconut latent thinking depth (arxiv:2412.06769). When > 0 "
+             "and combined with --rfold-inference, fires K hidden-state "
+             "passes on every <bot> token. 0 = OFF (default).")
     args = ap.parse_args(argv)
     run_demo(
         ckpt=args.ckpt,
@@ -547,6 +608,8 @@ def main(argv: list[str] | None = None) -> int:
         verbose=args.verbose,
         prompt_set=args.prompt_set,
         use_ema=args.use_ema,
+        rfold_inference=args.rfold_inference,
+        coconut_k=args.coconut_k,
     )
     return 0
 
