@@ -1,11 +1,11 @@
 """Synap-1 model configurations.
 
-Two named configs are exported here so launch scripts, demos, paper
+Three named configs are exported here so launch scripts, demos, paper
 benchmarks, and unit tests can reference a model size by **name**
-(e.g. ``SYNAP1_PRO``) rather than passing a half-dozen ``--d / --n-layers /
+(e.g. ``SYNAP1_ULTRA``) rather than passing a half-dozen ``--d / --n-layers /
 --ffn-ratio`` flags around.
 
-Both configs use the same ``synapforge.model_100m.SynapForge100M`` class
+All configs use the same ``synapforge.model_100m.SynapForge100M`` class
 - only the hyperparameters differ. The architecture is **100% LNN+SNN**
 (LiquidCell + PLIF + SparseSynapse + SwiGLU FFN, RDT-loopable). No LoRA,
 no transformer fallback - per the project iron rule (memory key
@@ -13,18 +13,33 @@ no transformer fallback - per the project iron rule (memory key
 
 Naming
 ------
-- ``SYNAP1_BASE`` - the historical "Synap-1" 100M-class model
+- ``SYNAP1_BASE``  - the historical "Synap-1" 100M-class model
   (d=512, n_layers=10). Backbone ~73.5M, total ~151M (the embedding
   alone is 77.8M because vocab=151936 from Qwen 2.5).
-- ``SYNAP1_PRO``  - the 300M-class scaled variant
+- ``SYNAP1_PRO``   - the 300M-class scaled variant
   (d=1024, n_layers=14, ffn_ratio=2.5). Backbone ~169M, total ~325M.
-  Backbone parameter count is **~7x BASE** at the same vocab.
+  Backbone parameter count is **~2.3x BASE** at the same vocab.
+- ``SYNAP1_ULTRA`` - the 500M-class scaled variant
+  (d=1280, n_layers=16, ffn_ratio=3.0, loop_depth=2). Backbone ~341M,
+  total ~536M. Backbone is **~4.6x BASE** (~13.7x the ~25M useful 100M
+  baseline backbone after stripping the dominant embedding table).
 
 The Pro variant trades FFN width (8 -> 2.5) for hidden width (512 -> 1024)
 and depth (10 -> 14). At ffn_ratio=8.0 a d=1024 n=14 model is 567M total
 which would dwarf the embedding bias and overshoot the 300M target by
 nearly 2x; ffn_ratio=2.5 keeps total within 10% of 300M and backbone
 within 10% of 175M as required by the variant spec.
+
+The Ultra variant scales hidden width again (1024 -> 1280) and depth
+(14 -> 16) and uses ffn_ratio=3.0 (slightly above Pro's 2.5). The Pro
+ratio of 2.5 was tuned to fit the 300M total target with d=1024; at
+d=1280 / n_layers=16 we need ~3.0 to push the **backbone** budget into
+the 350M target band (a 14x multiplier over the 100M's ~25M backbone)
+without overshooting the 500M total too far. RDT loop_depth=2 doubles
+the effective compute path without adding parameters (weight-shared
+loop), giving Ultra a "wider plus deeper plus more recurrent" profile
+that matches the d=1280 / n=16 / ffn=3 spec to ~535.8M total / ~341.3M
+backbone.
 
 Usage
 -----
@@ -130,6 +145,34 @@ SYNAP1_PRO = Synap1Config(
 
 
 # ---------------------------------------------------------------------------
+# Synap-1 Ultra - 500M class, d=1280 n=16 ffn=3.0 loop_depth=2.
+# Backbone ~341M (~4.6x BASE, ~13.7x the 100M useful-backbone of ~25M),
+# total ~536M (within 10 % of 500M target). Same LNN+SNN primitives,
+# wider hidden + deeper stack + RDT recurrence.
+# ---------------------------------------------------------------------------
+SYNAP1_ULTRA = Synap1Config(
+    name="synap1_ultra",
+    vocab=151936,
+    d=1280,
+    n_layers=16,
+    # loop_depth=2 weight-shared RDT recurrence -- doubles effective
+    # compute depth (16 layers x 2 = 32 effective layer-passes) without
+    # adding any parameters. Matches Pro's RDT recipe but on a deeper
+    # stack so the recurrent compute path is meaningfully larger.
+    loop_depth=2,
+    max_seq=256,
+    # ffn_ratio=3.0 (vs Pro's 2.5) is the sweet spot at d=1280 / n=16:
+    # ratio=2.5 leaves backbone at ~302M (under the 315M lower bound for
+    # the 350M +/- 10% target); ratio=3.5 overshoots total to 575M
+    # (above 550M cap); ratio=3.0 lands at 535.8M total / 341.3M backbone,
+    # both inside the +/- 10% bands for 500M total / 350M backbone.
+    ffn_ratio=3.0,
+    sparsity=0.95,
+    dropout=0.0,
+)
+
+
+# ---------------------------------------------------------------------------
 # Registry for dispatch-by-name (case-insensitive, dashes/underscores OK).
 # Aliases let callers say "synap1-base" / "Synap-1 Pro" / "pro" too.
 # ---------------------------------------------------------------------------
@@ -140,6 +183,9 @@ _REGISTRY: dict = {
     "synap1_pro": SYNAP1_PRO,
     "synap1-pro": SYNAP1_PRO,
     "pro": SYNAP1_PRO,
+    "synap1_ultra": SYNAP1_ULTRA,
+    "synap1-ultra": SYNAP1_ULTRA,
+    "ultra": SYNAP1_ULTRA,
 }
 
 
@@ -186,6 +232,7 @@ __all__ = [
     "Synap1Config",
     "SYNAP1_BASE",
     "SYNAP1_PRO",
+    "SYNAP1_ULTRA",
     "get_config",
     "list_configs",
 ]
