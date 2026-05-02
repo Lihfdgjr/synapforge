@@ -64,6 +64,7 @@ docs   = ["mkdocs>=1.5", "mkdocs-material>=9.0"]
 
 [project.scripts]
 synapforge-demo = "synapforge.demo.cli:main"
+synapforge-chat = "synapforge.demo.async_chat_cli:main"
 
 [project.urls]
 Homepage      = "https://github.com/Lihfdgjr/synapforge"
@@ -92,6 +93,11 @@ minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra -q"
+# pytest-asyncio: tests/interactive/* use ``@pytest.mark.asyncio`` for the
+# async kernel coroutines. ``auto`` mode would make every async ``def
+# test_*`` run without the marker, but we prefer the explicit marker so
+# sync tests stay sync.
+asyncio_mode = "strict"
 markers = [
     "slow: long-running validation (>= 10 min). Skipped by default; opt in with `pytest -m slow`.",
     "gpu: requires CUDA GPU (typically >= 70 GB for 1M+ context). Skipped on CPU-only boxes.",
