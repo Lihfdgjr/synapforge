@@ -112,6 +112,15 @@ class HybridBlock(Module):
         # causal Conv1d (kernel = high_pass_kernel_size).  Default 0.0
         # keeps the legacy code path bit-for-bit.
         high_pass_kernel_size: int = 3,
+        # Run 5 PLIF-dead fix #3: SEW (Spike-Element-Wise) shortcut from
+        # arXiv:2102.04159.  When True, the spike branch becomes
+        #     gated = (synapse(s) + h_pre_plif) * sigmoid(gate(s))
+        # i.e. the LiquidCell output ``h`` is added directly to the
+        # synapse output, providing a non-zero LM-gradient path even
+        # when ``s_t == 0``.  This breaks the dead-PLIF positive
+        # feedback loop that collapses LiquidCell weights under weight
+        # decay.  Default False keeps Run 5 behaviour bit-identical.
+        sew_shortcut: bool = False,
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -148,6 +157,8 @@ class HybridBlock(Module):
         #   - hp_lambda:  per-channel learnable scale, init to the scalar.
         self.high_pass_residual_weight = float(high_pass_residual_weight)
         self.high_pass_kernel_size = int(high_pass_kernel_size)
+        # Run 5 PLIF-dead fix #3 -- SEW (Spike-Element-Wise) shortcut.
+        self.sew_shortcut = bool(sew_shortcut)
         if self.high_pass_residual_weight != 0.0:
             if self.high_pass_kernel_size < 1:
                 raise ValueError(
@@ -198,7 +209,17 @@ class HybridBlock(Module):
         a = self.ln1(x)
         h = self.liquid(a)              # (B, T, d)
         s, _ = self.plif.forward_seq(h)  # (B, T, d) spikes in {0,1}
-        gated = self.synapse(s) * torch.sigmoid(self.gate(s))
+        if self.sew_shortcut:
+            # arXiv:2102.04159 SEW residual: bypass the spike branch with
+            # the LiquidCell output, ensuring the LM gradient still flows
+            # to ``self.liquid`` even when ``s == 0`` everywhere.  The
+            # binary spike still drives the gate-multiplicative branch
+            # so spike-rate stats remain meaningful.  See
+            # docs/PLIF_DEAD_DIAGNOSIS.md fix #3.
+            spike_input = s + h
+        else:
+            spike_input = s
+        gated = self.synapse(spike_input) * torch.sigmoid(self.gate(spike_input))
         x = x + self.drop(gated)
 
         # ---- SwiGLU FFN ---- (residual #2)
@@ -278,6 +299,10 @@ class SynapForge100M(Module):
         # The post-thinking hidden replaces the last position. Default 0
         # disables latent thinking entirely (zero-overhead, identity
         # behaviour vs the pre-T2.9 baseline).
+        sew_shortcut: bool = False,
+        # Run 5 PLIF-dead fix #3 -- SEW (Spike-Element-Wise) shortcut
+        # in every HybridBlock.  Default False keeps the Run 5 code path
+        # bit-identical.  See HybridBlock ctor for full rationale.
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -300,6 +325,7 @@ class SynapForge100M(Module):
         self.plif_tau_init = plif_tau_init
         self.high_pass_residual_weight = float(high_pass_residual_weight)
         self.latent_k = int(latent_k)
+        self.sew_shortcut = bool(sew_shortcut)
         if self.latent_k < 0:
             raise ValueError(f"latent_k must be >= 0, got {latent_k}")
 
@@ -313,7 +339,8 @@ class SynapForge100M(Module):
                         dropout=dropout,
                         weight_quant=self.weight_quant_cfc,
                         plif_tau_init=self.plif_tau_init,
-                        high_pass_residual_weight=self.high_pass_residual_weight)
+                        high_pass_residual_weight=self.high_pass_residual_weight,
+                        sew_shortcut=self.sew_shortcut)
             for _ in range(n_layers)
         )
         self.ln_f = _RMSNorm(d)
@@ -518,6 +545,7 @@ def build_synapforge_100m(
     plif_tau_init: "float | str" = 2.5,
     high_pass_residual_weight: float = 0.0,
     latent_k: int = 0,
+    sew_shortcut: bool = False,
 ) -> SynapForge100M:
     return SynapForge100M(
         vocab=vocab, d=d, n_layers=n_layers, loop_depth=loop_depth,
@@ -532,6 +560,7 @@ def build_synapforge_100m(
         plif_tau_init=plif_tau_init,
         high_pass_residual_weight=high_pass_residual_weight,
         latent_k=latent_k,
+        sew_shortcut=sew_shortcut,
     )
 
 

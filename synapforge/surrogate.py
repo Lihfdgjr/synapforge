@@ -321,6 +321,17 @@ class PLIFCell(nn.Module):
         if reset not in ("subtract", "zero"):
             raise ValueError(f"reset must be 'subtract' or 'zero', got {reset!r}")
         self.hidden = int(hidden)
+        # ---- Run 5 PLIF-dead fix #1: dense-bypass mode (default OFF) ----
+        # When ``dense_bypass=True`` (set externally by the trainer for the
+        # first N warmup steps), ``forward`` returns ``tanh(v_t - thr)`` as
+        # a continuous "soft spike" signal in (-1, 1) instead of the binary
+        # {0, 1} indicator.  Crucially this keeps the LM gradient flowing
+        # through ``liquid -> synapse`` because the spike branch is no
+        # longer multiplied by the all-zero ``s_t``.  After the warmup
+        # window the trainer toggles the flag back to False and the cell
+        # resumes binary spike emission with the surrogate gradient.
+        # See docs/PLIF_DEAD_DIAGNOSIS.md hypothesis (f) and fix #1.
+        self.dense_bypass: bool = False
         # log_tau is learnable; ensures tau > 0 via exp().
         # DA-LIF (Wang 2502.10422) heterogeneous tau init breaks degenerate
         # all-channels-identical start; +30% expressivity vs uniform init.
@@ -447,11 +458,21 @@ class PLIFCell(nn.Module):
         decay_c = decay.to(x_t.dtype)
         thr_c = self.threshold.to(x_t.dtype)
         v_t = decay_c * v_prev + (1.0 - decay_c) * x_t
-        s_t = spike(v_t, thr_c, surrogate=self.surrogate, alpha=self.alpha)
-        if self.reset == "subtract":
-            v_t = v_t - s_t * thr_c
-        else:  # "zero"
-            v_t = v_t * (1.0 - s_t)
+        if self.dense_bypass:
+            # Run 5 PLIF-dead fix #1: continuous "soft spike" so the LM
+            # gradient flows back through ``synapse(s_t)`` even when no
+            # binary spikes would fire.  Range (-1, 1) preserves sign so
+            # positive-membrane channels emit a positive contribution.
+            # Identity-shape with the binary path -> downstream gating
+            # is undisturbed.  No reset (membrane keeps integrating) so
+            # liquid_out keeps full LM gradient through the recurrence.
+            s_t = torch.tanh(v_t - thr_c)
+        else:
+            s_t = spike(v_t, thr_c, surrogate=self.surrogate, alpha=self.alpha)
+            if self.reset == "subtract":
+                v_t = v_t - s_t * thr_c
+            else:  # "zero"
+                v_t = v_t * (1.0 - s_t)
         # Record latest spike rate (mean over batch+channels) for monitoring.
         # ``_last_spike_rate`` is detached (.item() / read-only inspection);
         # ``_last_spike_rate_live`` keeps autograd so T2.5's
