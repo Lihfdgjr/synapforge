@@ -1,17 +1,10 @@
-"""synapforge.native -- pure-numpy native kernels and gradient catalogues.
-
-Sub-packages
-------------
-vjp/
-    Closed-form vector-Jacobian products for every op in HybridBlock.
-    Zero torch imports; fp32 default with optional dtype promotion.
-
-This package is the long-term replacement for torch.autograd in the
-SynapForge training and inference paths. The closed forms here avoid
-the float-rounding drift introduced by chain-rule autograd traversal
-of the LNN+SNN hybrid block.
-"""
+"""Native synapforge -- pure LNN+SNN training framework, zero torch in production code."""
 
 from __future__ import annotations
 
-__all__ = ["vjp"]
+__version__ = "0.1.0-integration"
+
+# NOTE: subpackages (vjp, data, bench, cuda, spike, stdp, kernel, dispatch,
+# modal, auxsched) are imported lazily by callers to avoid forcing optional
+# heavy dependencies (cupy, triton, transformers) at package import time.
+__all__: list[str] = ["__version__"]
