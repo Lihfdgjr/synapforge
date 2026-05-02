@@ -794,6 +794,43 @@ Read `grep "VAL step" /workspace/runs/v24h_qwen3/train_run3*.log | tail -3`. If 
 - **Next step**: launch a 1500-step warmstart run on the rental with `--neuromcp-weight 0.05 --neuromcp-codebook-size 16` and verify density crosses 0.10 + K grows by 200 steps. Promote weight to 0.1 once base ppl < 250 (matches the curiosity / multimodal phase-trigger schedule in H5).
 - **Commit**: `auto-neuromcp-wire: NeuroMCPMixin + trainer flag + 4 tests; default OFF, opt-in via --neuromcp-weight`.
 
+## T9.5 — GRPO RL trainer (phase 4 post-SFT polish)
+- [x] (feature/grpo-trainer, GRPO loss + sympy/AST verifiers + KL penalty + 16 tests; awaits T9.4 SFT ckpt) **Status**: shipped on `feature/grpo-trainer`.
+- **Goal**: phase-4 RL post-training that pushes ppl from 80 (post-SFT) to 20-30 by training against verifier-derived rewards on math chain-of-thought rollouts. Equivalent path for code via `--rl-verifier ast` + HumanEval/MBPP. This is the H5 phase-4 trigger described at the top of the queue (`--rl-grpo --rl-verifier sympy --rl-rollouts 8`).
+- **Files**:
+  - `synapforge/training/grpo.py` (~440 LOC): canonical GRPO loss (Schulman k3 KL estimator clamped at -r<=20 for fp32 safety, on-policy/off-policy aware), `compute_advantages` group-normaliser, two verifiers (`sympy_verifier`, `ast_verifier`), `freeze_reference_policy` deepcopy helper, `sample_rollouts_mock` for CPU CI, registry + `get_verifier`. AST verifier is **NEVER-EXEC** by contract: parses AST, walks for forbidden names/imports/attributes, refuses unsafe rollouts.
+  - `synapforge/training/__init__.py`: re-exports the GRPO surface alongside EMA + NeuroMCP.
+  - `train_100m_rl.py` (~480 LOC): full Phase-4 launcher. CLI flags `--rl-rollouts/--rl-verifier/--rl-temperature/--rl-data/--rl-clip/--rl-kl-beta/--rl-max-new`. Loads SFT warmstart, snapshots frozen reference policy at startup (the KL anchor), iterates `_one_grpo_step` per prompt batch, saves best-by-reward checkpoints. Mock-rollout `--smoke` path runs 3 steps on CPU without GPU/model — used by CI.
+  - `tests/integration/test_grpo_trainer.py` (16 tests): the 4 contract tests (`test_grpo_loss_computation_correct`, `test_sympy_verifier_correct_for_simple_math`, `test_ast_verifier_safe_no_exec`, `test_kl_penalty_prevents_drift`) plus 12 supporting cases (advantage normaliser, get_verifier registry, deep-copy independence of frozen ref, mock-rollout determinism, dry-run + smoke entrypoints, regex extractor). All 16 pass on Windows CPU in ~2.4s.
+- **Default behaviour**: `train_100m_rl.py` is opt-in; the existing SFT/KD trainers are unchanged. To launch RL on a SFT ckpt:
+  ```
+  python train_100m_rl.py \
+    --warmstart /workspace/runs/v24h_qwen_sft/best_step_XXXX.pt \
+    --tokenizer-path /workspace/teachers/qwen2.5-0.5b \
+    --rl-data gsm8k --rl-verifier sympy \
+    --rl-rollouts 8 --rl-temperature 0.7 --rl-kl-beta 0.01 \
+    --steps 500 --batch-size 4 --lr 1e-6
+  ```
+- **KL penalty load-bearing**: GRPO without KL collapses to short-but-correct rollouts within ~50 steps and erases chat ability. β=0.01 (DeepSeek-R1 default). Test `test_kl_penalty_prevents_drift` pins this contract on a toy model.
+- **AST verifier security boundary**: `test_ast_verifier_safe_no_exec` pins the contract that `ast_verifier` MUST NOT execute model output. The verifier walks the AST and rejects any rollout containing `exec`/`eval`/`os.system`/`__import__`/`open`/`subprocess`/etc., AND rejects sandbox-escape patterns like `().__class__.__bases__[0]`. Reward signal comes from numeric-pattern match on the rollout text, not from execution. Full code-execution RL (compare program stdout vs expected) is out of scope here — needs subprocess + seccomp + nsjail in a sandboxed worker, follow-up task.
+- **Trigger**: ALL of the following:
+  1. T9.4 (sister-agent SFT trainer) lands a working `train_100m_sft.py` on `main`.
+  2. SFT run on `/workspace/runs/v24h_qwen_sft` produces a `best_step_*.pt` with val ppl ≤ 100 (the phase-3 → phase-4 gate from MASTER_PLAN.md §3).
+  3. `scripts/tokenize_gsm8k.py` has populated `/workspace/data/math/gsm8k_qwen.parquet` with ≥ 1000 rows (already shipped as T3.5).
+  4. Rental A800 has ≥ 4 GPU-h on the clock.
+- **Verification (CPU, run anywhere)**:
+  ```
+  python -m pytest tests/integration/test_grpo_trainer.py -v
+  # 16 passed in ~2.4s
+  python train_100m_rl.py --smoke --rl-rollouts 4 --rl-verifier ast
+  python train_100m_rl.py --smoke --rl-rollouts 4 --rl-verifier sympy
+  ```
+- **Abort criteria during real run**:
+  - step <50: r_mean stays at 0.0 (verifier never matches) -> kill, the model isn't producing extractable answers; lower temperature or reduce rollout length first.
+  - step 100-500: KL term blows up (>10) -> drop `--rl-kl-beta` to 0.005 or restart from SFT ckpt; means policy drifted into unrecoverable state.
+  - step >500: r_mean plateaus at <0.05 over 200 steps -> verifier is too sparse for this base model; promote sister tasks (e.g. easier MATH-GSM8K-easy subset) before re-attempting.
+- **Commit**: `auto-T9.5: GRPO RL trainer + sympy/AST verifiers + KL penalty + tests`.
+
 ## T9.1 — Synap-1 Pro 300M launch (post Run 3o completion)
 - [ ] **Status**: STAGED — script + plan landed, awaiting trigger.
 - **Trigger**: ALL of the following:
