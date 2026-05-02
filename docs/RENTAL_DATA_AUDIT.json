@@ -1,0 +1,1213 @@
+{
+  "kind": "rental_data_audit",
+  "generated_utc": "2026-05-02T12:01:59Z",
+  "hosts": [
+    {
+      "roots": [
+        "/home/liu/lnn-train/data"
+      ],
+      "entries": [
+        {
+          "path": "/home/liu/lnn-train/data/sft_gold_v1.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 7011,
+          "rows": 8,
+          "samples": [
+            "{\"messages\":[{\"role\":\"user\",\"content\":\"Find all positive integers n such that n^2 + 3n + 1 is a perfect square.\"},{\"role\":\"assistant\",\"content\":\"Step 1: Suppose n^2+3n+1=k^2. Step 2: n^2 < n^2+3n+1 so k>n. Step 3: n^2+3n+1 < (n+2)^2 = n^2+4n+4 since 3n+1 < 4n+4. Step 4: So k is s",
+            "{\"messages\":[{\"role\":\"user\",\"content\":\"This Python has an O(n^2) bug. Fix it.\\n\\ndef find_duplicates(items):\\n    seen = []\\n    dups = []\\n    for x in items:\\n        if x in seen: dups.append(x)\\n        else: seen.append(x)\\n    return dups\"},{\"role\":\"assistant\",\"content\":\"St",
+            "{\"messages\":[{\"role\":\"user\",\"content\":\"Alice, Bob, Carol, Dave each have a different pet (cat, dog, fish, rabbit). (1) Alice no cat, no dog. (2) Bob's pet can swim. (3) Carol's pet has fur. (4) Dave no fish. Who has what?\"},{\"role\":\"assistant\",\"content\":\"Step 1: Attributes - cat:"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/sft_seed_v2.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 15725875,
+          "row_estimate": "1000+ (sampled)",
+          "rows": 1000,
+          "samples": [
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a helpful assistant. Always explain your reasoning step by step BEFORE giving the final answer. Start your response with `Let me think step by step.` and use numbered steps (1., 2., 3., ...). End with a clear final answer line ",
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a helpful assistant. Always explain your reasoning step by step BEFORE giving the final answer. Start your response with `Let me think step by step.` and use numbered steps (1., 2., 3., ...). End with a clear final answer line ",
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"你是一个乐于助人的助手。回答任何问题前请先分步推理。请以 `让我一步步思考。` 开头,用编号 1.、2.、3. 列出每一步,最后以 `所以答案是: ...` 清晰给出最终结论。若是数学应用题请以 `#### <数字>` 结尾。\"}, {\"role\": \"user\", \"content\": \"用食物类比给 10 岁小孩解释版本控制。\"}, {\"role\": \"assistant\", \"content\": \"让我一步步思考。\\n\\n1. 首先，我需要理解什么是版本控制。"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/sft_combined.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 15580119,
+          "row_estimate": "1000+ (sampled)",
+          "rows": 1000,
+          "samples": [
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a helpful assistant. Always explain your reasoning step by step BEFORE giving the final answer. Start your response with `Let me think step by step.` and use numbered steps (1., 2., 3., ...). End with a clear final answer line ",
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a helpful assistant. Always explain your reasoning step by step BEFORE giving the final answer. Start your response with `Let me think step by step.` and use numbered steps (1., 2., 3., ...). End with a clear final answer line ",
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"你是一个乐于助人的助手。回答任何问题前请先分步推理。请以 `让我一步步思考。` 开头,用编号 1.、2.、3. 列出每一步,最后以 `所以答案是: ...` 清晰给出最终结论。若是数学应用题请以 `#### <数字>` 结尾。\"}, {\"role\": \"user\", \"content\": \"用食物类比给 10 岁小孩解释版本控制。\"}, {\"role\": \"assistant\", \"content\": \"让我一步步思考。\\n\\n1. 首先，我需要理解什么是版本控制。"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/sft_seed_v1.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 759901,
+          "rows": 492,
+          "samples": [
+            "{\"messages\": [{\"role\": \"user\", \"content\": \"A bat and a ball cost $1.10 in total. The bat costs $1.00 more than the ball. How much does the ball cost? Show how to avoid the intuitive wrong answer.\"}, {\"role\": \"assistant\", \"content\": \"Let's solve this step by step and carefully avo",
+            "{\"messages\": [{\"role\": \"user\", \"content\": \"Ida has 112 cookies. He gives 3/5 of them to his sister and keeps the rest. How many does he have left? Step by step, end with `#### <number>`.\"}, {\"role\": \"assistant\", \"content\": \"Step 1: Find the number of cookies Ida gives to his sist",
+            "{\"messages\": [{\"role\": \"user\", \"content\": \"Someone asks: 'Is it true that cracking your knuckles causes arthritis?' Confirm or debunk with two pieces of reasoning.\"}, {\"role\": \"assistant\", \"content\": \"Debunked. Two pieces of reasoning:\\n\\n1. Lack of Direct Causation: Multiple stu"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/sft_seed_v3.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 40637790,
+          "row_estimate": "1000+ (sampled)",
+          "rows": 1000,
+          "samples": [
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a helpful assistant. Always explain your reasoning step by step BEFORE giving the final answer. Start your response with `Let me think step by step.` and use numbered steps (1., 2., 3., ...). End with a clear final answer line ",
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"You are a helpful assistant. Always explain your reasoning step by step BEFORE giving the final answer. Start your response with `Let me think step by step.` and use numbered steps (1., 2., 3., ...). End with a clear final answer line ",
+            "{\"messages\": [{\"role\": \"system\", \"content\": \"你是一个乐于助人的助手。回答任何问题前请先分步推理。请以 `让我一步步思考。` 开头,用编号 1.、2.、3. 列出每一步,最后以 `所以答案是: ...` 清晰给出最终结论。若是数学应用题请以 `#### <数字>` 结尾。\"}, {\"role\": \"user\", \"content\": \"用食物类比给 10 岁小孩解释版本控制。\"}, {\"role\": \"assistant\", \"content\": \"让我一步步思考。\\n\\n1. 首先，我需要理解什么是版本控制。"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/tool_use_sft.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 266685,
+          "row_estimate": "1000+ (sampled)",
+          "rows": 1000,
+          "samples": [
+            "{\"messages\": [{\"role\": \"user\", \"content\": \"What is 756 + 106?\"}, {\"role\": \"assistant\", \"content\": \"<boa><tool name=\\\"code_exec\\\">print(756 + 106)</tool><eoa>\"}]}\n",
+            "{\"messages\": [{\"role\": \"user\", \"content\": \"List files in the current directory\"}, {\"role\": \"assistant\", \"content\": \"<boa><tool name=\\\"shell\\\">ls -la</tool><eoa>\"}]}\n",
+            "{\"messages\": [{\"role\": \"user\", \"content\": \"Read this page: https://arxiv.org/abs/1706.03762\"}, {\"role\": \"assistant\", \"content\": \"<boa><tool name=\\\"web_fetch\\\">https://arxiv.org/abs/1706.03762</tool><eoa>\"}]}\n"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/slimpajama/train-00000.parquet",
+          "kind": "parquet",
+          "size_bytes": 104812716,
+          "error": "ArrowInvalid('Parquet magic bytes not found in footer. Either the file is corrupted or this is not a parquet file.')"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/msrvtt/train-00000-of-00001-60e50ff5fbbd1bb5.parquet",
+          "kind": "parquet",
+          "size_bytes": 553413,
+          "rows": 6513,
+          "schema": [
+            [
+              "video_id",
+              "string"
+            ],
+            [
+              "caption",
+              "string"
+            ],
+            [
+              "sen_id",
+              "int64"
+            ],
+            [
+              "category",
+              "int64"
+            ],
+            [
+              "url",
+              "string"
+            ],
+            [
+              "start time",
+              "double"
+            ],
+            [
+              "end time",
+              "double"
+            ],
+            [
+              "split",
+              "string"
+            ],
+            [
+              "id",
+              "int64"
+            ],
+            [
+              "__index_level_0__",
+              "int64"
+            ]
+          ],
+          "text_column": "video_id",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "video0",
+            "video1",
+            "video10"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/msrvtt/video_cache.memmap.captions.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 206650,
+          "row_estimate": "1000+ (sampled)",
+          "rows": 1000,
+          "samples": [
+            "{\"index\": 0, \"video_id\": \"video7010\", \"caption\": \"person is showing how to illegally download songs\"}\n",
+            "{\"index\": 1, \"video_id\": \"video7011\", \"caption\": \"clip showing different colors\"}\n",
+            "{\"index\": 2, \"video_id\": \"video7012\", \"caption\": \"a man sitting in black chair discusses mental health and psychology\"}\n"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/msrvtt/val-00000-of-00001-01bacdd7064306bc.parquet",
+          "kind": "parquet",
+          "size_bytes": 44835,
+          "rows": 497,
+          "schema": [
+            [
+              "video_id",
+              "string"
+            ],
+            [
+              "caption",
+              "string"
+            ],
+            [
+              "sen_id",
+              "int64"
+            ],
+            [
+              "category",
+              "int64"
+            ],
+            [
+              "url",
+              "string"
+            ],
+            [
+              "start time",
+              "double"
+            ],
+            [
+              "end time",
+              "double"
+            ],
+            [
+              "split",
+              "string"
+            ],
+            [
+              "id",
+              "int64"
+            ],
+            [
+              "__index_level_0__",
+              "int64"
+            ]
+          ],
+          "text_column": "video_id",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "video6513",
+            "video6514",
+            "video6515"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/msrvtt/captions.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 3393563,
+          "row_estimate": "1000+ (sampled)",
+          "rows": 1000,
+          "samples": [
+            "{\"video_id\": \"video7010\", \"video_path\": \"data/msrvtt/TestVideo/video7010.mp4\", \"captions\": [\"a clip showing a computer screen which contains instructions\", \"a person explaining how to download song\", \"a person is showing what to do on their computer\", \"a person provides instructi",
+            "{\"video_id\": \"video7011\", \"video_path\": \"data/msrvtt/TestVideo/video7011.mp4\", \"captions\": [\"a animation is shown to help learn colors\", \"a commercial for paint\", \"a pain can singing\", \"a purple paint can is moving around\", \"a song about colors with paint cans\", \"an advert of a d",
+            "{\"video_id\": \"video7012\", \"video_path\": \"data/msrvtt/TestVideo/video7012.mp4\", \"captions\": [\"a suit man is talking from a studio with fun\", \"a man seated in a chair discusses mental health disorders\", \"an animated man discusses nature and the curability of mental disorders\", \"a m"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/fineweb_edu/000_00000.parquet",
+          "kind": "parquet",
+          "size_bytes": 2152819114,
+          "rows": 726000,
+          "schema": [
+            [
+              "text",
+              "string"
+            ],
+            [
+              "id",
+              "string"
+            ],
+            [
+              "dump",
+              "string"
+            ],
+            [
+              "url",
+              "string"
+            ],
+            [
+              "file_path",
+              "string"
+            ],
+            [
+              "language",
+              "string"
+            ],
+            [
+              "language_score",
+              "double"
+            ],
+            [
+              "token_count",
+              "int64"
+            ],
+            [
+              "score",
+              "double"
+            ],
+            [
+              "int_score",
+              "int64"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "The Independent Jane\nFor all the love, romance and scandal in Jane Austen’s books, what they are really about is freedom and independence. Independence of thought and the freedom to choose.\nElizabeth’s refusal of Mr. Collins offer of marriage showed an independence seldom seen in",
+            "Taking Play Seriously\nBy ROBIN MARANTZ HENIG\nPublished: February 17, 2008\nOn a drizzly Tuesday night in late January, 200 people came out to hear a psychiatrist talk rhapsodically about play -- not just the intense, joyous play of children, but play for all people, at all ages, a",
+            "How do you get HIV?\nHIV can be passed on when infected bodily fluid, such as blood or semen, is passed into an uninfected person. Semen is the liquid which is released from a man's penis during sex which carries sperm. It can be infected with HIV or AIDS when someone is HIV posit"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wiki_zh/train-00000.parquet",
+          "kind": "parquet",
+          "size_bytes": 587109027,
+          "rows": 230792,
+          "schema": [
+            [
+              "id",
+              "string"
+            ],
+            [
+              "url",
+              "string"
+            ],
+            [
+              "title",
+              "string"
+            ],
+            [
+              "text",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "数学，是研究數量、结构以及空间等概念及其变化的一門学科，屬於形式科學的一種。數學利用抽象化和邏輯推理，從計數、計算、量度、對物體形狀及運動的觀察發展而成。數學家們拓展這些概念，以公式化新的猜想，以及從選定的公理及定義出發，嚴謹地推導出一些定理。\n\n基礎數學的知識與運用是生活中不可或缺的一環。對數學基本概念的完善，早在古埃及、美索不达米亚及古印度历史上的古代數學文本便可觀見，而在古希臘那裡有更為嚴謹的處理。從那時開始，數學的發展便持續不斷地小幅進展，至16世紀的文藝復興時期，因为新的科學發現和數學革新兩者的交互，致使數學的加速发展，直至今日。数学并成为許多",
+            "哲學是研究普遍的、基本问题的学科，包括存在、知识、价值、理智、心灵、语言等领域。哲学与其他学科不同之處在於哲學有獨特之思考方式，例如批判的方式、通常是系统化的方法，并以理性论证為基礎。在日常用语中，哲學可被引申为个人或团体的最基本信仰、概念或态度，不过此处并非此定义。\n\n简介\n\n词源 \n英語詞語（）源于古希臘語中的，意思為「愛智慧」，有时也译为「智慧的朋友」，该词由（philos，爱）的派生词（philein，去爱）和（sophia，智慧）组合而成。一般认为，古希腊思想家毕达哥拉斯最先在著作中引入“哲学家”和“哲学”这两个术语。\n\n“哲”一词在中国古代指",
+            "文學（），在狭义上，是一种语言艺术，亦即使用语言文字为手段，形象化地反映客观社会生活、表达主观作者思想感情的一种艺术。文学不仅强调传达思想观念，更强调传达方式的独特性，且讲究辞章的美感。\n\n文学，在广义上，是任何單一的書面作品，或用文字写作来传达思想、表达情感、发挥想像的所有著作，此时又称文学作品。文學寫作則是一種藝術形式，或被認為具有藝術或智力價值的任何單一作品，通常是由於以不同於普通用途的方式部署語言。中国先秦时期将以文字写成的作品都统称为文学，魏晋以后才逐渐将文学作品单独列出。在现代，則通常将文学分为韻文、散文、劇本、小说四大类别，是文化的重要表现"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/smollm_pyedu/train-00001.parquet",
+          "kind": "parquet",
+          "size_bytes": 321969574,
+          "rows": 3839224,
+          "schema": [
+            [
+              "blob_id",
+              "string"
+            ],
+            [
+              "repo_name",
+              "string"
+            ],
+            [
+              "path",
+              "string"
+            ],
+            [
+              "length_bytes",
+              "int64"
+            ],
+            [
+              "score",
+              "double"
+            ],
+            [
+              "int_score",
+              "int64"
+            ]
+          ],
+          "text_column": "blob_id",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "db910133a5e59ddd85326bc07b57237620a0c832",
+            "f23ddc38550cdd5eb0e50eba5833dbfc4fab1b8a",
+            "b9d8cd5b46c8ca195ffaae63c03e5d87a5998955"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/smollm_pyedu/train-00000.parquet",
+          "kind": "parquet",
+          "size_bytes": 321933475,
+          "rows": 3839224,
+          "schema": [
+            [
+              "blob_id",
+              "string"
+            ],
+            [
+              "repo_name",
+              "string"
+            ],
+            [
+              "path",
+              "string"
+            ],
+            [
+              "length_bytes",
+              "int64"
+            ],
+            [
+              "score",
+              "double"
+            ],
+            [
+              "int_score",
+              "int64"
+            ]
+          ],
+          "text_column": "blob_id",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "55884a59514464a78f8002779532a7eb01b8331c",
+            "bbdbe92fa64d8a4006a4a6f7ef2ffc862ffaadb2",
+            "dadbdd33b087e16ffcbb985b8b28e1e215f5fc53"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/gen/gen_1777097336.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 289,
+          "rows": 1,
+          "samples": [
+            "{\"seed_hash\": \"fd44f13876f96ff8\", \"genre\": \"math\", \"topic\": \"Solve the Laplace equation on the unit disk with boundary value u(theta) = sin(2 theta).\", \"teacher\": \"kimi\", \"error\": \"api_error_RateLimitError_Error code: 429 - {'error': {'message': 'Your account org-ea581cdf26f948bb"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/gen/gen_1777097296.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 293,
+          "rows": 1,
+          "samples": [
+            "{\"seed_hash\": \"fd44f13876f96ff8\", \"genre\": \"math\", \"topic\": \"Solve the Laplace equation on the unit disk with boundary value u(theta) = sin(2 theta).\", \"teacher\": \"deepseek\", \"error\": \"api_error_APIStatusError_Error code: 402 - {'error': {'message': 'Insufficient Balance', 'type'"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/gen/gen_1777097352.jsonl",
+          "kind": "jsonl",
+          "size_bytes": 290,
+          "rows": 1,
+          "samples": [
+            "{\"seed_hash\": \"fd44f13876f96ff8\", \"genre\": \"math\", \"topic\": \"Solve the Laplace equation on the unit disk with boundary value u(theta) = sin(2 theta).\", \"teacher\": \"qwen\", \"error\": \"api_error_BadRequestError_Error code: 400 - {'error': {'message': 'Access denied, please make sure "
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/agent_gen/cs.txt",
+          "kind": "txt",
+          "size_bytes": 7180,
+          "samples": [
+            "=== ENTRY 1: Halting problem and undecidability ===\nTuring 1936: no total computable H(P,x) deciding if P(x) halts. Diagonal: D(p) loops if H(p,p) else halts. D(D) contradiction. Rice: every nontrivial semantic property undecidable. Halting set K recursively enumerable, not recur"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/agent_gen/qa.txt",
+          "kind": "txt",
+          "size_bytes": 3420,
+          "samples": [
+            "Q1 水结冰膨胀: H2O 104.5° + 4 配位 → 冰 Ih 正四面体笼留六角空腔, +9% 体积, 0.917 vs 1.000 g/cm³。湖面浮冰保温水生生态。Q2 天空蓝日落红: Rayleigh σ∝1/λ⁴, N2/O2 偶极子重辐射, 日落 38× 路径蓝散尽。50-100km 转换。Q3 TLS 混合加密: 非对称 1000-10000× 慢于对称, ECDHE 一次/会话 + AES-GCM 全量数据。前向保密 ephemeral 销毁。后量子 ML-KEM 5-50× 大于 ECC。Q4 TCP slow-start: 不知带"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/agent_gen/math.txt",
+          "kind": "txt",
+          "size_bytes": 6231,
+          "samples": [
+            "=== PROBLEM 1: x^2 + y^2 = 5z^2 ===\nFind all integer solutions. By gcd reduction WLOG gcd(x,y,z)=1. Mod 5: residues {0,1,4}, so {x^2 mod 5, y^2 mod 5} = {1,4}. Mod 4: forces z odd, exactly one of x,y even. In Z[i]: 5 = (2+i)(2-i). Parametric family: x = d(2(a^2-b^2) - 2ab), y = d"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/agent_gen/physics.txt",
+          "kind": "txt",
+          "size_bytes": 13028,
+          "samples": [
+            "=== ENTRY 1: Newton's laws and conservation of momentum ===\n\nStatement: A body remains in uniform motion unless acted on by an external force; the net force on a body equals the time derivative of its momentum, F = dp/dt; every action has an equal and opposite reaction. From the "
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/synth/agent_gen/howto.txt",
+          "kind": "txt",
+          "size_bytes": 4763,
+          "samples": [
+            "W1 Python profile: cProfile -o run.prof + snakeviz 找 cumtime → py-spy --pid 采样 (无侵入) 出 flame.svg → line_profiler @profile 找具体行 % Time。坑: I/O 瓶颈 strace -c; ptrace_scope sudo; @profile 装到 wrapper。W2 内存泄漏: PYTHONTRACEMALLOC=10 启动前。take_snapshot baseline → 跑负载 → compare_to 出 +382MiB "
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0006.parquet",
+          "kind": "parquet",
+          "size_bytes": 460852251,
+          "rows": 2039,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "BLUSHES ARE VERY BECOMING OH YOU NEEDN'T PRETEND YOU DON'T KNOW YOU'RE HANDSOME YOU'RE A PERFECT LITTLE BEAUTY DO TELL ME WHERE DID YOU GET SUCH SPLENDID EYES BUT I NEEDN'T ASK FOR I HAVE ONLY TO LOOK AT YOUR FATHER TO SEE WHERE THEY CAME FROM",
+            "MISTER DINSMORE TO ELSIE'S PAPA WHO JUST THEN CAME TOWARD THEM YOU OUGHT TO BE VERY PROUD OF THIS CHILD SHE IS THE VERY IMAGE OF YOURSELF AND A PERFECT LITTLE BEAUTY TOO",
+            "MISS STEVENS IS PLEASED TO FLATTER ME HE SAID BOWING LOW BUT FLATTERY IS NOT GOOD FOR EITHER GROWN UP CHILDREN OR YOUNGER ONES AND I MUST BEG LEAVE TO DECLINE THE COMPLIMENT"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0005.parquet",
+          "kind": "parquet",
+          "size_bytes": 453059318,
+          "rows": 2039,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "BUT IF SHE IS REALLY HEADSTRONG AND FOOLISH I KNOW NOT WHETHER SHE WOULD ALTOGETHER BE A VERY DESIRABLE WIFE TO A MAN IN MY SITUATION WHO NATURALLY LOOKS FOR HAPPINESS IN THE MARRIAGE STATE",
+            "IF THEREFORE SHE ACTUALLY PERSISTS IN REJECTING MY SUIT PERHAPS IT WERE BETTER NOT TO FORCE HER INTO ACCEPTING ME BECAUSE IF LIABLE TO SUCH DEFECTS OF TEMPER SHE COULD NOT CONTRIBUTE MUCH TO MY FELICITY",
+            "SIR YOU QUITE MISUNDERSTAND ME SAID MISSUS BENNET ALARMED LIZZY IS ONLY HEADSTRONG IN SUCH MATTERS AS THESE IN EVERYTHING ELSE SHE IS AS GOOD NATURED A GIRL AS EVER LIVED"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0003.parquet",
+          "kind": "parquet",
+          "size_bytes": 464400585,
+          "rows": 2039,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "WE WANT YOU TO ACCEPT A LARGE SAMPLE BOTTLE WITH OUR COMPLIMENTS WE WANT YOU TO KNOW WHAT A REMARKABLE REMEDY THIS IS IF YOU DON'T NEED IT YOURSELF GET IT FOR SOME FRIEND THE TRUTH IS HOWEVER THAT EVERYONE SHOULD USE GOLDEN RULE HAIR RESTORATIVE AS A DRESSING FOR THE HAIR TO KEEP",
+            "JUST AS YOU USE A DENTRIFICE TO KEEP THE TEETH DAINTY AND HEALTHY GET THIS BOTTLE AND TRY IT REMEMBER ITS CONTINUED USE TENDS TO STOP HAIR FROM FALLING BY PROMOTING A VIGOROUS GROWTH OF HEALTHY HAIR REMEMBER THAT IT RESTORES COLOR TO THE HAIR",
+            "AND THE BOTTLE WILL COME BY FIRST MAIL IN A PLAIN WRAPPER WITH FULL EXPLANATIONS"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0011.parquet",
+          "kind": "parquet",
+          "size_bytes": 432464858,
+          "rows": 2038,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "AND WE ARE ALWAYS FREE TO SPEAK OF THEM IN OBJECTIVE AS WELL AS IN SUBJECTIVE TERMS WE CAN SAY THAT WE ARE AWARE OF A PAINFUL PLACE FILLING A CERTAIN BIGNESS IN OUR ORGANISM",
+            "OR WE CAN SAY THAT WE ARE INWARDLY IN A STATE OF PAIN ALL OUR ADJECTIVES OF WORTH ARE SIMILARLY AMBIGUOUS",
+            "OR IS IT A FEELING IN OUR MIND PRACTICALLY WE TREAT IT AS BOTH OR AS EITHER ACCORDING TO THE TEMPORARY DIRECTION OF OUR THOUGHT BEAUTY SAYS PROFESSOR SANTAYANA IS PLEASURE OBJECTIFIED"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0007.parquet",
+          "kind": "parquet",
+          "size_bytes": 451701540,
+          "rows": 2038,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "TUMID AND THREATENING PROCEEDING UP THE LEFT LEG IN A SPIRAL MANNER AN UNNATURAL HARDNESS AND REDNESS WOULD HAVE BEEN DISCOVERED ON THE UPPER ASPECT OF THE CALF",
+            "AND ABOVE THE KNEE AND ON THE INNER SIDE AN EXTRAORDINARY EXPANSE OF BRUISED SURFACE A KIND OF CLOSELY STIPPLED SHADING OF CONTUSED POINTS",
+            "THE RIGHT LEG WOULD BE FOUND TO BE BRUISED IN A MARVELLOUS MANNER ALL ABOUT AND UNDER THE KNEE AND PARTICULARLY ON THE INTERIOR ASPECT OF THE KNEE SO FAR WE MAY PROCEED WITH OUR DETAILS"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0008.parquet",
+          "kind": "parquet",
+          "size_bytes": 464545879,
+          "rows": 2038,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "IMPOSSIBLE TO DESCRIBE WERE ACTED IN THE THEATRE THE HORRIBLE RITES OF THE EASTERN RELIGIONS WERE PRACTISED OPENLY THERE WAS NEITHER DISCIPLINE NOR ORDER IN THE SCHOOLS",
+            "THE WEALTHIER STUDENTS GLORIED IN THEIR BAD REPUTATION THEY WERE YOUNG MEN OF FASHION WHO WERE CAPABLE OF ANYTHING AND WHO WERE CAREFUL TO LET OTHERS KNOW IT THEY WENT BY THE NAME OF SMASHERS OR UPSETTERS",
+            "FROM THEIR HABIT OF RAIDING THE SCHOOLS OF PROFESSORS WHOSE TEACHING THEY DID NOT APPROVE AND BREAKING EVERYTHING ON WHICH THEY COULD LAY HANDS THEY TREATED NEW COMERS WITH COARSE BRUTALITY BUT AUGUSTINE SEEMS IN SOME MANNER"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0009.parquet",
+          "kind": "parquet",
+          "size_bytes": 445148714,
+          "rows": 2038,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "THE SUNSHINE THE MEMORIES THE FUTURE WHICH MEANS TO SWEEP THE WHOLE PRECIOUS WORLD UTTERLY AWAY FROM HIS SIGHT BY THE SIMPLE AND APPALLING ACT OF TAKING HIS LIFE JIM",
+            "DISABLED BY A FALLING SPAR AT THE BEGINNING OF A WEEK OF WHICH HIS SCOTTISH CAPTAIN USED TO SAY AFTERWARDS MAN IT'S A PAIRFECT MEERACLE TO ME HOW SHE LIVED THROUGH IT SPENT MANY DAYS STRETCHED ON HIS BACK DAZED BATTERED HOPELESS",
+            "AND TORMENTED AS IF AT THE BOTTOM OF AN ABYSS OF UNREST HE DID NOT CARE WHAT THE END WOULD BE AND IN HIS LUCID MOMENTS OVERVALUED HIS INDIFFERENCE THE DANGER WHEN NOT SEEN HAS THE IMPERFECT VAGUENESS OF HUMAN THOUGHT"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0002.parquet",
+          "kind": "parquet",
+          "size_bytes": 462830007,
+          "rows": 2039,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "AND HE WENT RIGHT ON TALKING ON THURSDAY MISTER WOODCHUCK WENT TO VISIT HIS COUSINS IN THE WEST MISSUS WOODCHUCK IS WORRIED WHAT'S SHE WORRIED ABOUT BROWNIE INQUIRED SHE'S AFRAID HE'S COMING BACK AGAIN",
+            "MISTER CROW EXPLAINED I HAVE HEARD HE WAS LAZY BROWNIE SAID WHAT HAPPENED ON FRIDAY TOMMY FOX MADE A VISIT BUT HE DIDN'T HAVE A GOOD TIME AT ALL MISTER CROW REPORTED",
+            "AND HE LEFT FASTER THAN HE CAME BROWNIE BEAVER WANTED TO KNOW WHERE TOMMY FOX MADE HIS VISIT AT FARMER GREEN'S HEN HOUSE MISTER CROW EXPLAINED WHY DID HE HURRY AWAY BROWNIE ASKED"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0010.parquet",
+          "kind": "parquet",
+          "size_bytes": 454357890,
+          "rows": 2038,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "THE SHOREDITCH INFIRMARY IN HOXTON AND THE SAINT PANCRAS INFIRMARY AND SHE GAINED A REPUTATION BOTH FOR HARD WORK AND EFFICIENCY WHILE HER PATIENTS OFTEN SPOKE OF HER GENTLENESS AND HER KINDNESS NOT CONTENT WITH FORGETTING A PATIENT WHEN DISCHARGED FROM THE HOSPITAL",
+            "AND AT FIRST THEY WERE INCLINED TO LOOK UPON MISS CAVELL AS AN UNTRAINED OUTSIDER BUT HER TACT EFFICIENCY AND SKILL SOON WON THE HEARTS OF THESE GOOD WOMEN WHO AFFORDED HER EVERY COURTESY AND ENTERED INTO CORDIAL COOPERATION WITH HER",
+            "HER HOME SUCCEEDED SO WELL THAT THREE YEARS AFTER ITS COMMENCEMENT MISS CAVELL STARTED ALSO A TRAINING SCHOOL FOR NURSES SHE WAS POPULAR EVERYWHERE IN THE BELGIAN CAPITAL"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0013.parquet",
+          "kind": "parquet",
+          "size_bytes": 449987968,
+          "rows": 2038,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "IT IS THE ADVENT OF THE GREAT NEWSPAPER OWNER AS THE TRUE GOVERNING POWER IN THE POLITICAL MACHINERY OF THE STATE SUPERIOR TO THE OFFICIALS IN THE STATE NOMINATING MINISTERS AND DISMISSING THEM IMPOSING POLICIES AND IN GENERAL USURPING SOVEREIGNTY",
+            "ALL THIS SECRETLY AND WITHOUT RESPONSIBILITY IT IS THE CHIEF POLITICAL EVENT OF OUR TIME AND IS THE PECULIAR MARK OF THIS COUNTRY TO DAY ITS FULL DEVELOPMENT HAS COME ON US SUDDENLY AND TAKEN US BY SURPRISE IN THE MIDST OF A TERRIBLE WAR",
+            "IT WAS UNDREAMT OF BUT A FEW YEARS AGO IT IS ALREADY TO DAY THE CAPITAL FACT OF OUR WHOLE POLITICAL SYSTEM A PRIME MINISTER IS MADE OR DEPOSED BY THE OWNER OF A GROUP OF NEWSPAPERS NOT BY POPULAR VOTE OR BY ANY OTHER FORM OF OPEN AUTHORITY"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0004.parquet",
+          "kind": "parquet",
+          "size_bytes": 486747029,
+          "rows": 2039,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "BUT HER HEART GAVE THANKS FOR HIM DAY AND NIGHT AND SHE WALKED PROUDLY AMONG WOMEN FOR HIS SAKE FANNY DEAR I SHALL HAVE HORSES TO THE CARRIAGE TO DAY TO GO AND CALL ON THESE HALES",
+            "WITH WHAT ASKED MISSUS THORNTON HER BROW SLIGHTLY CONTRACTING",
+            "MISSUS THORNTON DID NOT SPEAK BUT SHE LAID HER WORK ON THE TABLE AND SEEMED TO THINK IT WILL BE A LONG WAY FOR HER TO WALK BACK AT NIGHT"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0012.parquet",
+          "kind": "parquet",
+          "size_bytes": 456996471,
+          "rows": 2038,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "THAT REMINDS ME HE SAID THAT WHEN YOU ENTERED I WAS ON THE POINT OF SIGNING FIVE LITTLE BONDS I HAVE ALREADY SIGNED TWO WILL YOU ALLOW ME TO DO THE SAME TO THE OTHERS PRAY DO SO",
+            "THERE WAS A MOMENT'S SILENCE DURING WHICH THE NOISE OF THE BANKER'S PEN WAS ALONE HEARD WHILE MONTE CRISTO EXAMINED THE GILT MOULDINGS ON THE CEILING ARE THEY SPANISH HAITIAN",
+            "OR NEAPOLITAN BONDS SAID MONTE CRISTO NO SAID DANGLARS SMILING"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0001.parquet",
+          "kind": "parquet",
+          "size_bytes": 481204796,
+          "rows": 2039,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "YOU'LL ALL SWING NOW I RECKON WHAT SOFT HEADED LUBBER HAD A BIBLE IT WAS DICK SAID ONE DICK WAS IT THEN DICK CAN GET TO PRAYERS SAID SILVER",
+            "HE'S SEEN HIS SLICE OF LUCK HAS DICK AND YOU MAY LAY TO THAT BUT HERE THE LONG MAN WITH THE YELLOW EYES STRUCK IN",
+            "WELL WHAT IS IT ANYWAY AH DEPOSED' THAT'S IT IS IT VERY PRETTY WROTE TO BE SURE LIKE PRINT I SWEAR YOUR HAND O WRITE GEORGE"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/librispeech/train-clean-100/0000.parquet",
+          "kind": "parquet",
+          "size_bytes": 469629285,
+          "rows": 2039,
+          "schema": [
+            [
+              "file",
+              "string"
+            ],
+            [
+              "audio",
+              "struct<bytes: binary, path: string>"
+            ],
+            [
+              "text",
+              "string"
+            ],
+            [
+              "speaker_id",
+              "int64"
+            ],
+            [
+              "chapter_id",
+              "int64"
+            ],
+            [
+              "id",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "CHAPTER SIXTEEN I MIGHT HAVE TOLD YOU OF THE BEGINNING OF THIS LIAISON IN A FEW LINES BUT I WANTED YOU TO SEE EVERY STEP BY WHICH WE CAME I TO AGREE TO WHATEVER MARGUERITE WISHED",
+            "MARGUERITE TO BE UNABLE TO LIVE APART FROM ME IT WAS THE DAY AFTER THE EVENING WHEN SHE CAME TO SEE ME THAT I SENT HER MANON LESCAUT FROM THAT TIME SEEING THAT I COULD NOT CHANGE MY MISTRESS'S LIFE I CHANGED MY OWN",
+            "I WISHED ABOVE ALL NOT TO LEAVE MYSELF TIME TO THINK OVER THE POSITION I HAD ACCEPTED FOR IN SPITE OF MYSELF IT WAS A GREAT DISTRESS TO ME THUS MY LIFE GENERALLY SO CALM"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/coco2014/hf_cache/data/train-00000-of-00001.parquet",
+          "kind": "parquet",
+          "size_bytes": 17048402,
+          "rows": 82783,
+          "schema": [
+            [
+              "filepath",
+              "string"
+            ],
+            [
+              "sentids",
+              "list<item: int64>"
+            ],
+            [
+              "filename",
+              "string"
+            ],
+            [
+              "imgid",
+              "int64"
+            ],
+            [
+              "split",
+              "string"
+            ],
+            [
+              "sentences",
+              "list<item: string>"
+            ],
+            [
+              "cocoid",
+              "int64"
+            ],
+            [
+              "url",
+              "string"
+            ]
+          ],
+          "text_column": "filepath",
+          "non_empty_ratio": 1.0,
+          "samples": [
+            "train2014",
+            "train2014",
+            "train2014"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/train-00001.parquet",
+          "kind": "parquet",
+          "size_bytes": 157088770,
+          "rows": 900675,
+          "schema": [
+            [
+              "text",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 0.635,
+          "samples": [
+            " ( * ) Denotes co @-@ producer . \n",
+            " = = Credits and personnel = = \n",
+            " Credits adapted from Allmusic . \n"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/validation.parquet",
+          "kind": "parquet",
+          "size_bytes": 657209,
+          "rows": 3760,
+          "schema": [
+            [
+              "text",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 0.665,
+          "samples": [
+            " = Homarus gammarus = \n",
+            " Homarus gammarus , known as the European lobster or common lobster , is a species of clawed lobster from the eastern Atlantic Ocean , Mediterranean Sea and parts of the Black Sea . It is closely related to the American lobster , H. americanus . It may grow to a length of 60 cm (",
+            " = = Description = = \n"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/test.parquet",
+          "kind": "parquet",
+          "size_bytes": 732610,
+          "rows": 4358,
+          "schema": [
+            [
+              "text",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 0.62,
+          "samples": [
+            " = Robert Boulter = \n",
+            " Robert Boulter is an English film , television and theatre actor . He had a guest @-@ starring role on the television series The Bill in 2000 . This was followed by a starring role in the play Herons written by Simon Stephens , which was performed in 2001 at the Royal Court Thea",
+            " In 2006 , Boulter starred alongside Whishaw in the play Citizenship written by Mark Ravenhill . He appeared on a 2006 episode of the television series , Doctors , followed by a role in the 2007 theatre production of How to Curse directed by Josie Rourke . How to Curse was perfor"
+          ]
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/train-00000.parquet",
+          "kind": "parquet",
+          "size_bytes": 156987808,
+          "rows": 900675,
+          "schema": [
+            [
+              "text",
+              "string"
+            ]
+          ],
+          "text_column": "text",
+          "non_empty_ratio": 0.71,
+          "samples": [
+            " = Valkyria Chronicles III = \n",
+            " Senjō no Valkyria 3 : Unrecorded Chronicles ( Japanese : 戦場のヴァルキュリア3 , lit . Valkyria of the Battlefield 3 ) , commonly referred to as Valkyria Chronicles III outside Japan , is a tactical role @-@ playing video game developed by Sega and Media.Vision for the PlayStation Portabl",
+            " The game began development in 2010 , carrying over a large portion of the work done on Valkyria Chronicles II . While it retained the standard features of the series , it also underwent multiple adjustments , such as making the game more forgiving for series newcomers . Characte"
+          ]
+        }
+      ],
+      "ok": true,
+      "host": "myserver",
+      "scan_seconds": 40.3
+    }
+  ],
+  "summary": [
+    {
+      "host": "myserver",
+      "ok": true,
+      "n_files": 42,
+      "by_kind": {
+        "jsonl": 11,
+        "parquet": 26,
+        "txt": 5
+      },
+      "total_size_gb": 10.33,
+      "parquet_total_rows": 10563040,
+      "n_quality_candidates": 24,
+      "quality_candidates_top10": [
+        {
+          "path": "/home/liu/lnn-train/data/smollm_pyedu/train-00001.parquet",
+          "rows": 3839224,
+          "size_mb": 322.0,
+          "non_empty": 1.0,
+          "text_column": "blob_id"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/smollm_pyedu/train-00000.parquet",
+          "rows": 3839224,
+          "size_mb": 321.9,
+          "non_empty": 1.0,
+          "text_column": "blob_id"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/train-00001.parquet",
+          "rows": 900675,
+          "size_mb": 157.1,
+          "non_empty": 0.635,
+          "text_column": "text"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/train-00000.parquet",
+          "rows": 900675,
+          "size_mb": 157.0,
+          "non_empty": 0.71,
+          "text_column": "text"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/fineweb_edu/000_00000.parquet",
+          "rows": 726000,
+          "size_mb": 2152.8,
+          "non_empty": 1.0,
+          "text_column": "text"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wiki_zh/train-00000.parquet",
+          "rows": 230792,
+          "size_mb": 587.1,
+          "non_empty": 1.0,
+          "text_column": "text"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/coco2014/hf_cache/data/train-00000-of-00001.parquet",
+          "rows": 82783,
+          "size_mb": 17.0,
+          "non_empty": 1.0,
+          "text_column": "filepath"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/msrvtt/train-00000-of-00001-60e50ff5fbbd1bb5.parquet",
+          "rows": 6513,
+          "size_mb": 0.6,
+          "non_empty": 1.0,
+          "text_column": "video_id"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/test.parquet",
+          "rows": 4358,
+          "size_mb": 0.7,
+          "non_empty": 0.62,
+          "text_column": "text"
+        },
+        {
+          "path": "/home/liu/lnn-train/data/wt103_raw/validation.parquet",
+          "rows": 3760,
+          "size_mb": 0.7,
+          "non_empty": 0.665,
+          "text_column": "text"
+        }
+      ]
+    }
+  ]
+}
