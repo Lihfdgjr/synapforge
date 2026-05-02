@@ -319,3 +319,58 @@ __all__ += [
     "distill",
     "TeacherCache", "DistillationLoss", "DistillConfig", "DistillTrainer",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Synap-1 named configs (synapforge.configs) - Base 100M / Pro 300M.
+# Re-exported at top-level so callers can write::
+#
+#     from synapforge import SYNAP1_PRO, build_from_config
+#     model = build_from_config("synap1_pro")
+#
+# The factory builds a `SynapForge100M` (the same class for both sizes -
+# Pro is just bigger d / n_layers / ffn_ratio).
+# ---------------------------------------------------------------------------
+from . import configs  # noqa: E402  re-exported as sf.configs.*
+from .configs import (  # noqa: E402
+    SYNAP1_BASE,
+    SYNAP1_PRO,
+    Synap1Config,
+)
+from .configs import get_config as _get_synap1_config  # noqa: E402
+from .configs import list_configs as list_synap1_configs  # noqa: E402
+
+
+def build_from_config(name, **overrides):
+    """Build a ``SynapForge100M`` from a named Synap-1 config.
+
+    Parameters
+    ----------
+    name : str | Synap1Config
+        Either the canonical name (``"synap1_base"`` / ``"synap1_pro"``,
+        case- and separator-insensitive) or an already-resolved
+        :class:`Synap1Config` instance.
+    **overrides
+        Any keyword that ``build_synapforge_100m`` accepts (e.g.
+        ``loop_depth=4``, ``max_seq=512``, ``latent_k=2``). Overrides win
+        over the named config.
+
+    Returns
+    -------
+    synapforge.model_100m.SynapForge100M
+    """
+    from .model_100m import build_synapforge_100m
+    cfg = name if isinstance(name, Synap1Config) else _get_synap1_config(name)
+    kwargs = cfg.kwargs()
+    kwargs.update(overrides)
+    return build_synapforge_100m(**kwargs)
+
+
+__all__ += [
+    "configs",
+    "Synap1Config",
+    "SYNAP1_BASE",
+    "SYNAP1_PRO",
+    "build_from_config",
+    "list_synap1_configs",
+]
