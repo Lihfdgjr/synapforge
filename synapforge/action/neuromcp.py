@@ -179,6 +179,19 @@ class SparseSynapticLayer(Module):
         self.cfg = cfg or SynaptogenesisConfig()
         cfg = self.cfg
         self.weight = nn.Parameter(torch.randn(cfg.out_dim, cfg.in_dim) * 0.02)
+        # ----- Activate "decorative" STDP tag (2026-05-02) -------------------
+        # Tag the synaptic weight as STDP-driven so PlasticityAwareAdamW (in
+        # synapforge.optim._legacy) consumes Hebbian / STDP plasticity deltas
+        # alongside (or instead of) backprop. Without this tag, the param
+        # silently falls through to vanilla AdamW and the downstream STDP /
+        # synaptogenesis machinery is RUNTIME-DORMANT even though the code
+        # ships. The matching `_sf_alpha` is the initial STDP learning-rate
+        # scale used by `attach_plast_delta`. Both attributes are additive
+        # metadata: optimizers that ignore them keep their old behaviour
+        # (default `_sf_grad_source=["bp"]` is the implicit fallback).
+        # See: docs/DECORATIVE_TO_REAL.md
+        self.weight._sf_grad_source = ["stdp"]  # type: ignore[attr-defined]
+        self.weight._sf_alpha = 0.001  # type: ignore[attr-defined]
         rand = torch.rand(cfg.out_dim, cfg.in_dim)
         self.register_buffer("mask", (rand < cfg.initial_density).float())
         self.register_buffer("coact_ema", torch.zeros(cfg.out_dim, cfg.in_dim))
