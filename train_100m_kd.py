@@ -962,6 +962,32 @@ def _parse_args() -> argparse.Namespace:
                         "synapforge/backends/triton_fused_backward.py "
                         "(NotImplementedError on enable). Default OFF; "
                         "flip on once the kernel lands.")
+    # ---- Perf audit 2026-05-02 knobs (see docs/PERF_AUDIT_2026-05-02.md) ----
+    # Both default OFF (back-compat: same step-by-step sync semantics as
+    # the live Run 5 launch). Opt-in for the next-restart perf combo.
+    p.add_argument("--cuda-sync-every", type=int, default=1,
+                   help="run torch.cuda.synchronize() once every N global "
+                        "steps instead of every step. Default 1 = current "
+                        "behaviour (sync every step for accurate per-step "
+                        "timing). N>1 lets the GPU pipeline several steps "
+                        "ahead of the host clock - big win when paired with "
+                        "--kd-async-teacher because the side-stream teacher "
+                        "fwd can overlap with multiple student bwds. "
+                        "step_ms reported per logged step is then the "
+                        "average over the last sync window. NaN guards "
+                        "intact (loss.item() at log boundary still "
+                        "host-syncs). Recommended: 10 on bs<=32, 1 on "
+                        "bs>=80.")
+    p.add_argument("--clip-grad-cache", action="store_true", default=False,
+                   help="cache the requires_grad=True parameter list once "
+                        "at trainer init and reuse for clip_grad_norm_ "
+                        "instead of rebuilding [p for p in "
+                        "model.parameters() if p.requires_grad] every "
+                        "step. Saves ~50us/step CPU-side dispatch on Ultra "
+                        "(~340 params at d=1280/n=16). Default OFF; "
+                        "opt-in once your run isn't unfreezing params "
+                        "mid-training (NeuroMCP plasticity, phase-aware "
+                        "exit-101 reload). Re-cache fires on phase change.")
     # ---- Remote data warehouse (mohuanfang) -----------------------------
     # Tiered storage: rental SSD = compute-only with bounded LRU cache,
     # mohuanfang holds the canonical corpus. See
@@ -2002,6 +2028,21 @@ def main() -> int:
     metrics = {"step": [], "loss": [], "step_ms": [], "tok_per_s": [],
                "ppl_eval": {}, "ppl_eval_ttt": {}, "ppl_eval_holdout": {},
                "samples": {}}
+    # ---- Perf audit 2026-05-02: cached trainable-param list for clip ----
+    # When --clip-grad-cache is on, capture requires_grad=True params ONCE
+    # and reuse the list for clip_grad_norm_ every step, instead of
+    # rebuilding [p for p in model.parameters() if p.requires_grad] inside
+    # the hot loop. Saves ~50us/step CPU-side dispatch on Ultra (~340
+    # params at d=1280/n=16). Default OFF; phase-aware exit-101 path
+    # causes the trainer to exit + relauncher rebuilds anyway, so the
+    # cache lifecycle is bounded by one process.
+    _clip_param_cache = None
+    if bool(getattr(args, "clip_grad_cache", False)):
+        _clip_param_cache = [
+            p for p in model.parameters() if p.requires_grad
+        ]
+        _log(f"[clip-grad-cache] cached {len(_clip_param_cache)} trainable "
+             f"params at init; will reuse every step (saves listcomp).")
     # T5.4 -- track lowest val_ppl_holdout we've seen this run. The
     # `_update_best_ckpt` helper compares against this and (on improvement)
     # creates/updates a ``best_step_<N>.pt`` symlink/copy so a relauncher can
@@ -2256,8 +2297,17 @@ def main() -> int:
         # backward ran inside the inner loop (T2.7 grad-accum + T2.5 spike
         # target merged in). Just clip + step here.
         if GRAD_CLIP > 0:
+            # Perf audit 2026-05-02 (RECO #2): when --clip-grad-cache is on
+            # reuse the cached trainable-param list captured before the
+            # training loop (saves the listcomp per step). Default OFF =>
+            # rebuild fresh every step (back-compat).
+            _clip_params = (
+                _clip_param_cache
+                if _clip_param_cache is not None
+                else [p for p in model.parameters() if p.requires_grad]
+            )
             torch.nn.utils.clip_grad_norm_(
-                [p for p in model.parameters() if p.requires_grad],
+                _clip_params,
                 max_norm=GRAD_CLIP,
             )
 
@@ -2298,7 +2348,15 @@ def main() -> int:
                 _log(f"[ema] update failed step={step} ({exc!r}); disabling")
                 ema_tracker = None
 
-        if DEVICE == "cuda":
+        # Perf audit 2026-05-02 (RECO #1): when --cuda-sync-every N>1, only
+        # call torch.cuda.synchronize() every N global steps instead of
+        # every step. This unblocks the host clock loop so the GPU can
+        # pipeline several student bwds ahead of the host -- big win when
+        # paired with --kd-async-teacher (the side-stream teacher fwd
+        # finally has room to overlap). Default 1 = current behaviour.
+        # NaN guards intact: loss.item() at log boundary still host-syncs.
+        _sync_period = max(1, int(getattr(args, "cuda_sync_every", 1)))
+        if DEVICE == "cuda" and (step % _sync_period == 0):
             torch.cuda.synchronize()
         step_ms = (time.time() - t_step) * 1000.0
         # T2.7: count tokens across all completed micro-batches this step.
