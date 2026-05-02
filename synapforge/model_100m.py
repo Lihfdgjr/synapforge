@@ -97,6 +97,21 @@ class HybridBlock(Module):
         # ternary-QAT layers. ALL OTHER weights (PLIF tau/threshold,
         # SparseSynapse, gate, FFN, RMSNorm) stay fp/bf16. Default
         # "none" matches the historical fp baseline.
+        plif_tau_init: "float | str" = 2.5,
+        # NeurIPS 2025 (Fang et al., arXiv:2505.18608) A3 -- tri-modal
+        # tau init for PLIF.  Pass "trimodal" to split tau channels into
+        # ~30% short (0.5), 40% mid (2.0), 30% long (8.0).  Default 2.5
+        # preserves the historical uniform-warm tau init bit-for-bit.
+        high_pass_residual_weight: float = 0.0,
+        # NeurIPS 2025 (Fang et al., arXiv:2505.18608) A2 -- frequency-
+        # balancing residual.  When > 0 the block forward becomes
+        #     out = block(x) + lambda * (x - LowPass(x))
+        # The (x - LowPass(x)) term is a high-pass filter that bypasses
+        # both the CfC and PLIF low-pass stages.  ``lambda`` is per-channel
+        # learnable (init = scalar passed); LowPass is a depth-wise
+        # causal Conv1d (kernel = high_pass_kernel_size).  Default 0.0
+        # keeps the legacy code path bit-for-bit.
+        high_pass_kernel_size: int = 3,
     ) -> None:
         super().__init__()
         self.d = int(d)
@@ -107,7 +122,10 @@ class HybridBlock(Module):
         # tau_init=2.5 (was 1.5): 1-decay = 0.33 (was 0.49), so per-step
         # input drive is smaller but membrane integrates over more steps,
         # which is the textbook LIF behavior (Fang 2021 uses tau~2-4).
-        self.plif = PLIFCell(d, tau_init=2.5, threshold_init=plif_threshold,
+        # When plif_tau_init == "trimodal" the PLIFCell ctor builds a
+        # heterogeneous (short/mid/long) tau split per A3.
+        self.plif = PLIFCell(d, tau_init=plif_tau_init,
+                             threshold_init=plif_threshold,
                              surrogate="atan", reset="subtract")
         self.synapse = SparseSynapse(d, d, sparsity=sparsity, bias=False)
         # Tag synapse weight for plasticity merge (off by default).
@@ -122,7 +140,60 @@ class HybridBlock(Module):
 
         self.drop = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
+        # ---- A2: optional high-pass residual (NeurIPS 2025 Fang et al.) ----
+        # When high_pass_residual_weight == 0.0 this branch is fully off (no
+        # extra parameters, no extra modules) and forward() takes the legacy
+        # path exactly.  When > 0 we instantiate:
+        #   - hp_lowpass: depth-wise causal Conv1d, kernel=k, init = avg.
+        #   - hp_lambda:  per-channel learnable scale, init to the scalar.
+        self.high_pass_residual_weight = float(high_pass_residual_weight)
+        self.high_pass_kernel_size = int(high_pass_kernel_size)
+        if self.high_pass_residual_weight != 0.0:
+            if self.high_pass_kernel_size < 1:
+                raise ValueError(
+                    f"high_pass_kernel_size must be >=1; "
+                    f"got {high_pass_kernel_size}"
+                )
+            k = self.high_pass_kernel_size
+            self.hp_lowpass = nn.Conv1d(
+                in_channels=self.d, out_channels=self.d,
+                kernel_size=k, groups=self.d,
+                bias=True, padding=0,
+            )
+            with torch.no_grad():
+                self.hp_lowpass.weight.fill_(1.0 / float(k))
+                self.hp_lowpass.bias.zero_()
+            self.hp_lambda = nn.Parameter(
+                torch.full((self.d,), float(high_pass_residual_weight))
+            )
+        else:
+            self.hp_lowpass = None
+            self.hp_lambda = None
+
+    def _high_pass_residual(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute lambda*(x - LowPass(x)).  x: (B, T, d)."""
+        if self.hp_lowpass is None or self.hp_lambda is None:
+            return torch.zeros_like(x)
+        # (B, T, d) -> (B, d, T) for Conv1d.
+        xt = x.transpose(1, 2)
+        # Causal padding on the LEFT (k-1 zeros) so output length == T.
+        pad_left = self.high_pass_kernel_size - 1
+        if pad_left > 0:
+            xt_padded = F.pad(xt, (pad_left, 0))
+        else:
+            xt_padded = xt
+        lp = self.hp_lowpass(xt_padded.to(self.hp_lowpass.weight.dtype))
+        # (B, d, T) -> (B, T, d).  hp_lambda broadcasts across (B, T).
+        hp = (xt - lp.to(xt.dtype)).transpose(1, 2)
+        lam = self.hp_lambda.to(hp.dtype)
+        return hp * lam
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Cache the input for the optional high-pass residual *before*
+        # the block transforms it (Max-Former: x_hp computed off the
+        # BLOCK INPUT, not the post-FFN view).
+        x_in = x
+
         # ---- liquid + spike + sparse synapse ---- (residual #1)
         a = self.ln1(x)
         h = self.liquid(a)              # (B, T, d)
@@ -132,6 +203,10 @@ class HybridBlock(Module):
 
         # ---- SwiGLU FFN ---- (residual #2)
         x = x + self.drop(self.ffn(self.ln2(x)))
+
+        # ---- A2: optional high-pass residual (NeurIPS 2025 §3.2) ----
+        if self.hp_lowpass is not None:
+            x = x + self._high_pass_residual(x_in)
         return x
 
 
@@ -186,6 +261,15 @@ class SynapForge100M(Module):
         # projections inside every HybridBlock are BitNet b1.58 ternary
         # QAT layers. PLIF / Synapse / FFN / LM head untouched. Default
         # "none" preserves the historical fp baseline.
+        plif_tau_init: "float | str" = 2.5,
+        # NeurIPS 2025 (Fang et al., arXiv:2505.18608) A3 -- "trimodal"
+        # splits PLIF tau channels into short (~30%), mid (~40%), long
+        # (~30%).  Default 2.5 = historical uniform-warm tau init.
+        high_pass_residual_weight: float = 0.0,
+        # NeurIPS 2025 (Fang et al., arXiv:2505.18608) A2 -- per-block
+        # high-pass residual.  > 0 enables x_hp = lambda * (x -
+        # LowPass(x)) at the end of each HybridBlock.  Default 0.0 keeps
+        # the legacy code path bit-for-bit.
         latent_k: int = 0,
         # T2.9 / arxiv:2412.06769 — Coconut latent thinking budget. When
         # ``latent_k > 0``, ``encode()`` runs K extra forward passes after
@@ -213,6 +297,8 @@ class SynapForge100M(Module):
                 f"weight_quant_cfc must be 'none' or 'ternary', "
                 f"got {weight_quant_cfc!r}"
             )
+        self.plif_tau_init = plif_tau_init
+        self.high_pass_residual_weight = float(high_pass_residual_weight)
         self.latent_k = int(latent_k)
         if self.latent_k < 0:
             raise ValueError(f"latent_k must be >= 0, got {latent_k}")
@@ -225,7 +311,9 @@ class SynapForge100M(Module):
         self.blocks = nn.ModuleList(
             HybridBlock(d, ffn_ratio=ffn_ratio, sparsity=sparsity,
                         dropout=dropout,
-                        weight_quant=self.weight_quant_cfc)
+                        weight_quant=self.weight_quant_cfc,
+                        plif_tau_init=self.plif_tau_init,
+                        high_pass_residual_weight=self.high_pass_residual_weight)
             for _ in range(n_layers)
         )
         self.ln_f = _RMSNorm(d)
@@ -427,6 +515,8 @@ def build_synapforge_100m(
     lm_head_spectral_norm: bool = False,
     lm_head_pre_ln: bool = False,
     weight_quant_cfc: str = "none",
+    plif_tau_init: "float | str" = 2.5,
+    high_pass_residual_weight: float = 0.0,
     latent_k: int = 0,
 ) -> SynapForge100M:
     return SynapForge100M(
@@ -439,6 +529,8 @@ def build_synapforge_100m(
         lm_head_spectral_norm=lm_head_spectral_norm,
         lm_head_pre_ln=lm_head_pre_ln,
         weight_quant_cfc=weight_quant_cfc,
+        plif_tau_init=plif_tau_init,
+        high_pass_residual_weight=high_pass_residual_weight,
         latent_k=latent_k,
     )
 

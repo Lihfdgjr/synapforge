@@ -166,6 +166,57 @@ _MOCK_SEARCH_RESULTS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# SSRF guard: reject URLs targeting localhost / loopback / link-local / cloud
+# metadata. Applied to every model/agent-controlled URL fetched by
+# WebFetchTool, WebScrapeTool and the WebSearchTool internal _http_get.
+# ---------------------------------------------------------------------------
+
+_BLOCKED_HOST_LITERALS = {
+    "localhost",
+    "0.0.0.0",
+    "::",
+    "::1",
+    "metadata.google.internal",
+    "metadata",
+    "169.254.169.254",
+}
+
+
+def _is_blocked_url(url: str) -> tuple[bool, str]:
+    """Return (blocked, reason). True if URL targets a forbidden host/scheme.
+
+    Blocks:
+      - non-http(s) schemes (file://, gopher://, ftp://, data:, etc.)
+      - loopback IPv4/IPv6 (127.0.0.0/8, ::1)
+      - link-local (169.254.0.0/16, fe80::/10)
+      - private RFC1918 (10/8, 172.16/12, 192.168/16)
+      - localhost / known cloud-metadata endpoints
+    """
+    try:
+        from ipaddress import ip_address
+        parsed = urllib.parse.urlparse(url)
+    except Exception as exc:
+        return True, f"unparsable url: {exc}"
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return True, f"scheme not allowed: {scheme!r}"
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return True, "missing host"
+    if host in _BLOCKED_HOST_LITERALS:
+        return True, f"blocked host literal: {host!r}"
+    # IP-address shortcut
+    try:
+        ip = ip_address(host)
+    except ValueError:
+        return False, ""
+    if ip.is_loopback or ip.is_link_local or ip.is_private or ip.is_multicast \
+            or ip.is_reserved or ip.is_unspecified:
+        return True, f"blocked ip class: {host}"
+    return False, ""
+
+
 class WebSearchTool:
     """Web search; engines: duckduckgo (default), bing, baidu, mock.
 
@@ -193,6 +244,9 @@ class WebSearchTool:
         self._limiter = _RateLimiter(per_min=10)
 
     def _http_get(self, url: str, headers: dict[str, str] | None = None) -> bytes:
+        blocked, reason = _is_blocked_url(url)
+        if blocked:
+            raise PermissionError(f"SSRF guard blocked url: {reason}")
         req = urllib.request.Request(
             url, headers=headers or {"User-Agent": "synapforge-tools/1.0"}
         )
@@ -332,6 +386,10 @@ class WebFetchTool:
                 "length": 40,
                 "truncated": False,
             }
+        blocked, reason = _is_blocked_url(url)
+        if blocked:
+            return {"url": url, "title": "", "text": "", "length": 0,
+                    "error": f"SSRF guard blocked url: {reason}"}
         try:
             req = urllib.request.Request(
                 url, headers={"User-Agent": "synapforge-tools/1.0"}
@@ -375,6 +433,9 @@ class WebScrapeTool:
         self.use_playwright = bool(use_playwright)
 
     def _fetch_html(self, url: str) -> bytes:
+        blocked, reason = _is_blocked_url(url)
+        if blocked:
+            raise PermissionError(f"SSRF guard blocked url: {reason}")
         req = urllib.request.Request(url, headers={"User-Agent": "synapforge-tools/1.0"})
         with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
             return resp.read()
