@@ -12,6 +12,136 @@ Entries are grouped by module under each date so cross-cutting changes (e.g.
 
 ---
 
+## [0.7.0-native] — 2026-05-02
+
+**The `synapforge.native` framework lands.** Twelve parallel-agent
+worktrees ship a zero-torch LNN+SNN training stack between 19:00 and
+23:00 local time. This is a structural step, not a tuning step:
+synapforge stops being a torch wrapper and starts being its own
+framework. See [README.md §synapforge.native v0.1](README.md) and
+[docs/NATIVE_OVERVIEW.md](docs/NATIVE_OVERVIEW.md).
+
+### Added — synapforge.native (12 subpackages)
+
+| package                          | branch                          | head SHA  | what it ships                                                                                       |
+|----------------------------------|---------------------------------|-----------|-----------------------------------------------------------------------------------------------------|
+| `synapforge.native_demo` (MVP)   | `feature/native-mvp`            | `a21a470` | Pure-numpy 100-step LNN+SNN train, manual VJPs for embed/linear/rmsnorm/cfc/plif/swiglu/CE + AdamW. |
+| `synapforge.native.data`         | `feature/native-data-loader`    | `4b9735c` | parquet/jsonl/mixed token streams, no torch in hot path. 17 unit tests, parity bench, swap-in guide. |
+| `synapforge.native.vjp`          | `feature/native-vjp-catalog`    | `b560ccc` | Closed-form VJPs for embed/linear/rmsnorm/swiglu/cfc/plif/sew/cross_entropy + dtypes.py + edge-case tests. |
+| `synapforge.native.cuda`         | `feature/native-cuda-backend`   | `82ccaca` | `CudaTensor` + ops + allocator + streams + Triton glue + LNN+SNN-specific ops on CudaTensor.        |
+| `synapforge.native.bench`        | `feature/native-saturation`     | `00580fd` | Saturation profiler + roofline + autotuner. Real autotune results doc + roofline report.           |
+| `synapforge.native.spike`        | `feature/native-spike-pack`     | `b85de28` | uint16 16-spike packing, packed-matmul Triton kernels, autograd.Function bridge. 16× bandwidth.    |
+| `synapforge.native.stdp`         | `feature/native-stdp-runtime`   | `ce3025b` | STDP-only optimizer, ring buffer, hybrid dispatch, Triton kernel for fused LTP/LTD. 23 tests.      |
+| `synapforge.native.kernel`       | `feature/native-fused-kernel`   | `eaf0c17` | Fused fwd Triton kernel + scan kernel + closed-form fused bwd Triton kernel + autograd bridge.      |
+| `synapforge.native.dispatch`     | `feature/native-dispatch-async` | `2403618` | HeteroPipeline 3-stage scheduler, per-block device router, throughput bench, simplified backpressure. |
+| `synapforge.native.modal`        | `feature/native-modal-packing`  | `6a6e425` | ModalBatchPacker + ModalMaskBuilder + CrossModalContrastive + ModalDispatchEmbed. 61 unit tests.   |
+| `synapforge.native.auxsched`     | `feature/native-async-aux`      | `395549c` | Streams + Future + 4 driver scaffolds + 19 tests. 2.9× speedup vs sequential on Run-7 timings.     |
+| `synapforge.native.training`     | `feature/trainer-refactor-v2`   | `9ff6048` | BaseTrainer + TrainerConfig + KDTrainer + SFTTrainer + RL/SelfDistill stubs + mode dispatcher.       |
+
+### Performance — measured on 2026-05-02
+
+- **MVP CPU 2.86× vs torch oracle** — `synapforge.native_demo` 1.00s
+  vs `synapforge.native_demo_torch_ref` 2.87s on identical 100-step
+  LNN+SNN train (seed 1234, d=64, 2 layers, vocab 256, seq 16, batch 4,
+  156k params). Both monotonic, final losses 5.04 (native) vs 4.93
+  (torch) — within parity gate.
+- **Fused HybridBlock 1.15-1.18× e2e** — over the unfused 4-op torch
+  path (CfC + PLIF + SEW + synapse), bit-exact at d=256.
+- **Async hetero dispatch 1.7×** — `throughput_bench.py` synthetic
+  3-stage pipeline (data | GPU fwd+bwd | CPU AdamW) at steady state
+  vs sequential reference.
+- **Async aux 2.9×** — `auxsched/bench` synthetic Run 7 timings
+  (selflearn + curiosity + NeuroMCP + STDP) parallelised vs sequential.
+- **Spike pack 16× HBM bandwidth** — bit-packed `uint16` storage at
+  spike→synapse boundary; ~600µs/step ceiling on A800 80GB.
+
+### Run 7 vs Run 8 — torch baseline vs native projection
+
+| run     | stack                          | tok/s @ A800 80GB        | status                  |
+|---------|--------------------------------|--------------------------|-------------------------|
+| Run 7   | torch + triton_block + bs=64   | **2,750** baseline       | live, PID 41692 rental  |
+| Run 8   | native stack (post integration)| **17,000-30,000** projected | pending merge          |
+
+Conservative projection 17k is MVP-CPU 2.86× + kernel 1.15× +
+dispatch 1.7× compounded with 60% integration-friction efficiency loss.
+Headroom 30k is "all levers stack cleanly". **Both are projections
+until Run 8 actually runs.** Even 12-15k beats baseline 4-5×.
+
+### Honest scope notes — what is NOT yet integrated
+
+- The 12 subpackages are merged INTO their respective feature branches
+  but NOT yet merged into a single trunk. Integration agent owns the
+  cross-branch merge → `feature/run8-native-integration` (in progress).
+  This commit only updates docs.
+- PLIF currently dead at runtime (Run 3l/3m/3n logged 0/16 spike rate).
+  Spike-pack 16× HBM saving is the bandwidth ceiling assuming PLIF
+  fires; with PLIF dead, saving is currently 0%. P25 in MASTER_PLAN.md
+  open. The kernel work and the spike-pack work are correct in
+  isolation, but the runtime benefit is dormant until P25 closes.
+- Phase 5 (full torch removal, including `torch_glue.py`) is NOT in
+  this v0.1. ETA 6-9 weeks per `docs/TORCH_REPLACEMENT_PLAN.md`. v0.1
+  is *additive* — torch path still works, native path is opt-in via
+  per-block device router.
+
+### Documentation
+
+- **`README.md`** — added top-level "synapforge.native v0.1" section.
+- **`docs/NATIVE_OVERVIEW.md`** (NEW) — single-doc map of the 12
+  subpackages, file tree, 30-line quickstart, dormant-flag list.
+- **`docs/CHANGELOG.md`** — this entry.
+- Pre-existing native docs (carried forward from feature branches):
+  `docs/NATIVE_DEMO.md`, `docs/NATIVE_HETERO_DISPATCH.md`,
+  `docs/NATIVE_SPIKE_PACKING.md`, `docs/NATIVE_MULTIMODAL_PACKING.md`,
+  `docs/NATIVE_CUDA_TENSOR.md`.
+
+
+---
+
+## [0.6.5-fix] — 2026-05-02
+
+TOKEN_SOUP root-cause diagnosis + fix landed before the native sprint.
+
+### Fixed — Run 7 TOKEN_SOUP word salad
+
+★ **Token-soup root cause** (`2765f46`, `e564e72`, `3df3bce`,
+  `3c092e6`) — Run 6 (PID 24075, killed 14:00) emitted word salad at
+  every checkpoint despite ce dropping. Three superimposed causes:
+  1. **Tied LM head** (lm_head.weight = embed.weight) made the model
+     learn embedding geometry, not output distribution; 151k×1024 tied
+     parameters cannot do double duty cleanly at 100M backbone scale.
+  2. **`--lm-head-spectral-norm`** wrapped a *new* lm_head in
+     `nn.utils.spectral_norm` *after* tying, registering 71 missing
+     state-dict keys and effectively cold-starting the LM head every
+     warmstart attempt.
+  3. **kd-weight 0.40** with token-soup data → kd loss masks the CE
+     ascent.
+
+  Fix landed as a 5-step diagnostic commit chain:
+  - `--untie-lm-head` (default ON) — separate `lm_head.weight`
+    parameter, embed and head no longer share storage.
+  - `--no-warmstart` (default OFF, but ON for Run 7 cold-start) —
+    bypass the spectral_norm key-mismatch landmine entirely.
+  - Drop `--lm-head-spectral-norm` (P28 patch retracted; spectral_norm
+    must be first-run or bridge-ckpt only, never bolted on later — see
+    `feedback_spectral_norm_warmstart_cost.md`).
+  - `--kd-weight 0.7` (up from 0.40) — let the teacher signal dominate
+    while the student LM head re-learns from cold start.
+  - `--data-files` literal-newline bug fixed (commit `2765f46`) —
+    bash `\n` in the launcher line wasn't being interpreted by the
+    parquet stream loader, so Run 6 had been training on a single
+    parquet for 30k steps instead of the 3-corpus quality mix
+    (fineweb_edu + wt103 + alpaca_zh).
+
+### Verification
+
+- Run 7 launched 2026-05-02 16:40, PID 41692 on rental
+  `117.74.66.77:41614`. Step 500 verdict pending (~30 min after
+  launch). Diagnosis is correct iff val ppl at step 500 lands
+  ≤ 600 (down from Run 6's plateau at ppl ~3700).
+
+
+---
+
 ## [Unreleased] — 2026-05-01 → ongoing
 
 Investor demo packaging + integration test rollup.
