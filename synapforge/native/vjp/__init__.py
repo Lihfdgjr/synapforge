@@ -24,6 +24,7 @@ from __future__ import annotations
 from synapforge.native.vjp import (
     cfc,
     cross_entropy,
+    dtypes,
     embed,
     linear,
     plif,
@@ -35,6 +36,7 @@ from synapforge.native.vjp import (
 __all__ = [
     "cfc",
     "cross_entropy",
+    "dtypes",
     "embed",
     "linear",
     "plif",
